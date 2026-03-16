@@ -278,6 +278,18 @@ Database safety:
 - use parameterized SQL only
 - do not interpolate user-provided strings into SQL
 
+Nullability convention:
+
+- for optional database fields, store missing values as `NULL`, not as empty strings `""`
+- apply this consistently to ids, usernames, display names, signatures, local paths, mime types, OCR text, and similar optional string fields
+- only use empty strings when an empty string is a deliberate business value, not a placeholder for absence
+
+Explicit exception:
+
+- `messages.text` may be stored as `""` when Telegram explicitly provides no text body for the message
+- this is intentional because `""` means “the message has no text”, while `NULL` would suggest “text was not loaded or is unknown”
+- keeping `messages.text` non-null also simplifies exports, filtering, length checks, and downstream text-processing code
+
 Stored data minimization:
 
 - store minimized metadata instead of full raw Telegram payloads when possible

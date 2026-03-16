@@ -50,7 +50,8 @@ CREATE TABLE IF NOT EXISTS messages (
     date_utc TEXT NOT NULL,
     edit_date_utc TEXT,
     sender_id TEXT,
-    post_author TEXT,
+    sender_username TEXT,
+    sender_display_name TEXT,
     text TEXT NOT NULL,
     views INTEGER,
     forwards INTEGER,
@@ -93,6 +94,49 @@ CREATE TABLE IF NOT EXISTS sync_state (
 
 CREATE INDEX IF NOT EXISTS idx_messages_channel_date ON messages(channel_id, date_utc DESC);
 CREATE INDEX IF NOT EXISTS idx_media_assets_ocr_status ON media_assets(ocr_status, created_at);
+"""
+
+MESSAGES_TABLE_SQL = """
+CREATE TABLE messages (
+    channel_id INTEGER NOT NULL,
+    message_id INTEGER NOT NULL,
+    grouped_id TEXT,
+    date_utc TEXT NOT NULL,
+    edit_date_utc TEXT,
+    sender_id TEXT,
+    sender_username TEXT,
+    sender_display_name TEXT,
+    text TEXT NOT NULL,
+    views INTEGER,
+    forwards INTEGER,
+    replies INTEGER,
+    has_media INTEGER NOT NULL DEFAULT 0,
+    media_kind TEXT,
+    raw_json TEXT NOT NULL,
+    content_hash TEXT NOT NULL,
+    imported_at TEXT NOT NULL,
+    PRIMARY KEY (channel_id, message_id),
+    FOREIGN KEY (channel_id) REFERENCES channels(channel_id) ON DELETE CASCADE
+)
+"""
+
+MEDIA_ASSETS_TABLE_SQL = """
+CREATE TABLE media_assets (
+    channel_id INTEGER NOT NULL,
+    message_id INTEGER NOT NULL,
+    ordinal INTEGER NOT NULL DEFAULT 0,
+    media_kind TEXT NOT NULL,
+    local_path TEXT,
+    mime_type TEXT,
+    file_size INTEGER,
+    ocr_status TEXT NOT NULL DEFAULT 'pending',
+    ocr_text TEXT,
+    ocr_error TEXT,
+    ocr_processed_at TEXT,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (channel_id, message_id, ordinal),
+    FOREIGN KEY (channel_id, message_id) REFERENCES messages(channel_id, message_id) ON DELETE CASCADE
+)
 """
 
 
@@ -264,7 +308,95 @@ def connect_db(runtime: RuntimeConfig) -> sqlite3.Connection:
 
 def init_db(conn: sqlite3.Connection) -> None:
     conn.executescript(SCHEMA_SQL)
+    migrate_sqlite_schema(conn)
     conn.commit()
+
+
+def optional_text(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def entity_display_name(entity: Any) -> str | None:
+    if entity is None:
+        return None
+    first = getattr(entity, "first_name", None) or ""
+    last = getattr(entity, "last_name", None) or ""
+    full_name = f"{first} {last}".strip()
+    if full_name:
+        return full_name
+    return optional_text(getattr(entity, "title", None)) or optional_text(getattr(entity, "username", None))
+
+
+def table_columns(conn: sqlite3.Connection, table_name: str) -> list[str]:
+    rows = conn.execute(f"PRAGMA table_info({table_name})").fetchall()
+    return [str(row[1]) for row in rows]
+
+
+def migrate_sqlite_schema(conn: sqlite3.Connection) -> None:
+    columns = table_columns(conn, "messages")
+    needs_messages_rebuild = bool(columns) and (
+        "post_author" in columns or "sender_username" not in columns or "sender_display_name" not in columns
+    )
+    if not needs_messages_rebuild:
+        conn.execute("UPDATE channels SET access_hash = NULL WHERE access_hash = ''")
+        conn.execute("UPDATE messages SET grouped_id = NULL WHERE grouped_id = ''")
+        conn.execute("UPDATE messages SET sender_id = NULL WHERE sender_id = ''")
+        return
+
+    conn.execute("PRAGMA foreign_keys = OFF")
+    conn.execute("ALTER TABLE messages RENAME TO messages_old")
+    conn.execute("ALTER TABLE media_assets RENAME TO media_assets_old")
+    conn.execute(MESSAGES_TABLE_SQL)
+    conn.execute(MEDIA_ASSETS_TABLE_SQL)
+    conn.execute(
+        """
+        INSERT INTO messages (
+            channel_id, message_id, grouped_id, date_utc, edit_date_utc, sender_id,
+            sender_username, sender_display_name, text, views, forwards, replies,
+            has_media, media_kind, raw_json, content_hash, imported_at
+        )
+        SELECT
+            channel_id,
+            message_id,
+            NULLIF(grouped_id, ''),
+            date_utc,
+            edit_date_utc,
+            NULLIF(sender_id, ''),
+            NULL,
+            NULL,
+            text,
+            views,
+            forwards,
+            replies,
+            has_media,
+            media_kind,
+            raw_json,
+            content_hash,
+            imported_at
+        FROM messages_old
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO media_assets (
+            channel_id, message_id, ordinal, media_kind, local_path, mime_type, file_size,
+            ocr_status, ocr_text, ocr_error, ocr_processed_at, created_at
+        )
+        SELECT
+            channel_id, message_id, ordinal, media_kind, NULLIF(local_path, ''), NULLIF(mime_type, ''),
+            file_size, ocr_status, NULLIF(ocr_text, ''), NULLIF(ocr_error, ''), ocr_processed_at, created_at
+        FROM media_assets_old
+        """
+    )
+    conn.execute("DROP TABLE media_assets_old")
+    conn.execute("DROP TABLE messages_old")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_messages_channel_date ON messages(channel_id, date_utc DESC)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_media_assets_ocr_status ON media_assets(ocr_status, created_at)")
+    conn.execute("UPDATE channels SET access_hash = NULL WHERE access_hash = ''")
+    conn.execute("PRAGMA foreign_keys = ON")
 
 
 def require_telethon() -> Any:
@@ -417,6 +549,34 @@ def minimal_message_json(message: Any, media_kind: str | None, text: str) -> str
     return safe_to_json(payload)
 
 
+def direct_sender_metadata(message: Any) -> tuple[str | None, str | None]:
+    sender = getattr(message, "sender", None)
+    username = optional_text(getattr(message, "sender_username", None))
+    display_name = optional_text(getattr(message, "sender_display_name", None))
+    if sender is not None:
+        username = username or optional_text(getattr(sender, "username", None))
+        display_name = display_name or entity_display_name(sender)
+    return username, display_name
+
+
+async def resolve_sender_metadata(entity: Any, message: Any) -> tuple[str | None, str | None]:
+    is_channel_post = bool(getattr(message, "post", False))
+    sender_id = getattr(message, "sender_id", None)
+    if is_channel_post and (sender_id is None or sender_id == getattr(entity, "id", None)):
+        return optional_text(getattr(entity, "username", None)), entity_display_name(entity)
+
+    username, display_name = direct_sender_metadata(message)
+    if username or display_name:
+        return username, display_name
+
+    sender = getattr(message, "sender", None)
+    if sender is None and sender_id is not None:
+        sender = await message.get_sender()
+    if sender is None:
+        return None, None
+    return optional_text(getattr(sender, "username", None)), entity_display_name(sender)
+
+
 async def download_media_if_present(runtime: RuntimeConfig, client: Any, message: Any, channel_id: int) -> tuple[str | None, int | None]:
     if not getattr(message, "media", None):
         return None, None
@@ -449,8 +609,8 @@ def upsert_channel(conn: sqlite3.Connection, entity: Any) -> None:
         """,
         (
             entity.id,
-            str(getattr(entity, "access_hash", "") or ""),
-            getattr(entity, "username", None),
+            optional_text(getattr(entity, "access_hash", None)),
+            optional_text(getattr(entity, "username", None)),
             getattr(entity, "title", None) or getattr(entity, "first_name", "unknown"),
             getattr(entity, "__class__", type(entity)).__name__,
             minimal_entity_json(entity),
@@ -464,6 +624,8 @@ def upsert_message(
     conn: sqlite3.Connection,
     entity: Any,
     message: Any,
+    sender_username: str | None,
+    sender_display_name: str | None,
     downloaded_path: str | None,
     downloaded_size: int | None,
 ) -> None:
@@ -471,19 +633,22 @@ def upsert_message(
     media_kind = message_media_kind(message)
     imported_at = now_utc()
     content_hash = f"{getattr(message, 'id')}:{serialize_datetime(getattr(message, 'edit_date', None))}:{len(text)}:{media_kind or '-'}"
+    grouped_id = getattr(message, "grouped_id", None)
+    grouped_id_value = str(grouped_id) if grouped_id is not None else None
 
     conn.execute(
         """
         INSERT INTO messages (
-            channel_id, message_id, grouped_id, date_utc, edit_date_utc, sender_id, post_author, text,
+            channel_id, message_id, grouped_id, date_utc, edit_date_utc, sender_id, sender_username, sender_display_name, text,
             views, forwards, replies, has_media, media_kind, raw_json, content_hash, imported_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(channel_id, message_id) DO UPDATE SET
             grouped_id = excluded.grouped_id,
             date_utc = excluded.date_utc,
             edit_date_utc = excluded.edit_date_utc,
             sender_id = excluded.sender_id,
-            post_author = excluded.post_author,
+            sender_username = excluded.sender_username,
+            sender_display_name = excluded.sender_display_name,
             text = excluded.text,
             views = excluded.views,
             forwards = excluded.forwards,
@@ -497,11 +662,12 @@ def upsert_message(
         (
             entity.id,
             message.id,
-            str(getattr(message, "grouped_id", "") or ""),
+            grouped_id_value,
             serialize_datetime(getattr(message, "date", None)) or imported_at,
             serialize_datetime(getattr(message, "edit_date", None)),
-            str(getattr(message, "sender_id", "") or ""),
-            getattr(message, "post_author", None),
+            optional_text(getattr(message, "sender_id", None)),
+            optional_text(sender_username),
+            optional_text(sender_display_name),
             text,
             getattr(message, "views", None),
             getattr(message, "forwards", None),
@@ -535,8 +701,8 @@ def upsert_message(
                 entity.id,
                 message.id,
                 media_kind or "media",
-                downloaded_path,
-                media_kind,
+                optional_text(downloaded_path),
+                optional_text(media_kind),
                 downloaded_size,
                 "pending" if downloaded_path else "skipped",
                 imported_at,
@@ -645,18 +811,19 @@ async def sync_one_channel(
                 break
             downloaded_path = None
             downloaded_size = None
+            sender_username, sender_display_name = await resolve_sender_metadata(entity, message)
             exists = message_exists(conn, entity.id, message.id)
             if exists:
                 skipped_existing += 1
                 if args.download_media and getattr(message, "media", None) and media_needs_download(conn, entity.id, message.id):
                     downloaded_path, downloaded_size = await download_media_if_present(runtime, client, message, entity.id)
-                    upsert_message(conn, entity, message, downloaded_path, downloaded_size)
+                    upsert_message(conn, entity, message, sender_username, sender_display_name, downloaded_path, downloaded_size)
                     if downloaded_path:
                         refreshed_existing_media += 1
                 continue
             if args.download_media and getattr(message, "media", None):
                 downloaded_path, downloaded_size = await download_media_if_present(runtime, client, message, entity.id)
-            upsert_message(conn, entity, message, downloaded_path, downloaded_size)
+            upsert_message(conn, entity, message, sender_username, sender_display_name, downloaded_path, downloaded_size)
             highest_message_id = max(highest_message_id or message.id, message.id)
             processed += 1
 
@@ -766,7 +933,7 @@ def process_pending_ocr(
                     SET ocr_status = ?, ocr_error = ?, ocr_processed_at = ?
                     WHERE channel_id = ? AND message_id = ? AND ordinal = ?
                     """,
-                    ("skipped", "OCR is only supported for image media.", now_utc(), row["channel_id"], row["message_id"], row["ordinal"]),
+                    ("skipped", optional_text("OCR is only supported for image media."), now_utc(), row["channel_id"], row["message_id"], row["ordinal"]),
                 )
                 processed += 1
                 continue
@@ -777,7 +944,7 @@ def process_pending_ocr(
                 SET ocr_status = ?, ocr_text = ?, ocr_error = NULL, ocr_processed_at = ?
                 WHERE channel_id = ? AND message_id = ? AND ordinal = ?
                 """,
-                ("done", text, now_utc(), row["channel_id"], row["message_id"], row["ordinal"]),
+                ("done", optional_text(text), now_utc(), row["channel_id"], row["message_id"], row["ordinal"]),
             )
         except Exception as exc:
             conn.execute(
@@ -786,7 +953,7 @@ def process_pending_ocr(
                 SET ocr_status = ?, ocr_error = ?, ocr_processed_at = ?
                 WHERE channel_id = ? AND message_id = ? AND ordinal = ?
                 """,
-                ("error", "OCR processing failed.", now_utc(), row["channel_id"], row["message_id"], row["ordinal"]),
+                ("error", optional_text("OCR processing failed."), now_utc(), row["channel_id"], row["message_id"], row["ordinal"]),
             )
         processed += 1
     conn.commit()
@@ -864,6 +1031,9 @@ def export_channel_csv(
             m.message_id,
             m.date_utc,
             m.edit_date_utc,
+            m.sender_id,
+            m.sender_username,
+            m.sender_display_name,
             m.text,
             m.views,
             m.forwards,
@@ -902,6 +1072,9 @@ def export_channel_csv(
                 "message_id",
                 "date_utc",
                 "edit_date_utc",
+                "sender_id",
+                "sender_username",
+                "sender_display_name",
                 "text",
                 "views",
                 "forwards",

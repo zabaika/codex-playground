@@ -7,6 +7,7 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+import asyncio
 
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "telegram_history_client.py"
@@ -26,6 +27,10 @@ class TelegramHistoryClientTests(unittest.TestCase):
         ).fetchall()
         names = {row[0] for row in rows}
         self.assertTrue({"channels", "messages", "media_assets", "sync_state"}.issubset(names))
+        columns = [row[1] for row in conn.execute("PRAGMA table_info(messages)").fetchall()]
+        self.assertIn("sender_username", columns)
+        self.assertIn("sender_display_name", columns)
+        self.assertNotIn("post_author", columns)
 
     def test_update_sync_state_keeps_channel_specific_rows(self) -> None:
         conn = sqlite3.connect(":memory:")
@@ -38,6 +43,94 @@ class TelegramHistoryClientTests(unittest.TestCase):
 
         rows = list(conn.execute("SELECT channel_id, last_tail_message_id FROM sync_state ORDER BY channel_id"))
         self.assertEqual([(row["channel_id"], row["last_tail_message_id"]) for row in rows], [(1, 10), (2, 20)])
+
+    def test_init_db_migrates_legacy_post_author_schema(self) -> None:
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        conn.executescript(
+            """
+            CREATE TABLE channels (
+                channel_id INTEGER PRIMARY KEY,
+                access_hash TEXT,
+                username TEXT,
+                title TEXT NOT NULL,
+                channel_type TEXT NOT NULL,
+                raw_json TEXT NOT NULL,
+                first_seen_at TEXT NOT NULL,
+                last_seen_at TEXT NOT NULL
+            );
+            CREATE TABLE messages (
+                channel_id INTEGER NOT NULL,
+                message_id INTEGER NOT NULL,
+                grouped_id TEXT,
+                date_utc TEXT NOT NULL,
+                edit_date_utc TEXT,
+                sender_id TEXT,
+                post_author TEXT,
+                text TEXT NOT NULL,
+                views INTEGER,
+                forwards INTEGER,
+                replies INTEGER,
+                has_media INTEGER NOT NULL DEFAULT 0,
+                media_kind TEXT,
+                raw_json TEXT NOT NULL,
+                content_hash TEXT NOT NULL,
+                imported_at TEXT NOT NULL,
+                PRIMARY KEY (channel_id, message_id)
+            );
+            CREATE TABLE media_assets (
+                channel_id INTEGER NOT NULL,
+                message_id INTEGER NOT NULL,
+                ordinal INTEGER NOT NULL DEFAULT 0,
+                media_kind TEXT NOT NULL,
+                local_path TEXT,
+                mime_type TEXT,
+                file_size INTEGER,
+                ocr_status TEXT NOT NULL DEFAULT 'pending',
+                ocr_text TEXT,
+                ocr_error TEXT,
+                ocr_processed_at TEXT,
+                created_at TEXT NOT NULL,
+                PRIMARY KEY (channel_id, message_id, ordinal)
+            );
+            CREATE TABLE sync_state (
+                channel_id INTEGER PRIMARY KEY,
+                last_backfill_message_id INTEGER,
+                last_tail_message_id INTEGER,
+                last_tail_at TEXT,
+                last_live_event_at TEXT,
+                last_full_sync_at TEXT,
+                last_error TEXT
+            );
+            INSERT INTO channels(channel_id, access_hash, username, title, channel_type, raw_json, first_seen_at, last_seen_at)
+            VALUES (1, '', 'vcnews', 'vc.ru', 'Channel', '{}', '2026-03-16T10:00:00+00:00', '2026-03-16T10:00:00+00:00');
+            INSERT INTO messages(channel_id, message_id, grouped_id, date_utc, edit_date_utc, sender_id, post_author, text, views, forwards, replies, has_media, media_kind, raw_json, content_hash, imported_at)
+            VALUES (1, 2, '', '2026-03-16T10:00:00+00:00', NULL, '', 'old-author', 'hello', NULL, NULL, NULL, 0, NULL, '{}', 'h2', '2026-03-16T10:00:00+00:00');
+            INSERT INTO media_assets(channel_id, message_id, ordinal, media_kind, local_path, mime_type, file_size, ocr_status, ocr_text, ocr_error, ocr_processed_at, created_at)
+            VALUES (1, 2, 0, 'photo', '', '', 10, 'done', '', '', NULL, '2026-03-16T10:00:00+00:00');
+            """
+        )
+
+        telegram_history_client.init_db(conn)
+
+        columns = [row[1] for row in conn.execute("PRAGMA table_info(messages)").fetchall()]
+        self.assertIn("sender_username", columns)
+        self.assertIn("sender_display_name", columns)
+        self.assertNotIn("post_author", columns)
+        row = conn.execute(
+            "SELECT grouped_id, sender_id, sender_username, sender_display_name FROM messages WHERE channel_id = 1 AND message_id = 2"
+        ).fetchone()
+        self.assertIsNone(row["grouped_id"])
+        self.assertIsNone(row["sender_id"])
+        self.assertIsNone(row["sender_username"])
+        self.assertIsNone(row["sender_display_name"])
+        media = conn.execute(
+            "SELECT local_path, mime_type, ocr_text, ocr_error FROM media_assets WHERE channel_id = 1 AND message_id = 2 AND ordinal = 0"
+        ).fetchone()
+        self.assertIsNone(media["local_path"])
+        self.assertIsNone(media["mime_type"])
+        self.assertIsNone(media["ocr_text"])
+        self.assertIsNone(media["ocr_error"])
 
     def test_resolve_runtime_uses_local_defaults(self) -> None:
         original_file = telegram_history_client.RUNTIME_LOCAL_FILE
@@ -246,9 +339,9 @@ user_password = "pw_x"
         )
         conn.execute(
             """
-            INSERT INTO messages(channel_id, message_id, grouped_id, date_utc, edit_date_utc, sender_id, post_author, text, views, forwards, replies, has_media, media_kind, raw_json, content_hash, imported_at)
-            VALUES (1, 1, '', ?, NULL, '', NULL, 'first', NULL, NULL, NULL, 0, NULL, '{}', 'h1', ?),
-                   (1, 2, '', ?, NULL, '', NULL, 'second', NULL, NULL, NULL, 1, 'photo', '{}', 'h2', ?)
+            INSERT INTO messages(channel_id, message_id, grouped_id, date_utc, edit_date_utc, sender_id, sender_username, sender_display_name, text, views, forwards, replies, has_media, media_kind, raw_json, content_hash, imported_at)
+            VALUES (1, 1, NULL, ?, NULL, NULL, NULL, NULL, 'first', NULL, NULL, NULL, 0, NULL, '{}', 'h1', ?),
+                   (1, 2, NULL, ?, NULL, NULL, 'vcnews', 'vc.ru', 'second', NULL, NULL, NULL, 1, 'photo', '{}', 'h2', ?)
             """,
             (now, now, now, now),
         )
@@ -293,6 +386,8 @@ user_password = "pw_x"
         self.assertEqual(rows[0]["message_id"], "2")
         self.assertEqual(rows[0]["ocr_text"], "detected text")
         self.assertEqual(rows[0]["has_local_media"], "1")
+        self.assertEqual(rows[0]["sender_username"], "vcnews")
+        self.assertEqual(rows[0]["sender_display_name"], "vc.ru")
         self.assertNotIn("local_path", rows[0])
         self.assertIn(";", header_line)
 
@@ -311,10 +406,10 @@ user_password = "pw_x"
         )
         conn.execute(
             """
-            INSERT INTO messages(channel_id, message_id, grouped_id, date_utc, edit_date_utc, sender_id, post_author, text, views, forwards, replies, has_media, media_kind, raw_json, content_hash, imported_at)
+            INSERT INTO messages(channel_id, message_id, grouped_id, date_utc, edit_date_utc, sender_id, sender_username, sender_display_name, text, views, forwards, replies, has_media, media_kind, raw_json, content_hash, imported_at)
             VALUES
-                (1, 1, '', ?, NULL, '', NULL, 'older', NULL, NULL, NULL, 0, NULL, '{}', 'h1', ?),
-                (1, 2, '', ?, NULL, '', NULL, 'newer', NULL, NULL, NULL, 0, NULL, '{}', 'h2', ?)
+                (1, 1, NULL, ?, NULL, NULL, NULL, NULL, 'older', NULL, NULL, NULL, 0, NULL, '{}', 'h1', ?),
+                (1, 2, NULL, ?, NULL, NULL, NULL, NULL, 'newer', NULL, NULL, NULL, 0, NULL, '{}', 'h2', ?)
             """,
             (first, first, second, second),
         )
@@ -370,8 +465,8 @@ user_password = "pw_x"
         )
         conn.execute(
             """
-            INSERT INTO messages(channel_id, message_id, grouped_id, date_utc, edit_date_utc, sender_id, post_author, text, views, forwards, replies, has_media, media_kind, raw_json, content_hash, imported_at)
-            VALUES (1, 2, '', ?, NULL, '', NULL, 'second', NULL, NULL, NULL, 1, 'photo', '{}', 'h2', ?)
+            INSERT INTO messages(channel_id, message_id, grouped_id, date_utc, edit_date_utc, sender_id, sender_username, sender_display_name, text, views, forwards, replies, has_media, media_kind, raw_json, content_hash, imported_at)
+            VALUES (1, 2, NULL, ?, NULL, NULL, NULL, NULL, 'second', NULL, NULL, NULL, 1, 'photo', '{}', 'h2', ?)
             """,
             (now, now),
         )
@@ -400,8 +495,7 @@ user_password = "pw_x"
             message = "super secret message body"
             date = None
             edit_date = None
-            sender_id = 5
-            post_author = None
+            sender_id = None
             views = 10
             forwards = 1
             replies = None
@@ -409,9 +503,15 @@ user_password = "pw_x"
             grouped_id = None
 
         telegram_history_client.upsert_channel(conn, Entity())
-        telegram_history_client.upsert_message(conn, Entity(), Message(), None, None)
-        row = conn.execute("SELECT raw_json FROM messages WHERE channel_id = 1 AND message_id = 2").fetchone()
+        telegram_history_client.upsert_message(conn, Entity(), Message(), None, None, None, None)
+        row = conn.execute(
+            "SELECT grouped_id, sender_id, sender_username, sender_display_name, raw_json FROM messages WHERE channel_id = 1 AND message_id = 2"
+        ).fetchone()
         raw = json.loads(row["raw_json"])
+        self.assertIsNone(row["grouped_id"])
+        self.assertIsNone(row["sender_id"])
+        self.assertIsNone(row["sender_username"])
+        self.assertIsNone(row["sender_display_name"])
         self.assertEqual(raw["text_length"], len("super secret message body"))
         self.assertNotIn("super secret message body", row["raw_json"])
 
@@ -429,10 +529,10 @@ user_password = "pw_x"
         )
         conn.execute(
             """
-            INSERT INTO messages(channel_id, message_id, grouped_id, date_utc, edit_date_utc, sender_id, post_author, text, views, forwards, replies, has_media, media_kind, raw_json, content_hash, imported_at)
+            INSERT INTO messages(channel_id, message_id, grouped_id, date_utc, edit_date_utc, sender_id, sender_username, sender_display_name, text, views, forwards, replies, has_media, media_kind, raw_json, content_hash, imported_at)
             VALUES
-                (1, 1, '', ?, NULL, '', NULL, 'image', NULL, NULL, NULL, 1, 'photo', '{}', 'h1', ?),
-                (1, 2, '', ?, NULL, '', NULL, 'pdf', NULL, NULL, NULL, 1, 'application/pdf', '{}', 'h2', ?)
+                (1, 1, NULL, ?, NULL, NULL, NULL, NULL, 'image', NULL, NULL, NULL, 1, 'photo', '{}', 'h1', ?),
+                (1, 2, NULL, ?, NULL, NULL, NULL, NULL, 'pdf', NULL, NULL, NULL, 1, 'application/pdf', '{}', 'h2', ?)
             """,
             (now, now, now, now),
         )
@@ -447,6 +547,66 @@ user_password = "pw_x"
         )
         rows = telegram_history_client.iter_pending_ocr(conn, 10)
         self.assertEqual([(row["message_id"], row["media_kind"]) for row in rows], [(1, "photo")])
+
+    def test_resolve_sender_metadata_uses_channel_entity_without_get_sender_for_channel_posts(self) -> None:
+        class Entity:
+            id = 1
+            username = "vcnews"
+            title = "vc.ru"
+
+        class Message:
+            post = True
+            sender_id = 1
+
+            async def get_sender(self):
+                raise AssertionError("get_sender should not be called for channel posts")
+
+        username, display_name = asyncio.run(telegram_history_client.resolve_sender_metadata(Entity(), Message()))
+        self.assertEqual(username, "vcnews")
+        self.assertEqual(display_name, "vc.ru")
+
+    def test_resolve_sender_metadata_uses_direct_message_fields_without_get_sender(self) -> None:
+        class Entity:
+            id = 1
+            username = "refugecard"
+            title = "Refuge"
+
+        class Message:
+            post = False
+            sender_id = 42
+            sender_username = "alice"
+            sender_display_name = "Alice"
+            sender = None
+
+            async def get_sender(self):
+                raise AssertionError("get_sender should not be called when direct sender fields already exist")
+
+        username, display_name = asyncio.run(telegram_history_client.resolve_sender_metadata(Entity(), Message()))
+        self.assertEqual(username, "alice")
+        self.assertEqual(display_name, "Alice")
+
+    def test_resolve_sender_metadata_falls_back_to_get_sender_when_needed(self) -> None:
+        class Sender:
+            username = "alice"
+            first_name = "Alice"
+            last_name = "Jones"
+
+        class Entity:
+            id = 1
+            username = "refugecard"
+            title = "Refuge"
+
+        class Message:
+            post = False
+            sender_id = 42
+            sender = None
+
+            async def get_sender(self):
+                return Sender()
+
+        username, display_name = asyncio.run(telegram_history_client.resolve_sender_metadata(Entity(), Message()))
+        self.assertEqual(username, "alice")
+        self.assertEqual(display_name, "Alice Jones")
 
     def test_resolve_runtime_reads_onepassword_references(self) -> None:
         original_file = telegram_history_client.RUNTIME_LOCAL_FILE
