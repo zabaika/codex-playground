@@ -1,0 +1,15 @@
+# Copy this file to runtime.local.toml and fill in machine-specific values there.
+# Keep runtime.local.toml untracked.
+
+[note_roots]
+article = "/absolute/path/to/Ideas"
+concept = "/absolute/path/to/Ideas/Concepts"
+
+[paths]
+# Add other local-only absolute paths here when the skill needs them.
+# vault_root = "/absolute/path/to/vault"
+
+[secrets]
+# Add local-only credentials here only when a future workflow needs them.
+# api_token = ""
+# vault_password = ""

@@ -1,0 +1,181 @@
+import importlib.util
+import os
+import subprocess
+import tempfile
+import unittest
+from pathlib import Path
+
+
+MODULE_PATH = Path(__file__).resolve().parents[1] / "telegram_connector.py"
+SPEC = importlib.util.spec_from_file_location("telegram_connector_module", MODULE_PATH)
+telegram_connector = importlib.util.module_from_spec(SPEC)
+assert SPEC.loader is not None
+SPEC.loader.exec_module(telegram_connector)
+
+
+class TelegramConnectorTests(unittest.TestCase):
+    def test_build_history_command_for_backfill_with_media(self) -> None:
+        command = telegram_connector.build_history_command("/backfill @vcnews 200 media")
+        self.assertEqual(
+            command[2:],
+            ["backfill", "--channel", "@vcnews", "--limit", "200", "--download-media", "--auth-mode", "user"],
+        )
+
+    def test_build_history_command_for_tail_uses_default_limit(self) -> None:
+        command = telegram_connector.build_history_command("/tail @vcnews")
+        self.assertEqual(command[2:], ["tail", "--channel", "@vcnews", "--limit", "100", "--auth-mode", "user"])
+
+    def test_build_history_command_for_tail_with_explicit_auth_mode(self) -> None:
+        command = telegram_connector.build_history_command("/tail @vcnews 100 media ocr bot")
+        self.assertEqual(
+            command[2:],
+            ["tail", "--channel", "@vcnews", "--limit", "100", "--download-media", "--ocr", "--auth-mode", "bot"],
+        )
+
+    def test_build_history_command_for_ocrhistory(self) -> None:
+        command = telegram_connector.build_history_command("/ocrhistory @vcnews 50 user")
+        self.assertEqual(
+            command[2:],
+            ["tail", "--channel", "@vcnews", "--limit", "50", "--download-media", "--ocr", "--auth-mode", "user"],
+        )
+
+    def test_build_history_command_for_update_defaults_to_user(self) -> None:
+        command = telegram_connector.build_history_command("/update @vcnews 25")
+        self.assertEqual(
+            command[2:],
+            ["update", "--channel", "@vcnews", "--limit", "25", "--auth-mode", "user"],
+        )
+
+    def test_build_history_command_for_exportcsv_with_limit(self) -> None:
+        command = telegram_connector.build_history_command("/exportcsv @vcnews 100")
+        self.assertEqual(
+            command[2:],
+            ["export-csv", "--channel", "@vcnews", "--limit", "100", "--auth-mode", "user"],
+        )
+
+    def test_build_history_command_for_exportcsv_with_period(self) -> None:
+        command = telegram_connector.build_history_command("/exportcsv @vcnews since=2026-03-15 until=2026-03-16")
+        self.assertEqual(
+            command[2:],
+            [
+                "export-csv",
+                "--channel",
+                "@vcnews",
+                "--since",
+                "2026-03-15",
+                "--until",
+                "2026-03-16",
+                "--auth-mode",
+                "user",
+            ],
+        )
+
+    def test_build_history_command_for_exportcsv_with_since_only(self) -> None:
+        command = telegram_connector.build_history_command("/exportcsv @vcnews since=2026-03-15")
+        self.assertEqual(
+            command[2:],
+            ["export-csv", "--channel", "@vcnews", "--since", "2026-03-15", "--auth-mode", "user"],
+        )
+
+    def test_build_history_command_rejects_unknown_command(self) -> None:
+        with self.assertRaises(ValueError):
+            telegram_connector.build_history_command("/boom")
+
+    def test_parse_allowed_chat_ids_falls_back_to_default_chat(self) -> None:
+        config = {"telegram": {"default_chat_id": "133126275"}}
+        self.assertEqual(telegram_connector.parse_allowed_chat_ids(config), {"133126275"})
+
+    def test_send_text_chunks_splits_long_messages(self) -> None:
+        sent_messages: list[str] = []
+
+        def fake_send(token: str, chat_id: str | int, text: str) -> None:
+            self.assertEqual(token, "token")
+            self.assertEqual(chat_id, 42)
+            sent_messages.append(text)
+
+        original = telegram_connector.send_text_message
+        telegram_connector.send_text_message = fake_send
+        try:
+            telegram_connector.send_text_chunks("token", 42, "a" * 4000, chunk_size=1000)
+        finally:
+            telegram_connector.send_text_message = original
+
+        self.assertGreater(len(sent_messages), 1)
+        self.assertEqual("".join(sent_messages), "a" * 4000)
+
+    def test_redact_update_for_storage_removes_message_text(self) -> None:
+        update = {
+            "update_id": 1,
+            "message": {
+                "date": 123,
+                "text": "/tail @vcnews 10",
+                "chat": {"id": 42, "type": "private"},
+                "from": {"id": 7, "username": "alice"},
+            },
+        }
+        payload = telegram_connector.redact_update_for_storage(update)
+        self.assertEqual(payload["command"], "/tail")
+        self.assertEqual(payload["text_length"], len("/tail @vcnews 10"))
+        self.assertNotIn("text", payload)
+
+    def test_build_safe_command_response_hides_paths(self) -> None:
+        completed = subprocess.CompletedProcess(
+            args=["python3"],
+            returncode=0,
+            stdout='{"status":"initialized","db_path":"/home/test/private.sqlite3","output_file":"out.csv"}',
+            stderr="",
+        )
+        text, payload = telegram_connector.build_safe_command_response("init-db", completed)
+        self.assertIn("status: initialized", text)
+        self.assertIn("output_file: out.csv", text)
+        self.assertNotIn("db_path", text)
+        self.assertNotIn("/home/test/private.sqlite3", text)
+        self.assertEqual(payload["output_file"], "out.csv")
+
+    def test_build_safe_command_response_redacts_stderr(self) -> None:
+        completed = subprocess.CompletedProcess(
+            args=["python3"],
+            returncode=2,
+            stdout="",
+            stderr="failed at /home/tester/secrets/token.txt with bot123456:FAKE_SECRET",
+        )
+        text, payload = telegram_connector.build_safe_command_response("tail", completed)
+        self.assertIn("Status: failed (2)", text)
+        self.assertIn("<path>", text)
+        self.assertIn("<bot_token>", text)
+        self.assertIsNone(payload)
+
+    def test_resolve_secret_value_reads_onepassword_reference(self) -> None:
+        original_run = telegram_connector.subprocess.run
+        telegram_connector._SECRET_CACHE.clear()
+
+        def fake_run(*args, **kwargs):
+            return subprocess.CompletedProcess(args=args[0], returncode=0, stdout="secret-from-op\n", stderr="")
+
+        telegram_connector.subprocess.run = fake_run
+        try:
+            value = telegram_connector.resolve_secret_value("op://Private/item/field", "Bot token")
+        finally:
+            telegram_connector.subprocess.run = original_run
+
+        self.assertEqual(value, "secret-from-op")
+
+    def test_project_root_override_points_data_files_to_project_dir(self) -> None:
+        original = os.environ.get("TELEGRAM_CONNECTOR_PROJECT_ROOT")
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            os.environ["TELEGRAM_CONNECTOR_PROJECT_ROOT"] = tmp_dir
+            spec = importlib.util.spec_from_file_location("telegram_connector_override_module", MODULE_PATH)
+            module = importlib.util.module_from_spec(spec)
+            assert spec.loader is not None
+            spec.loader.exec_module(module)
+        if original is None:
+            os.environ.pop("TELEGRAM_CONNECTOR_PROJECT_ROOT", None)
+        else:
+            os.environ["TELEGRAM_CONNECTOR_PROJECT_ROOT"] = original
+
+        self.assertEqual(module.BASE_DIR, Path(tmp_dir))
+        self.assertEqual(module.DATA_DIR, Path(tmp_dir) / "data")
+
+
+if __name__ == "__main__":
+    unittest.main()

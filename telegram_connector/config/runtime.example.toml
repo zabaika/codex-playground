@@ -1,0 +1,36 @@
+# Copy this file to runtime.local.toml and fill in machine-specific values there.
+# Keep runtime.local.toml untracked.
+
+[telegram]
+default_chat_id = ""
+
+[telethon]
+user_session_name = "telegram_history_user"
+bot_session_name = "telegram_history_bot"
+api_id = "op://Personal/telegram-connector/api_id"
+phone = "op://Personal/telegram-connector/phone"
+
+[auth]
+default_mode = "user"
+public_channel_mode = "bot"
+private_channel_mode = "user"
+
+[bridge]
+allowed_chat_ids = ""
+# history_client_path = "/absolute/path/to/telegram_history_client.py"
+
+[paths]
+# Add local-only absolute paths here when needed.
+# data_dir = "/absolute/path/to/telegram_connector/data"
+# history_db = "/absolute/path/to/telegram_history.sqlite3"
+# media_root = "/absolute/path/to/telegram_media"
+# tesseract_binary = "/opt/homebrew/bin/tesseract"
+
+[ocr]
+image_prompt = "Extract all readable text from the image."
+
+[secrets]
+# 1Password secret references via `op read`
+bot_token = "op://Personal/telegram-connector/bot_token"
+api_hash = "op://Personal/telegram-connector/api_hash"
+user_password = "op://Personal/telegram-connector/user_password"
