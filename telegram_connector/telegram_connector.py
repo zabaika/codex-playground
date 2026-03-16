@@ -140,6 +140,50 @@ def normalize_bridge_command_text(text: str) -> str:
     return raw
 
 
+def sanitize_text_for_storage(text: str) -> str:
+    sanitized_chars: list[str] = []
+    for char in text:
+        if char in {"\n", "\r", "\t"} or ord(char) < 32:
+            sanitized_chars.append(" ")
+        else:
+            sanitized_chars.append(char)
+    return re.sub(r"\s+", " ", "".join(sanitized_chars)).strip()
+
+
+def is_channel_fragment(token: str) -> bool:
+    raw = token.strip()
+    if not raw:
+        return False
+    if raw == ",":
+        return True
+    trimmed = raw.strip(",").strip()
+    if not trimmed:
+        return True
+    if trimmed.startswith("@") or trimmed.startswith("https://t.me/") or trimmed.startswith("t.me/"):
+        return True
+    return trimmed.lstrip("-").isdigit() and not trimmed.isdigit()
+
+
+def consume_channel_argument(parts: list[str]) -> tuple[str | None, list[str]]:
+    if not parts:
+        return None, []
+
+    consumed: list[str] = []
+    remaining = list(parts)
+    while remaining:
+        token = remaining[0]
+        if is_channel_fragment(token):
+            consumed.append(token)
+            remaining.pop(0)
+            continue
+        break
+
+    if not consumed:
+        return None, parts
+    normalized = re.sub(r"\s*,\s*", ", ", " ".join(consumed)).strip()
+    return normalized, remaining
+
+
 def resolve_history_client_path(config: dict[str, Any]) -> Path:
     raw = get_config_value(config, "bridge", "history_client_path")
     return Path(raw) if raw else HISTORY_CLIENT_FILE
@@ -206,6 +250,7 @@ def redact_update_for_storage(update: dict[str, Any]) -> dict[str, Any]:
     normalized = normalize_bridge_command_text(text)
     if normalized.startswith("/"):
         redacted["command"] = normalized.split(maxsplit=1)[0]
+        redacted["command_text"] = sanitize_text_for_storage(normalized)
     return redacted
 
 
@@ -439,9 +484,9 @@ def build_history_command(text: str) -> list[str] | None:
         auth_mode = "user"
         has_filter = False
         extra_parts = parts[1:]
-        if extra_parts and is_channel_token(extra_parts[0]):
-            argv += ["--channel", extra_parts[0]]
-            extra_parts = extra_parts[1:]
+        channel_arg, extra_parts = consume_channel_argument(extra_parts)
+        if channel_arg:
+            argv += ["--channel", channel_arg]
         for part in extra_parts:
             lowered = part.lower()
             if part.isdigit():
@@ -463,9 +508,9 @@ def build_history_command(text: str) -> list[str] | None:
         limit = "100"
         auth_mode = "user"
         extra_parts = parts[1:]
-        if extra_parts and is_channel_token(extra_parts[0]):
-            argv += ["--channel", extra_parts[0]]
-            extra_parts = extra_parts[1:]
+        channel_arg, extra_parts = consume_channel_argument(extra_parts)
+        if channel_arg:
+            argv += ["--channel", channel_arg]
         if extra_parts and extra_parts[0].isdigit():
             limit = extra_parts[0]
         argv += ["--limit", limit, "--download-media", "--ocr"]
@@ -485,9 +530,9 @@ def build_history_command(text: str) -> list[str] | None:
         limit = "1000" if subcommand == "backfill" else "100"
         auth_mode = "user"
         extra_parts = parts[1:]
-        if extra_parts and is_channel_token(extra_parts[0]):
-            argv += ["--channel", extra_parts[0]]
-            extra_parts = extra_parts[1:]
+        channel_arg, extra_parts = consume_channel_argument(extra_parts)
+        if channel_arg:
+            argv += ["--channel", channel_arg]
         if extra_parts and extra_parts[0].isdigit():
             limit = extra_parts[0]
         argv += ["--limit", limit]

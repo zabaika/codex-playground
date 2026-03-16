@@ -46,6 +46,13 @@ class TelegramConnectorTests(unittest.TestCase):
             ["update", "--channel", "@vcnews", "--limit", "25", "--auth-mode", "user"],
         )
 
+    def test_build_history_command_for_update_with_spaced_multi_channel_list(self) -> None:
+        command = telegram_connector.build_history_command("/update @vcnews, @refugecard 10")
+        self.assertEqual(
+            command[2:],
+            ["update", "--channel", "@vcnews, @refugecard", "--limit", "10", "--auth-mode", "user"],
+        )
+
     def test_build_history_command_for_update_without_channel_uses_runtime_defaults(self) -> None:
         command = telegram_connector.build_history_command("/update 25")
         self.assertEqual(command[2:], ["update", "--limit", "25", "--auth-mode", "user"])
@@ -64,6 +71,13 @@ class TelegramConnectorTests(unittest.TestCase):
         self.assertEqual(
             command[2:],
             ["export-csv", "--channel", "@vcnews", "--limit", "100", "--auth-mode", "user"],
+        )
+
+    def test_build_history_command_for_exportcsv_with_spaced_multi_channel_list(self) -> None:
+        command = telegram_connector.build_history_command("/exportcsv @vcnews, @refugecard 100")
+        self.assertEqual(
+            command[2:],
+            ["export-csv", "--channel", "@vcnews, @refugecard", "--limit", "100", "--auth-mode", "user"],
         )
 
     def test_build_history_command_for_exportcsv_with_period(self) -> None:
@@ -132,6 +146,7 @@ class TelegramConnectorTests(unittest.TestCase):
         }
         payload = telegram_connector.redact_update_for_storage(update)
         self.assertEqual(payload["command"], "/tail")
+        self.assertEqual(payload["command_text"], "/tail @vcnews 10")
         self.assertEqual(payload["text_length"], len("/tail @vcnews 10"))
         self.assertNotIn("text", payload)
 
@@ -147,6 +162,21 @@ class TelegramConnectorTests(unittest.TestCase):
         }
         payload = telegram_connector.redact_update_for_storage(update)
         self.assertEqual(payload["command"], "/update")
+        self.assertEqual(payload["command_text"], "/update 10")
+
+    def test_redact_update_for_storage_sanitizes_full_command_text(self) -> None:
+        update = {
+            "update_id": 3,
+            "message": {
+                "date": 123,
+                "text": "/update @vcnews,\n@refugecard\t10\r\n",
+                "chat": {"id": 42, "type": "private"},
+                "from": {"id": 7, "username": "alice"},
+            },
+        }
+        payload = telegram_connector.redact_update_for_storage(update)
+        self.assertEqual(payload["command"], "/update")
+        self.assertEqual(payload["command_text"], "/update @vcnews, @refugecard 10")
 
     def test_build_safe_command_response_hides_paths(self) -> None:
         completed = subprocess.CompletedProcess(
