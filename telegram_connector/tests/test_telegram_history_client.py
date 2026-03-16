@@ -56,6 +56,12 @@ default_mode = "auto"
 public_channel_mode = "bot"
 private_channel_mode = "user"
 
+[channels]
+default_list = [
+  "@vcnews, vc.ru",
+  "@another_channel, Another Channel",
+]
+
 [paths]
 history_db = "/tmp/history.sqlite3"
 media_root = "/tmp/media"
@@ -91,6 +97,7 @@ user_password = "pw_x"
         self.assertEqual(runtime.default_auth_mode, "auto")
         self.assertEqual(runtime.public_auth_mode, "bot")
         self.assertEqual(runtime.private_auth_mode, "user")
+        self.assertEqual(runtime.default_channels, ["@vcnews", "@another_channel"])
 
     def test_project_root_override_points_runtime_paths_to_project_dir(self) -> None:
         original = os.environ.get("TELEGRAM_CONNECTOR_PROJECT_ROOT")
@@ -109,6 +116,79 @@ user_password = "pw_x"
         self.assertEqual(module.DATA_DIR, Path(tmp_dir) / "data")
         self.assertEqual(module.DB_FILE, Path(tmp_dir) / "data" / "telegram_history.sqlite3")
 
+    def test_parse_channel_list_supports_single_and_multiple_channels(self) -> None:
+        self.assertEqual(telegram_history_client.parse_channel_list("@vcnews"), ["@vcnews"])
+        self.assertEqual(
+            telegram_history_client.parse_channel_list("@vcnews, @another_channel"),
+            ["@vcnews", "@another_channel"],
+        )
+
+    def test_parse_default_channel_entry_keeps_only_channel_reference(self) -> None:
+        self.assertEqual(
+            telegram_history_client.parse_default_channel_entry("@vcnews, vc.ru"),
+            "@vcnews",
+        )
+
+    def test_get_default_channels_supports_named_entries(self) -> None:
+        config = {
+            "channels": {
+                "default_list": [
+                    "@vcnews, vc.ru",
+                    "@another_channel, Another Channel",
+                ]
+            }
+        }
+        self.assertEqual(
+            telegram_history_client.get_default_channels(config),
+            ["@vcnews", "@another_channel"],
+        )
+
+    def test_resolve_channels_argument_uses_default_config_list_when_channel_missing(self) -> None:
+        runtime = telegram_history_client.RuntimeConfig(
+            db_path=Path("/tmp/db.sqlite3"),
+            media_root=Path("/tmp/media"),
+            user_session_name="user",
+            bot_session_name="bot",
+            api_id="1",
+            api_hash="hash",
+            phone="+1",
+            bot_token="token",
+            user_password="pw",
+            tesseract_binary="tesseract",
+            vision_prompt="prompt",
+            default_auth_mode="user",
+            public_auth_mode="bot",
+            private_auth_mode="user",
+            default_channels=["@vcnews", "@another_channel"],
+        )
+        self.assertEqual(
+            telegram_history_client.resolve_channels_argument(runtime, None),
+            ["@vcnews", "@another_channel"],
+        )
+
+    def test_resolve_channels_argument_prefers_explicit_channels(self) -> None:
+        runtime = telegram_history_client.RuntimeConfig(
+            db_path=Path("/tmp/db.sqlite3"),
+            media_root=Path("/tmp/media"),
+            user_session_name="user",
+            bot_session_name="bot",
+            api_id="1",
+            api_hash="hash",
+            phone="+1",
+            bot_token="token",
+            user_password="pw",
+            tesseract_binary="tesseract",
+            vision_prompt="prompt",
+            default_auth_mode="user",
+            public_auth_mode="bot",
+            private_auth_mode="user",
+            default_channels=["@default"],
+        )
+        self.assertEqual(
+            telegram_history_client.resolve_channels_argument(runtime, "@explicit,@another"),
+            ["@explicit", "@another"],
+        )
+
     def test_resolve_auth_mode_for_public_channel_prefers_bot(self) -> None:
         runtime = telegram_history_client.RuntimeConfig(
             db_path=Path("/tmp/db.sqlite3"),
@@ -125,6 +205,7 @@ user_password = "pw_x"
             default_auth_mode="auto",
             public_auth_mode="bot",
             private_auth_mode="user",
+            default_channels=[],
         )
         self.assertEqual(telegram_history_client.resolve_auth_mode(runtime, "auto", "@vcnews"), "bot")
 
@@ -144,6 +225,7 @@ user_password = "pw_x"
             default_auth_mode="auto",
             public_auth_mode="bot",
             private_auth_mode="user",
+            default_channels=[],
         )
         self.assertEqual(
             telegram_history_client.resolve_auth_mode(runtime, "auto", "https://t.me/+invitehash"),
@@ -192,6 +274,7 @@ user_password = "pw_x"
             default_auth_mode="auto",
             public_auth_mode="bot",
             private_auth_mode="user",
+            default_channels=[],
         )
         with tempfile.TemporaryDirectory() as tmp_dir:
             out_path, row_count = telegram_history_client.export_channel_csv(
@@ -250,6 +333,7 @@ user_password = "pw_x"
             default_auth_mode="user",
             public_auth_mode="bot",
             private_auth_mode="user",
+            default_channels=[],
         )
         with tempfile.TemporaryDirectory() as tmp_dir:
             out_path, row_count = telegram_history_client.export_channel_csv(

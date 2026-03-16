@@ -19,6 +19,11 @@ private_channel_mode = "user"
 allowed_chat_ids = ""
 # history_client_path = "/absolute/path/to/telegram_history_client.py"
 
+[channels]
+default_list = [
+  "@vcnews, vc.ru",
+]
+
 [paths]
 # Add local-only absolute paths here when needed.
 # data_dir = "/absolute/path/to/telegram_connector/data"

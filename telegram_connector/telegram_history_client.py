@@ -112,6 +112,7 @@ class RuntimeConfig:
     default_auth_mode: str
     public_auth_mode: str
     private_auth_mode: str
+    default_channels: list[str]
 
 
 def load_runtime_config() -> dict[str, Any]:
@@ -128,6 +129,31 @@ def get_config_value(config: dict[str, Any], section: str, key: str) -> str:
         return ""
     value = section_data.get(key, "")
     return str(value).strip()
+
+
+def parse_default_channel_entry(raw: str) -> str:
+    value = raw.strip()
+    if not value:
+        return ""
+    channel, _, _label = value.partition(",")
+    return channel.strip()
+
+
+def get_default_channels(config: dict[str, Any]) -> list[str]:
+    section_data = config.get("channels", {})
+    if not isinstance(section_data, dict):
+        return []
+    value = section_data.get("default_list", [])
+    if isinstance(value, str):
+        if "\n" not in value and ";" not in value:
+            channel = parse_default_channel_entry(value)
+            return [channel] if channel else []
+        channels = [parse_default_channel_entry(item) for item in value.replace(";", "\n").splitlines()]
+        return [channel for channel in channels if channel]
+    if not isinstance(value, list):
+        return []
+    channels = [parse_default_channel_entry(str(item)) for item in value]
+    return [channel for channel in channels if channel]
 
 
 def resolve_onepassword_secret(reference: str, label: str) -> str:
@@ -197,6 +223,7 @@ def resolve_runtime() -> RuntimeConfig:
     default_auth_mode = get_config_value(config, "auth", "default_mode") or "auto"
     public_auth_mode = get_config_value(config, "auth", "public_channel_mode") or "bot"
     private_auth_mode = get_config_value(config, "auth", "private_channel_mode") or "user"
+    default_channels = get_default_channels(config)
     return RuntimeConfig(
         db_path=db_path,
         media_root=media_root,
@@ -212,6 +239,7 @@ def resolve_runtime() -> RuntimeConfig:
         default_auth_mode=default_auth_mode,
         public_auth_mode=public_auth_mode,
         private_auth_mode=private_auth_mode,
+        default_channels=default_channels,
     )
 
 
@@ -574,21 +602,35 @@ def media_needs_download(conn: sqlite3.Connection, channel_id: int, message_id: 
     return not local_path or not Path(str(local_path)).exists()
 
 
-async def sync_messages(runtime: RuntimeConfig, args: argparse.Namespace, mode: str) -> int:
-    conn = connect_db(runtime)
-    init_db(conn)
+def parse_channel_list(raw: str) -> list[str]:
+    channels = [item.strip() for item in raw.split(",") if item.strip()]
+    if not channels:
+        raise SystemExit("At least one channel is required.")
+    return channels
 
-    auth_mode = resolve_auth_mode(runtime, args.auth_mode, args.channel)
+
+def resolve_channels_argument(runtime: RuntimeConfig, raw_channel: str | None) -> list[str]:
+    if raw_channel and raw_channel.strip():
+        return parse_channel_list(raw_channel)
+    if runtime.default_channels:
+        return runtime.default_channels
+    raise SystemExit("At least one channel is required. Pass --channel or set [channels].default_list in runtime.local.toml.")
+
+
+async def sync_one_channel(
+    conn: sqlite3.Connection,
+    runtime: RuntimeConfig,
+    args: argparse.Namespace,
+    mode: str,
+    channel: str,
+) -> dict[str, Any]:
+    auth_mode = resolve_auth_mode(runtime, args.auth_mode, channel)
     client = await open_telethon_client(runtime, auth_mode)
     async with client:
-        entity = await client.get_entity(args.channel)
+        entity = await client.get_entity(channel)
         upsert_channel(conn, entity)
 
-        if mode == "backfill":
-            iterator = client.iter_messages(entity, limit=args.limit)
-        elif mode == "tail":
-            iterator = client.iter_messages(entity, limit=args.limit)
-        elif mode == "update":
+        if mode in {"backfill", "tail", "update"}:
             iterator = client.iter_messages(entity, limit=args.limit)
         else:
             raise SystemExit(f"Unsupported sync mode: {mode}")
@@ -640,23 +682,27 @@ async def sync_messages(runtime: RuntimeConfig, args: argparse.Namespace, mode: 
             binary = require_tesseract(runtime)
             ocr_processed = process_pending_ocr(conn, binary, limit=args.limit, channel_id=entity.id)
         conn.commit()
-        print(
-            json.dumps(
-                {
-                    "channel": args.channel,
-                    "channel_id": entity.id,
-                    "mode": mode,
-                    "auth_mode": auth_mode,
-                    "processed_messages": processed,
-                    "skipped_existing": skipped_existing,
-                    "refreshed_existing_media": refreshed_existing_media,
-                    "download_media": bool(args.download_media),
-                    "ocr_processed": ocr_processed,
-                },
-                ensure_ascii=False,
-                indent=2,
-            )
-        )
+        return {
+            "channel": channel,
+            "channel_id": entity.id,
+            "mode": mode,
+            "auth_mode": auth_mode,
+            "processed_messages": processed,
+            "skipped_existing": skipped_existing,
+            "refreshed_existing_media": refreshed_existing_media,
+            "download_media": bool(args.download_media),
+            "ocr_processed": ocr_processed,
+        }
+
+
+async def sync_messages(runtime: RuntimeConfig, args: argparse.Namespace, mode: str) -> int:
+    conn = connect_db(runtime)
+    init_db(conn)
+    channels = resolve_channels_argument(runtime, args.channel)
+    results = []
+    for channel in channels:
+        results.append(await sync_one_channel(conn, runtime, args, mode, channel))
+    print(json.dumps(results[0] if len(results) == 1 else results, ensure_ascii=False, indent=2))
     return 0
 
 
@@ -895,29 +941,29 @@ def cmd_export_csv(args: argparse.Namespace) -> int:
     runtime = resolve_runtime()
     conn = connect_db(runtime)
     init_db(conn)
-    output, row_count = export_channel_csv(
-        conn,
-        runtime,
-        channel=args.channel,
-        limit=args.limit,
-        since=args.since,
-        until=args.until,
-        output_path=args.output,
-    )
-    print(
-        json.dumps(
+    channels = resolve_channels_argument(runtime, args.channel)
+    results = []
+    for channel in channels:
+        output, row_count = export_channel_csv(
+            conn,
+            runtime,
+            channel=channel,
+            limit=args.limit,
+            since=args.since,
+            until=args.until,
+            output_path=args.output if len(channels) == 1 else None,
+        )
+        results.append(
             {
-                "channel": args.channel,
+                "channel": channel,
                 "output_file": output.name,
                 "row_count": row_count,
                 "limit": args.limit,
                 "since": args.since,
                 "until": args.until,
-            },
-            ensure_ascii=False,
-            indent=2,
+            }
         )
-    )
+    print(json.dumps(results[0] if len(results) == 1 else results, ensure_ascii=False, indent=2))
     return 0
 
 
@@ -983,7 +1029,7 @@ def build_parser() -> argparse.ArgumentParser:
     inspect_state.set_defaults(func=cmd_inspect_state)
 
     export_csv = subparsers.add_parser("export-csv", help="Export saved channel history from SQLite into CSV.")
-    export_csv.add_argument("--channel", required=True, help="Channel username or stored channel id.")
+    export_csv.add_argument("--channel", help="Channel username/id or comma-separated list.")
     export_csv.add_argument("--limit", type=int, default=None, help="Export the latest N messages.")
     export_csv.add_argument("--since", help="Export messages since this UTC date or datetime.")
     export_csv.add_argument("--until", help="Export messages until this UTC date or datetime.")
@@ -992,7 +1038,7 @@ def build_parser() -> argparse.ArgumentParser:
     export_csv.set_defaults(func=cmd_export_csv)
 
     backfill = subparsers.add_parser("backfill", help="Read channel history into SQLite.")
-    backfill.add_argument("--channel", required=True, help="Channel username or link, for example @vcnews.")
+    backfill.add_argument("--channel", help="Channel username/link or comma-separated list, for example @vcnews,@another.")
     backfill.add_argument("--limit", type=int, default=1000, help="How many latest messages to ingest.")
     backfill.add_argument("--download-media", action="store_true", help="Download message media locally.")
     backfill.add_argument("--ocr", action="store_true", help="Run OCR for downloaded images from this sync run.")
@@ -1000,7 +1046,7 @@ def build_parser() -> argparse.ArgumentParser:
     backfill.set_defaults(async_func="backfill")
 
     tail = subparsers.add_parser("tail", help="Fetch the latest N messages for incremental sync.")
-    tail.add_argument("--channel", required=True, help="Channel username or link, for example @vcnews.")
+    tail.add_argument("--channel", help="Channel username/link or comma-separated list, for example @vcnews,@another.")
     tail.add_argument("--limit", type=int, default=100, help="How many latest messages to ingest.")
     tail.add_argument("--download-media", action="store_true", help="Download message media locally.")
     tail.add_argument("--ocr", action="store_true", help="Run OCR for downloaded images from this sync run.")
@@ -1008,7 +1054,7 @@ def build_parser() -> argparse.ArgumentParser:
     tail.set_defaults(async_func="tail")
 
     update = subparsers.add_parser("update", help="Fetch only messages newer than the latest saved one.")
-    update.add_argument("--channel", required=True, help="Channel username or link, for example @vcnews.")
+    update.add_argument("--channel", help="Channel username/link or comma-separated list, for example @vcnews,@another.")
     update.add_argument("--limit", type=int, default=100, help="How many latest remote messages to scan.")
     update.add_argument("--download-media", action="store_true", help="Download message media locally.")
     update.add_argument("--ocr", action="store_true", help="Run OCR for downloaded images from this sync run.")

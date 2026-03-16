@@ -27,6 +27,7 @@ HISTORY_CLIENT_FILE = APP_DIR / "telegram_history_client.py"
 EXPORT_DIR = DATA_DIR / "exports"
 OP_REFERENCE_PREFIX = "op://"
 _SECRET_CACHE: dict[str, str] = {}
+SUPPORTED_BRIDGE_COMMANDS = {"help", "doctor", "state", "ocr", "exportcsv", "ocrhistory", "backfill", "tail", "update"}
 
 
 def load_runtime_config() -> dict[str, Any]:
@@ -102,6 +103,43 @@ def parse_allowed_chat_ids(config: dict[str, Any]) -> set[str]:
     return {item.strip() for item in raw.split(",") if item.strip()}
 
 
+def is_channel_token(value: str) -> bool:
+    token = value.strip()
+    if not token:
+        return False
+    parts = [item.strip() for item in token.split(",") if item.strip()]
+    if not parts:
+        return False
+    for part in parts:
+        if part.startswith("@") or part.startswith("https://t.me/") or part.startswith("t.me/"):
+            continue
+        if part.lstrip("-").isdigit() and not part.isdigit():
+            continue
+        return False
+    return True
+
+
+def normalize_bridge_command_text(text: str) -> str:
+    raw = text.strip()
+    if not raw:
+        return ""
+    parts = shlex.split(raw)
+    if not parts:
+        return ""
+    command = parts[0].strip()
+    if command.startswith("/"):
+        bare = command[1:]
+        if "@" in bare:
+            bare = bare.split("@", 1)[0]
+        parts[0] = f"/{bare.lower()}"
+        return " ".join(parts)
+    normalized = command.lower()
+    if normalized in SUPPORTED_BRIDGE_COMMANDS:
+        parts[0] = f"/{normalized}"
+        return " ".join(parts)
+    return raw
+
+
 def resolve_history_client_path(config: dict[str, Any]) -> Path:
     raw = get_config_value(config, "bridge", "history_client_path")
     return Path(raw) if raw else HISTORY_CLIENT_FILE
@@ -165,8 +203,9 @@ def redact_update_for_storage(update: dict[str, Any]) -> dict[str, Any]:
         "has_text": bool(text),
         "text_length": len(text),
     }
-    if text.startswith("/"):
-        redacted["command"] = text.split(maxsplit=1)[0]
+    normalized = normalize_bridge_command_text(text)
+    if normalized.startswith("/"):
+        redacted["command"] = normalized.split(maxsplit=1)[0]
     return redacted
 
 
@@ -321,26 +360,52 @@ def build_safe_command_response(command_text: str, completed: subprocess.Complet
     return "\n".join(lines), json_output if isinstance(json_output, dict) else None
 
 
+def build_safe_command_response_any(command_text: str, completed: subprocess.CompletedProcess[str]) -> tuple[str, dict[str, Any] | list[dict[str, Any]] | None]:
+    output = (completed.stdout or "").strip()
+    json_output: dict[str, Any] | list[dict[str, Any]] | None = None
+    if output:
+        try:
+            parsed = json.loads(output)
+            if isinstance(parsed, dict):
+                return build_safe_command_response(command_text, completed)
+            if isinstance(parsed, list) and all(isinstance(item, dict) for item in parsed):
+                lines = [f"Command: {command_text}", f"Status: {'ok' if completed.returncode == 0 else f'failed ({completed.returncode})'}"]
+                safe_keys = ["channel", "channel_id", "mode", "auth_mode", "processed_messages", "skipped_existing", "row_count", "output_file"]
+                for item in parsed:
+                    summary = []
+                    for key in safe_keys:
+                        if key in item and item[key] not in {None, ""}:
+                            summary.append(f"{key}={item[key]}")
+                    lines.append(", ".join(summary))
+                return "\n".join(lines), parsed
+        except json.JSONDecodeError:
+            pass
+    return build_safe_command_response(command_text, completed)
+
+
 def command_help_text() -> str:
     return (
         "Available commands:\n"
         "/help\n"
         "/doctor\n"
         "/state\n"
-        "/backfill @channel [limit] [media] [bot|user|auto]\n"
-        "/tail @channel [limit] [media|ocr] [bot|user|auto]\n"
-        "/update @channel [limit] [media|ocr] [bot|user|auto]\n"
-        "/ocrhistory @channel [limit] [bot|user|auto]\n"
-        "/exportcsv @channel [limit] [bot|user|auto]\n"
-        "/exportcsv @channel since=YYYY-MM-DD until=YYYY-MM-DD [bot|user|auto]\n"
+        "/backfill [@channel[,@channel2]] [limit] [media] [bot|user|auto]\n"
+        "/tail [@channel[,@channel2]] [limit] [media|ocr] [bot|user|auto]\n"
+        "/update [@channel[,@channel2]] [limit] [media|ocr] [bot|user|auto]\n"
+        "/ocrhistory [@channel[,@channel2]] [limit] [bot|user|auto]\n"
+        "/exportcsv [@channel[,@channel2]] [limit] [bot|user|auto]\n"
+        "/exportcsv [@channel[,@channel2]] since=YYYY-MM-DD until=YYYY-MM-DD [bot|user|auto]\n"
         "/ocr [limit]\n"
         "\nExamples:\n"
         "/backfill @vcnews 200\n"
+        "/backfill 200\n"
         "/tail @vcnews 100 ocr\n"
         "/update @vcnews 100\n"
+        "/update 100\n"
         "/tail @vcnews 100 media\n"
         "/ocrhistory @vcnews 50\n"
         "/exportcsv @vcnews 100\n"
+        "/exportcsv 100\n"
         "/exportcsv @vcnews since=2026-03-15\n"
         "/backfill https://t.me/+invitehash 100 user\n"
         "/ocr 50\n"
@@ -370,12 +435,14 @@ def build_history_command(text: str) -> list[str] | None:
             limit = parts[1]
         return base + ["ocr-pending", "--limit", limit]
     if command == "/exportcsv":
-        if len(parts) < 2:
-            raise ValueError("Channel is required. Example: /exportcsv @vcnews 100")
-        argv = base + ["export-csv", "--channel", parts[1]]
+        argv = base + ["export-csv"]
         auth_mode = "user"
         has_filter = False
-        for part in parts[2:]:
+        extra_parts = parts[1:]
+        if extra_parts and is_channel_token(extra_parts[0]):
+            argv += ["--channel", extra_parts[0]]
+            extra_parts = extra_parts[1:]
+        for part in extra_parts:
             lowered = part.lower()
             if part.isdigit():
                 argv += ["--limit", part]
@@ -392,35 +459,39 @@ def build_history_command(text: str) -> list[str] | None:
             argv += ["--limit", "100"]
         return argv + ["--auth-mode", auth_mode]
     if command == "/ocrhistory":
-        if len(parts) < 2:
-            raise ValueError("Channel is required. Example: /ocrhistory @vcnews 50 user")
-        argv = base + ["tail", "--channel", parts[1]]
+        argv = base + ["tail"]
         limit = "100"
         auth_mode = "user"
-        if len(parts) >= 3 and parts[2].isdigit():
-            limit = parts[2]
+        extra_parts = parts[1:]
+        if extra_parts and is_channel_token(extra_parts[0]):
+            argv += ["--channel", extra_parts[0]]
+            extra_parts = extra_parts[1:]
+        if extra_parts and extra_parts[0].isdigit():
+            limit = extra_parts[0]
         argv += ["--limit", limit, "--download-media", "--ocr"]
-        for part in parts[2:]:
+        for part in extra_parts:
             lowered = part.lower()
             if lowered in {"auto", "bot", "user"}:
                 auth_mode = lowered
         return argv + ["--auth-mode", auth_mode]
     if command in {"/backfill", "/tail", "/update"}:
-        if len(parts) < 2:
-            raise ValueError("Channel is required. Example: /tail @vcnews 100")
         if command == "/backfill":
             subcommand = "backfill"
         elif command == "/update":
             subcommand = "update"
         else:
             subcommand = "tail"
-        argv = base + [subcommand, "--channel", parts[1]]
+        argv = base + [subcommand]
         limit = "1000" if subcommand == "backfill" else "100"
         auth_mode = "user"
-        if len(parts) >= 3 and parts[2].isdigit():
-            limit = parts[2]
+        extra_parts = parts[1:]
+        if extra_parts and is_channel_token(extra_parts[0]):
+            argv += ["--channel", extra_parts[0]]
+            extra_parts = extra_parts[1:]
+        if extra_parts and extra_parts[0].isdigit():
+            limit = extra_parts[0]
         argv += ["--limit", limit]
-        for part in parts[2:]:
+        for part in extra_parts:
             lowered = part.lower()
             if lowered == "media":
                 argv.append("--download-media")
@@ -445,7 +516,7 @@ def handle_history_command(token: str, config: dict[str, Any], update: dict[str,
         send_text_message(token, chat_id, f"Chat {chat_id} is not allowed to run bridge commands.")
         return
 
-    text = extract_text(update).strip()
+    text = normalize_bridge_command_text(extract_text(update))
     if not text.startswith("/"):
         return
 
@@ -481,12 +552,18 @@ def handle_history_command(token: str, config: dict[str, Any], update: dict[str,
         send_text_message(token, chat_id, "Command timed out after 3600 seconds.")
         return
 
-    safe_response, json_output = build_safe_command_response(" ".join(argv[2:]), completed)
+    safe_response, json_output = build_safe_command_response_any(" ".join(argv[2:]), completed)
     send_text_chunks(token, chat_id, safe_response)
-    if completed.returncode == 0 and isinstance(json_output, dict) and json_output.get("output_file"):
-        output_path = EXPORT_DIR / str(json_output["output_file"])
-        if output_path.exists():
-            send_document(token, chat_id, output_path, caption=f"CSV export: {output_path.name}")
+    if completed.returncode == 0:
+        outputs: list[str] = []
+        if isinstance(json_output, dict) and json_output.get("output_file"):
+            outputs.append(str(json_output["output_file"]))
+        elif isinstance(json_output, list):
+            outputs.extend(str(item["output_file"]) for item in json_output if isinstance(item, dict) and item.get("output_file"))
+        for output_file in outputs:
+            output_path = EXPORT_DIR / output_file
+            if output_path.exists():
+                send_document(token, chat_id, output_path, caption=f"CSV export: {output_path.name}")
 
 
 def cmd_get_me(args: argparse.Namespace) -> int:
@@ -535,7 +612,8 @@ def print_update(update: dict[str, Any]) -> None:
     username = extract_username(update)
     text = extract_text(update)
     date = extract_date(update)
-    command = text.split(maxsplit=1)[0] if text.startswith("/") else "<message>"
+    normalized = normalize_bridge_command_text(text)
+    command = normalized.split(maxsplit=1)[0] if normalized.startswith("/") else "<message>"
     print(f"[{date}] chat_id={chat_id} from={username} event={command} text_length={len(text)}")
 
 

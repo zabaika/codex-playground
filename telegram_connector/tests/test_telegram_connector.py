@@ -46,6 +46,19 @@ class TelegramConnectorTests(unittest.TestCase):
             ["update", "--channel", "@vcnews", "--limit", "25", "--auth-mode", "user"],
         )
 
+    def test_build_history_command_for_update_without_channel_uses_runtime_defaults(self) -> None:
+        command = telegram_connector.build_history_command("/update 25")
+        self.assertEqual(command[2:], ["update", "--limit", "25", "--auth-mode", "user"])
+
+    def test_normalize_bridge_command_text_supports_bare_command(self) -> None:
+        self.assertEqual(telegram_connector.normalize_bridge_command_text("update 10"), "/update 10")
+
+    def test_normalize_bridge_command_text_strips_bot_suffix(self) -> None:
+        self.assertEqual(
+            telegram_connector.normalize_bridge_command_text("/update@verter_the_bot 10"),
+            "/update 10",
+        )
+
     def test_build_history_command_for_exportcsv_with_limit(self) -> None:
         command = telegram_connector.build_history_command("/exportcsv @vcnews 100")
         self.assertEqual(
@@ -76,6 +89,10 @@ class TelegramConnectorTests(unittest.TestCase):
             command[2:],
             ["export-csv", "--channel", "@vcnews", "--since", "2026-03-15", "--auth-mode", "user"],
         )
+
+    def test_build_history_command_for_exportcsv_without_channel_uses_runtime_defaults(self) -> None:
+        command = telegram_connector.build_history_command("/exportcsv 100")
+        self.assertEqual(command[2:], ["export-csv", "--limit", "100", "--auth-mode", "user"])
 
     def test_build_history_command_rejects_unknown_command(self) -> None:
         with self.assertRaises(ValueError):
@@ -118,6 +135,19 @@ class TelegramConnectorTests(unittest.TestCase):
         self.assertEqual(payload["text_length"], len("/tail @vcnews 10"))
         self.assertNotIn("text", payload)
 
+    def test_redact_update_for_storage_recognizes_bare_bridge_command(self) -> None:
+        update = {
+            "update_id": 2,
+            "message": {
+                "date": 123,
+                "text": "update 10",
+                "chat": {"id": 42, "type": "private"},
+                "from": {"id": 7, "username": "alice"},
+            },
+        }
+        payload = telegram_connector.redact_update_for_storage(update)
+        self.assertEqual(payload["command"], "/update")
+
     def test_build_safe_command_response_hides_paths(self) -> None:
         completed = subprocess.CompletedProcess(
             args=["python3"],
@@ -159,6 +189,30 @@ class TelegramConnectorTests(unittest.TestCase):
             telegram_connector.subprocess.run = original_run
 
         self.assertEqual(value, "secret-from-op")
+
+    def test_build_safe_command_response_any_summarizes_multi_channel_results(self) -> None:
+        completed = subprocess.CompletedProcess(
+            args=["python3"],
+            returncode=0,
+            stdout='[{"channel":"@vcnews","processed_messages":3},{"channel":"@another","processed_messages":5}]',
+            stderr="",
+        )
+        text, payload = telegram_connector.build_safe_command_response_any("update", completed)
+        self.assertIn("channel=@vcnews, processed_messages=3", text)
+        self.assertIn("channel=@another, processed_messages=5", text)
+        self.assertIsInstance(payload, list)
+
+    def test_build_safe_command_response_any_preserves_multi_export_payload(self) -> None:
+        completed = subprocess.CompletedProcess(
+            args=["python3"],
+            returncode=0,
+            stdout='[{"channel":"@vcnews","row_count":3,"output_file":"vcnews.csv"},{"channel":"@another","row_count":4,"output_file":"another.csv"}]',
+            stderr="",
+        )
+        text, payload = telegram_connector.build_safe_command_response_any("export-csv", completed)
+        self.assertIn("output_file=vcnews.csv", text)
+        self.assertIn("output_file=another.csv", text)
+        self.assertEqual(payload[0]["output_file"], "vcnews.csv")
 
     def test_project_root_override_points_data_files_to_project_dir(self) -> None:
         original = os.environ.get("TELEGRAM_CONNECTOR_PROJECT_ROOT")

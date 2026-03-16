@@ -5,6 +5,8 @@ Telegram toolkit with two local clients:
 - `telegram_connector.py`: minimal Bot API bridge for inbound/outbound bot messages
 - `telegram_history_client.py`: channel history ingester based on Telethon + SQLite + Tesseract
 
+Project-wide implementation rules and reusable conventions are documented in `../RULEBOOK.md`.
+
 ## What it does
 
 - checks bot connectivity with `getMe`
@@ -43,6 +45,11 @@ default_mode = "user"
 public_channel_mode = "bot"
 private_channel_mode = "user"
 
+[channels]
+default_list = [
+  "@vcnews, vc.ru",
+]
+
 [paths]
 # history_db = "/absolute/path/to/telegram_history.sqlite3"
 # media_root = "/absolute/path/to/telegram_media"
@@ -66,6 +73,9 @@ For the history client:
 - `telethon.user_session_name` and `telethon.bot_session_name` keep separate Telethon sessions
 - `auth.default_mode = "user"` makes user-auth the default when a command does not specify auth explicitly
 - you can still force `bot` or `auto` per command when needed
+- `channels.default_list` is optional and stores default channels in the format `"channel, display name"`
+- if a command does not include `--channel` or `/... @channel`, the history client uses `channels.default_list`
+- if a command explicitly includes one channel or a comma-separated channel list, that explicit value overrides the config list
 
 ### 1Password CLI
 
@@ -112,6 +122,12 @@ Secrets are resolved in this order:
 
 Telegram bot commands are executed only while the local bridge process is running.
 If `telegram_connector.py listen --run-commands` is not running, the bot can receive messages in Telegram but it will not execute history-client commands.
+
+Bridge commands are accepted in these forms:
+
+- `/update 10`
+- `update 10`
+- `/update@verter_the_bot 10`
 
 Check connection:
 
@@ -195,12 +211,14 @@ Bot command bridge supports:
 Only `chat_id` values from `[bridge].allowed_chat_ids` may run these commands.
 
 If auth is omitted in a bot command, `user` is used by default.
+The leading `/` is optional for supported bridge commands.
 
 Flag semantics:
 
 - `media`: download media only
 - `ocr`: download image media and run OCR
 - `update`: fetch only messages newer than the latest saved one and skip already stored history
+- commands that accept `@channel` also accept comma-separated lists like `@vcnews,@another_channel`
 
 ### History client
 
@@ -220,6 +238,12 @@ Backfill channel history:
 
 ```bash
 python3 telegram_connector/telegram_history_client.py backfill --channel @vcnews --limit 1000
+```
+
+Backfill multiple channels in one run:
+
+```bash
+python3 telegram_connector/telegram_history_client.py backfill --channel @vcnews,@another_channel --limit 1000
 ```
 
 Fetch the latest 100 messages into the existing history:
@@ -259,6 +283,18 @@ Update only with messages newer than the latest saved one:
 python3 telegram_connector/telegram_history_client.py update --channel @vcnews --limit 100
 ```
 
+Update multiple channels in one run:
+
+```bash
+python3 telegram_connector/telegram_history_client.py update --channel @vcnews,@another_channel --limit 100
+```
+
+Use the default channels from config:
+
+```bash
+python3 telegram_connector/telegram_history_client.py update --limit 100
+```
+
 Repeat sync runs skip already saved messages instead of importing duplicates:
 
 - `tail` and `backfill` skip messages that are already present in SQLite
@@ -268,6 +304,18 @@ Export CSV for the latest saved messages:
 
 ```bash
 python3 telegram_connector/telegram_history_client.py export-csv --channel @vcnews --limit 100
+```
+
+Export CSV for multiple channels:
+
+```bash
+python3 telegram_connector/telegram_history_client.py export-csv --channel @vcnews,@another_channel --limit 100
+```
+
+Export CSV for the configured default channels:
+
+```bash
+python3 telegram_connector/telegram_history_client.py export-csv --limit 100
 ```
 
 Export CSV for a period:
