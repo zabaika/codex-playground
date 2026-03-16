@@ -28,6 +28,29 @@ EXPORT_DIR = DATA_DIR / "exports"
 OP_REFERENCE_PREFIX = "op://"
 _SECRET_CACHE: dict[str, str] = {}
 SUPPORTED_BRIDGE_COMMANDS = {"help", "doctor", "state", "ocr", "exportcsv", "ocrhistory", "backfill", "tail", "update"}
+HISTORY_CLIENT_SECRET_ENV_MAP = {
+    "TELEGRAM_API_ID": ("telethon", "api_id", "Telegram API ID"),
+    "TELEGRAM_API_HASH": ("secrets", "api_hash", "Telegram API hash"),
+    "TELEGRAM_PHONE": ("telethon", "phone", "Telegram phone"),
+    "TELEGRAM_BOT_TOKEN": ("secrets", "bot_token", "Telegram bot token"),
+    "TELEGRAM_USER_PASSWORD": ("secrets", "user_password", "Telegram user password"),
+}
+SAFE_SUBPROCESS_ENV_KEYS = {
+    "HOME",
+    "LANG",
+    "LC_ALL",
+    "LC_CTYPE",
+    "LOGNAME",
+    "PATH",
+    "PYTHONHOME",
+    "PYTHONPATH",
+    "SHELL",
+    "SYSTEMROOT",
+    "TEMP",
+    "TMP",
+    "TMPDIR",
+    "USER",
+}
 
 
 def load_runtime_config() -> dict[str, Any]:
@@ -93,6 +116,34 @@ def require_token() -> str:
             "Missing Telegram bot token. Put it into telegram_connector/config/runtime.local.toml under [secrets].bot_token."
         )
     return token
+
+
+def resolve_bridge_secrets(config: dict[str, Any]) -> dict[str, str]:
+    resolved: dict[str, str] = {}
+    for env_name, (section, key, label) in HISTORY_CLIENT_SECRET_ENV_MAP.items():
+        raw_value = os.environ.get(env_name, "").strip() or get_config_value(config, section, key)
+        value = resolve_secret_value(raw_value, label)
+        if value:
+            resolved[env_name] = value
+    return resolved
+
+
+def require_bot_token_from_secrets(secret_env: dict[str, str]) -> str:
+    token = secret_env.get("TELEGRAM_BOT_TOKEN", "").strip()
+    if not token:
+        raise SystemExit(
+            "Missing Telegram bot token. Put it into telegram_connector/config/runtime.local.toml under [secrets].bot_token."
+        )
+    return token
+
+
+def build_history_client_subprocess_env(secret_env: dict[str, str]) -> dict[str, str]:
+    child_env = {key: value for key, value in os.environ.items() if key in SAFE_SUBPROCESS_ENV_KEYS}
+    project_root = os.environ.get("TELEGRAM_CONNECTOR_PROJECT_ROOT", "").strip()
+    if project_root:
+        child_env["TELEGRAM_CONNECTOR_PROJECT_ROOT"] = project_root
+    child_env.update({key: value for key, value in secret_env.items() if value})
+    return child_env
 
 
 def parse_allowed_chat_ids(config: dict[str, Any]) -> set[str]:
@@ -551,7 +602,7 @@ def build_history_command(text: str) -> list[str] | None:
     raise ValueError(f"Unsupported command: {parts[0]}")
 
 
-def handle_history_command(token: str, config: dict[str, Any], update: dict[str, Any]) -> None:
+def handle_history_command(token: str, config: dict[str, Any], update: dict[str, Any], secret_env: dict[str, str] | None = None) -> None:
     chat_id = extract_chat_id(update)
     if chat_id is None:
         return
@@ -589,6 +640,7 @@ def handle_history_command(token: str, config: dict[str, Any], update: dict[str,
             argv,
             cwd=str(BASE_DIR),
             capture_output=True,
+            env=build_history_client_subprocess_env(secret_env or {}),
             text=True,
             timeout=3600,
             check=False,
@@ -663,8 +715,9 @@ def print_update(update: dict[str, Any]) -> None:
 
 
 def cmd_listen(args: argparse.Namespace) -> int:
-    token = require_token()
     config = load_runtime_config()
+    secret_env = resolve_bridge_secrets(config)
+    token = require_bot_token_from_secrets(secret_env)
     offset = None if args.from_scratch else load_offset()
     print("Listening for Telegram updates.")
 
@@ -688,7 +741,7 @@ def cmd_listen(args: argparse.Namespace) -> int:
                     send_text_message(token, chat_id, f"Echo: {extract_text(update)}")
 
             if args.run_commands:
-                handle_history_command(token, config, update)
+                handle_history_command(token, config, update, secret_env=secret_env)
 
         if args.once:
             return 0

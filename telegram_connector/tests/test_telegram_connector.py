@@ -1,4 +1,5 @@
 import importlib.util
+import io
 import os
 import subprocess
 import tempfile
@@ -220,6 +221,70 @@ class TelegramConnectorTests(unittest.TestCase):
 
         self.assertEqual(value, "secret-from-op")
 
+    def test_resolve_bridge_secrets_reads_expected_env_bundle(self) -> None:
+        original_run = telegram_connector.subprocess.run
+        telegram_connector._SECRET_CACHE.clear()
+        config = {
+            "telethon": {
+                "api_id": "op://Personal/item/api_id",
+                "phone": "op://Personal/item/phone",
+            },
+            "secrets": {
+                "api_hash": "op://Personal/item/api_hash",
+                "bot_token": "op://Personal/item/bot_token",
+                "user_password": "op://Personal/item/user_password",
+            },
+        }
+        values = {
+            "op://Personal/item/api_id": "1",
+            "op://Personal/item/phone": "+34111111111",
+            "op://Personal/item/api_hash": "hash",
+            "op://Personal/item/bot_token": "token",
+            "op://Personal/item/user_password": "pw",
+        }
+
+        def fake_run(*args, **kwargs):
+            reference = args[0][-1]
+            return subprocess.CompletedProcess(args=args[0], returncode=0, stdout=f"{values[reference]}\n", stderr="")
+
+        telegram_connector.subprocess.run = fake_run
+        try:
+            secret_env = telegram_connector.resolve_bridge_secrets(config)
+        finally:
+            telegram_connector.subprocess.run = original_run
+
+        self.assertEqual(
+            secret_env,
+            {
+                "TELEGRAM_API_ID": "1",
+                "TELEGRAM_API_HASH": "hash",
+                "TELEGRAM_PHONE": "+34111111111",
+                "TELEGRAM_BOT_TOKEN": "token",
+                "TELEGRAM_USER_PASSWORD": "pw",
+            },
+        )
+
+    def test_build_history_client_subprocess_env_whitelists_parent_env(self) -> None:
+        original_project_root = os.environ.get("TELEGRAM_CONNECTOR_PROJECT_ROOT")
+        os.environ["TELEGRAM_CONNECTOR_PROJECT_ROOT"] = "/tmp/project-root"
+        os.environ["PATH"] = "/usr/bin"
+        os.environ["SECRET_NOISE"] = "should_not_leak"
+        try:
+            env = telegram_connector.build_history_client_subprocess_env(
+                {"TELEGRAM_API_HASH": "hash", "TELEGRAM_BOT_TOKEN": "token"}
+            )
+        finally:
+            if original_project_root is None:
+                os.environ.pop("TELEGRAM_CONNECTOR_PROJECT_ROOT", None)
+            else:
+                os.environ["TELEGRAM_CONNECTOR_PROJECT_ROOT"] = original_project_root
+
+        self.assertEqual(env["TELEGRAM_API_HASH"], "hash")
+        self.assertEqual(env["TELEGRAM_BOT_TOKEN"], "token")
+        self.assertEqual(env["TELEGRAM_CONNECTOR_PROJECT_ROOT"], "/tmp/project-root")
+        self.assertEqual(env["PATH"], "/usr/bin")
+        self.assertNotIn("SECRET_NOISE", env)
+
     def test_build_safe_command_response_any_summarizes_multi_channel_results(self) -> None:
         completed = subprocess.CompletedProcess(
             args=["python3"],
@@ -259,6 +324,48 @@ class TelegramConnectorTests(unittest.TestCase):
 
         self.assertEqual(module.BASE_DIR, Path(tmp_dir))
         self.assertEqual(module.DATA_DIR, Path(tmp_dir) / "data")
+
+    def test_handle_history_command_passes_minimal_secret_env_to_subprocess(self) -> None:
+        update = {
+            "update_id": 1,
+            "message": {
+                "date": 123,
+                "text": "/state",
+                "chat": {"id": 42, "type": "private"},
+                "from": {"id": 7, "username": "alice"},
+            },
+        }
+        config = {"bridge": {"allowed_chat_ids": "42"}}
+        original_exists = telegram_connector.resolve_history_client_path
+        original_run = telegram_connector.subprocess.run
+        original_send = telegram_connector.send_text_chunks
+        captured: dict[str, object] = {}
+
+        telegram_connector.resolve_history_client_path = lambda config: MODULE_PATH
+
+        def fake_run(*args, **kwargs):
+            captured["env"] = kwargs.get("env")
+            return subprocess.CompletedProcess(args=args[0], returncode=0, stdout='{"status":"ok"}', stderr="")
+
+        telegram_connector.subprocess.run = fake_run
+        telegram_connector.send_text_chunks = lambda token, chat_id, text, chunk_size=3500: None
+        try:
+            telegram_connector.handle_history_command(
+                "bot-token",
+                config,
+                update,
+                secret_env={"TELEGRAM_API_HASH": "hash", "TELEGRAM_BOT_TOKEN": "token", "UNUSED": ""},
+            )
+        finally:
+            telegram_connector.resolve_history_client_path = original_exists
+            telegram_connector.subprocess.run = original_run
+            telegram_connector.send_text_chunks = original_send
+
+        env = captured["env"]
+        assert isinstance(env, dict)
+        self.assertEqual(env["TELEGRAM_API_HASH"], "hash")
+        self.assertEqual(env["TELEGRAM_BOT_TOKEN"], "token")
+        self.assertNotIn("UNUSED", env)
 
 
 if __name__ == "__main__":
