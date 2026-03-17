@@ -22,11 +22,12 @@ Project-wide implementation rules and reusable conventions are documented in `..
 
 ## Config
 
-Follow the same local-config pattern as the `article-to-obsidian-kb` skill:
+Use [../RULEBOOK.md](../RULEBOOK.md) as the source of truth for repository-wide conventions:
 
-- commit `telegram_connector/config/runtime.example.toml`
-- keep only local secret references in `telegram_connector/config/runtime.local.toml`
-- never commit `runtime.local.toml`
+- local-vs-committed config layout
+- secret handling
+- runtime file placement
+- logging and storage safety rules
 
 Config shape:
 
@@ -118,7 +119,7 @@ Secrets are resolved in this order:
 
 ## Usage
 
-### Bot bridge
+### Runtime
 
 Telegram bot commands are executed only while the local bridge process is running.
 If `telegram_connector.py listen --run-commands` is not running, the bot can receive messages in Telegram but it will not execute history-client commands.
@@ -129,218 +130,340 @@ Bridge commands are accepted in these forms:
 - `update 10`
 - `/update@verter_the_bot 10`
 
-Check connection:
+Only `chat_id` values from `[bridge].allowed_chat_ids` may run bot-triggered commands.
+If auth is omitted in a bot command, `user` is used by default.
+The leading `/` is optional for supported bridge commands.
 
-```bash
-python3 telegram_connector/telegram_connector.py get-me
-```
+Bot command quick reference:
 
-Listen for inbound messages:
+- `/backfill [channel] [limit] [since=...] [until=...] [media] [bot|user|auto]`
+  historical load into SQLite
+- `/tail [channel] [limit] [since=...] [until=...] [media|ocr|read] [bot|user|auto]`
+  latest window sync
+- `/update [channel] [limit] [since=...] [until=...] [media|ocr|read] [bot|user|auto]`
+  only messages newer than saved history
+- `/ocrhistory [channel] [limit] [since=...] [until=...] [bot|user|auto]`
+  tail + media download + OCR
+- `/exportcsv [channel] [limit|since=... until=...] [bot|user|auto]`
+  export saved history to CSV
+- `/ocr [limit] [channel] [since=...] [until=...]`
+  OCR only for already-downloaded pending images
 
-```bash
-python3 telegram_connector/telegram_connector.py listen
-```
+Bot command notes:
 
-Listen and allow Telegram commands to control the history client:
+- `channel` may be omitted to use default channels from config
+- `channel` may be a comma-separated list
+- auth defaults to `user`
+- `since` means start of UTC day, `until` means end of UTC day for date-only values
+
+Start the bridge manually:
 
 ```bash
 python3 telegram_connector/telegram_connector.py listen --run-commands
 ```
 
-To run the listener as a macOS background service with autostart at login and reboot:
+Install the macOS background service:
 
 ```bash
 bash telegram_connector/scripts/install_launch_agent.sh
 ```
 
-This installs a launchd agent with label `com.zabaika.telegram-connector-bridge` and deploys a runnable bundle into:
-
-- `~/Library/Application Support/telegram_connector_service`
-
-After code changes, rerun the installer script to refresh the deployed service bundle.
-
-To restart the background service manually:
+Restart the background service:
 
 ```bash
 bash telegram_connector/scripts/restart_launch_agent.sh
 ```
 
-Daemon logs are written into the project folder:
+Daemon logs:
 
 - `telegram_connector/data/launchd/bridge.startup.log`
 - `telegram_connector/data/launchd/bridge.stdout.log`
 - `telegram_connector/data/launchd/bridge.stderr.log`
 
-Poll once and exit:
+### Shared command rules
+
+- channels can be passed explicitly or taken from `[channels].default_list`
+- commands that accept channels also accept comma-separated lists like `@vcnews,@another_channel`
+- `since` and `until` work for all sync, OCR, and export commands
+- `since=2026-03-15` means `2026-03-15T00:00:00+00:00`
+- `until=2026-03-16` means `2026-03-16T23:59:59+00:00`
+- `media` downloads media only
+- `ocr` downloads image media and runs OCR
+- `read` is strictly optional and marks messages as read only in `user` auth mode
+- `read` is tied to the last processed checkpoint, not to newly appeared channel posts
+
+### Command reference
+
+#### `get-me`
+
+Description:
+Check that the bot token works and return basic bot metadata.
+
+CLI:
+
+```bash
+python3 telegram_connector/telegram_connector.py get-me
+```
+
+Additional notes:
+
+- use this first when validating a new bot token
+
+#### `listen`
+
+Description:
+Run long polling for inbound Telegram bot updates.
+
+CLI:
+
+```bash
+python3 telegram_connector/telegram_connector.py listen
+```
+
+Examples:
 
 ```bash
 python3 telegram_connector/telegram_connector.py listen --once
-```
-
-Listen and echo messages back:
-
-```bash
 python3 telegram_connector/telegram_connector.py listen --echo
+python3 telegram_connector/telegram_connector.py listen --run-commands
 ```
 
-Send a message:
+Additional notes:
+
+- `--run-commands` is required if you want Telegram messages to execute history-client commands
+- the launchd service runs this mode automatically after installation
+
+#### `send`
+
+Description:
+Send a plain bot message to a Telegram chat.
+
+CLI:
 
 ```bash
 python3 telegram_connector/telegram_connector.py send --chat-id 123456789 "hello from Codex"
 ```
 
-Or after setting `TELEGRAM_DEFAULT_CHAT_ID`:
+Examples:
 
 ```bash
 python3 telegram_connector/telegram_connector.py send "hello from Codex"
 ```
 
-Bot command bridge supports:
+Additional notes:
 
-- `/help`
-- `/doctor`
-- `/state`
-- `/backfill @channel [limit] [media] [bot|user|auto]`
-- `/tail @channel [limit] [media|ocr] [bot|user|auto]`
-- `/update @channel [limit] [media|ocr] [bot|user|auto]`
-- `/ocrhistory @channel [limit] [bot|user|auto]`
-- `/exportcsv @channel [limit] [bot|user|auto]`
-- `/exportcsv @channel since=YYYY-MM-DD until=YYYY-MM-DD [bot|user|auto]`
-- `/ocr [limit]`
+- if `--chat-id` is omitted, `default_chat_id` is used
 
-Only `chat_id` values from `[bridge].allowed_chat_ids` may run these commands.
+#### `doctor`
 
-If auth is omitted in a bot command, `user` is used by default.
-The leading `/` is optional for supported bridge commands.
+Description:
+Check local runtime configuration and dependency availability.
 
-Flag semantics:
-
-- `media`: download media only
-- `ocr`: download image media and run OCR
-- `update`: fetch only messages newer than the latest saved one and skip already stored history
-- commands that accept `@channel` also accept comma-separated lists like `@vcnews,@another_channel`
-
-### History client
-
-Check local setup:
+CLI:
 
 ```bash
 python3 telegram_connector/telegram_history_client.py doctor
 ```
 
-Initialize SQLite:
+Additional notes:
+
+- useful after changing config, 1Password refs, Telethon, or Tesseract setup
+
+#### `init-db`
+
+Description:
+Create or migrate the local SQLite database.
+
+CLI:
 
 ```bash
 python3 telegram_connector/telegram_history_client.py init-db
 ```
 
-Backfill channel history:
+Additional notes:
+
+- safe to rerun after schema changes
+
+#### `inspect-state`
+
+Description:
+Show known channels and their sync checkpoints from SQLite.
+
+CLI:
+
+```bash
+python3 telegram_connector/telegram_history_client.py inspect-state
+```
+
+Additional notes:
+
+- useful for understanding `last_backfill_message_id` and `last_tail_message_id`
+
+#### `backfill`
+
+Description:
+Read historical channel messages into SQLite.
+
+CLI:
 
 ```bash
 python3 telegram_connector/telegram_history_client.py backfill --channel @vcnews --limit 1000
 ```
 
-Backfill multiple channels in one run:
+Bot:
+
+```text
+/backfill @vcnews 1000
+```
+
+Examples:
 
 ```bash
+python3 telegram_connector/telegram_history_client.py backfill --channel @vcnews --since 2026-03-15 --until 2026-03-16
 python3 telegram_connector/telegram_history_client.py backfill --channel @vcnews,@another_channel --limit 1000
-```
-
-Fetch the latest 100 messages into the existing history:
-
-```bash
-python3 telegram_connector/telegram_history_client.py tail --channel @vcnews --limit 100
-```
-
-Tail with media download and OCR:
-
-```bash
-python3 telegram_connector/telegram_history_client.py tail --channel @vcnews --limit 100 --download-media --ocr --auth-mode user
-```
-
-Download media without OCR:
-
-```bash
-python3 telegram_connector/telegram_history_client.py tail --channel @vcnews --limit 100 --download-media --auth-mode user
-```
-
-Force a specific auth type:
-
-```bash
-python3 telegram_connector/telegram_history_client.py tail --channel @vcnews --limit 100 --auth-mode bot
+python3 telegram_connector/telegram_history_client.py backfill --channel @vcnews --limit 1000 --download-media
 python3 telegram_connector/telegram_history_client.py backfill --channel https://t.me/+invitehash --limit 100 --auth-mode user
 ```
 
-Backfill and download media:
+Additional notes:
+
+- skips already saved messages instead of duplicating them
+- `--download-media` downloads files but does not run OCR by itself
+
+#### `sync`
+
+Description:
+Unified incremental sync command for `tail` and `update` modes.
+
+CLI:
 
 ```bash
-python3 telegram_connector/telegram_history_client.py backfill --channel @vcnews --limit 1000 --download-media
+python3 telegram_connector/telegram_history_client.py sync --mode tail --channel @vcnews --limit 100
 ```
 
-Update only with messages newer than the latest saved one:
+Bot aliases:
+
+```text
+/tail @vcnews 100
+/update @vcnews 100
+```
+
+Examples:
 
 ```bash
-python3 telegram_connector/telegram_history_client.py update --channel @vcnews --limit 100
+python3 telegram_connector/telegram_history_client.py sync --mode tail --channel @vcnews --limit 100 --since 2026-03-15
+python3 telegram_connector/telegram_history_client.py sync --mode tail --channel @vcnews --limit 100 --download-media --ocr --auth-mode user
+python3 telegram_connector/telegram_history_client.py sync --mode tail --channel @vcnews --limit 100 --download-media --auth-mode user
+python3 telegram_connector/telegram_history_client.py sync --mode tail --channel @vcnews --limit 100 --mark-read --auth-mode user
+python3 telegram_connector/telegram_history_client.py sync --mode tail --channel @vcnews --limit 100 --since 2026-03-15 --until 2026-03-16 --download-media --ocr --auth-mode user
+python3 telegram_connector/telegram_history_client.py sync --mode tail --channel @vcnews --limit 100 --auth-mode bot
+python3 telegram_connector/telegram_history_client.py sync --mode update --channel @vcnews --limit 100 --since 2026-03-15 --until 2026-03-16
+python3 telegram_connector/telegram_history_client.py sync --mode update --channel @vcnews --limit 100 --mark-read --auth-mode user
+python3 telegram_connector/telegram_history_client.py sync --mode update --channel @vcnews,@another_channel --limit 100
+python3 telegram_connector/telegram_history_client.py sync --mode update --limit 100
 ```
 
-Update multiple channels in one run:
+Additional notes:
 
-```bash
-python3 telegram_connector/telegram_history_client.py update --channel @vcnews,@another_channel --limit 100
-```
+- `--mode tail` scans the latest window of messages
+- `--mode update` stops at the boundary of already saved history and imports only newer messages
+- `ocr` implies media download for image files
+- `read` checks the current Telegram read boundary first and avoids redundant acknowledge calls
+- `read` in `update` mode marks only the previously processed checkpoint if newer posts appeared after an earlier sync
 
-Use the default channels from config:
+#### `export-csv`
 
-```bash
-python3 telegram_connector/telegram_history_client.py update --limit 100
-```
+Description:
+Export saved channel history from SQLite into CSV.
 
-Repeat sync runs skip already saved messages instead of importing duplicates:
-
-- `tail` and `backfill` skip messages that are already present in SQLite
-- `update` is optimized to stop at the boundary of already saved history and import only newer messages
-
-Export CSV for the latest saved messages:
+CLI:
 
 ```bash
 python3 telegram_connector/telegram_history_client.py export-csv --channel @vcnews --limit 100
 ```
 
-Export CSV for multiple channels:
+Bot:
+
+```text
+/exportcsv @vcnews 100
+```
+
+Examples:
 
 ```bash
 python3 telegram_connector/telegram_history_client.py export-csv --channel @vcnews,@another_channel --limit 100
-```
-
-Export CSV for the configured default channels:
-
-```bash
 python3 telegram_connector/telegram_history_client.py export-csv --limit 100
-```
-
-Export CSV for a period:
-
-```bash
 python3 telegram_connector/telegram_history_client.py export-csv --channel @vcnews --since 2026-03-15 --until 2026-03-16
-```
-
-`--until` is optional. If omitted, export goes through the newest saved message:
-
-```bash
 python3 telegram_connector/telegram_history_client.py export-csv --channel @vcnews --since 2026-03-15
 ```
 
-Run OCR for downloaded images:
+Additional notes:
+
+- `until` is optional
+- when omitted, export goes through the newest saved message
+- multi-channel export creates one CSV per channel
+
+#### `ocrhistory`
+
+Description:
+Shortcut for history sync with media download and OCR.
+
+Bot:
+
+```text
+/ocrhistory @vcnews 50
+```
+
+Equivalent CLI:
+
+```bash
+python3 telegram_connector/telegram_history_client.py sync --mode tail --channel @vcnews --limit 50 --download-media --ocr --auth-mode user
+```
+
+Examples:
+
+```text
+/ocrhistory @vcnews since=2026-03-15 until=2026-03-16
+```
+
+Additional notes:
+
+- this command fetches Telegram history first
+- then it downloads image media for that sync window
+- then it runs OCR on those downloaded images
+
+#### `ocr` / `ocr-pending`
+
+Description:
+Run OCR only for already downloaded local image files that are still pending OCR.
+
+CLI:
 
 ```bash
 python3 telegram_connector/telegram_history_client.py ocr-pending --limit 100
 ```
 
-Inspect saved sync checkpoints:
+Bot:
+
+```text
+/ocr 100
+```
+
+Examples:
 
 ```bash
-python3 telegram_connector/telegram_history_client.py inspect-state
+python3 telegram_connector/telegram_history_client.py ocr-pending --channel @vcnews --since 2026-03-15 --until 2026-03-16 --limit 100
 ```
+
+```text
+/ocr @vcnews 100 since=2026-03-15 until=2026-03-16
+```
+
+Additional notes:
+
+- this command does not fetch new Telegram messages
+- it only processes local files already present in `data/media/`
+- bridge command `ocr` is an alias for CLI command `ocr-pending`
 
 ## Storage
 

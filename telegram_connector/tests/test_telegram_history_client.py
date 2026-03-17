@@ -6,8 +6,10 @@ import sqlite3
 import subprocess
 import tempfile
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 import asyncio
+import types
 
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "telegram_history_client.py"
@@ -451,6 +453,30 @@ user_password = "pw_x"
         self.assertEqual(args.command, "export-csv")
         self.assertEqual(args.auth_mode, "user")
 
+    def test_sync_parsers_accept_since_until(self) -> None:
+        parser = telegram_history_client.build_parser()
+        backfill_args = parser.parse_args(["backfill", "--channel", "@vcnews", "--since", "2026-03-15", "--until", "2026-03-16"])
+        tail_args = parser.parse_args(["sync", "--mode", "tail", "--channel", "@vcnews", "--since", "2026-03-15"])
+        update_args = parser.parse_args(["sync", "--mode", "update", "--channel", "@vcnews", "--until", "2026-03-16"])
+        ocr_pending_args = parser.parse_args(["ocr-pending", "--channel", "@vcnews", "--since", "2026-03-15", "--until", "2026-03-16"])
+        self.assertEqual(backfill_args.since, "2026-03-15")
+        self.assertEqual(backfill_args.until, "2026-03-16")
+        self.assertEqual(tail_args.mode, "tail")
+        self.assertEqual(tail_args.since, "2026-03-15")
+        self.assertIsNone(tail_args.until)
+        self.assertEqual(update_args.mode, "update")
+        self.assertIsNone(update_args.since)
+        self.assertEqual(update_args.until, "2026-03-16")
+        self.assertEqual(ocr_pending_args.channel, "@vcnews")
+        self.assertEqual(ocr_pending_args.since, "2026-03-15")
+        self.assertEqual(ocr_pending_args.until, "2026-03-16")
+
+    def test_parse_until_datetime_uses_end_of_day_for_date_only(self) -> None:
+        self.assertEqual(
+            telegram_history_client.parse_until_datetime("2026-03-16"),
+            "2026-03-16T23:59:59+00:00",
+        )
+
     def test_media_needs_download_detects_missing_local_file(self) -> None:
         conn = sqlite3.connect(":memory:")
         conn.row_factory = sqlite3.Row
@@ -607,6 +633,427 @@ user_password = "pw_x"
         username, display_name = asyncio.run(telegram_history_client.resolve_sender_metadata(Entity(), Message()))
         self.assertEqual(username, "alice")
         self.assertEqual(display_name, "Alice Jones")
+
+    def test_sync_one_channel_mark_read_uses_seen_range_even_when_messages_already_exist(self) -> None:
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        telegram_history_client.init_db(conn)
+
+        runtime = telegram_history_client.RuntimeConfig(
+            db_path=Path("/tmp/db.sqlite3"),
+            media_root=Path("/tmp/media"),
+            user_session_name="user",
+            bot_session_name="bot",
+            api_id="1",
+            api_hash="hash",
+            phone="+1",
+            bot_token="token",
+            user_password="pw",
+            tesseract_binary="tesseract",
+            vision_prompt="prompt",
+            default_auth_mode="user",
+            public_auth_mode="bot",
+            private_auth_mode="user",
+            default_channels=[],
+        )
+
+        class Entity:
+            id = 1
+            username = "vcnews"
+            title = "vc.ru"
+            access_hash = None
+
+        class Message:
+            def __init__(self, message_id: int) -> None:
+                self.id = message_id
+                self.message = f"message {message_id}"
+                self.date = None
+                self.edit_date = None
+                self.sender_id = Entity.id
+                self.post = True
+                self.views = None
+                self.forwards = None
+                self.replies = None
+                self.media = None
+                self.grouped_id = None
+                self.sender = None
+
+        existing = Message(10)
+        telegram_history_client.upsert_channel(conn, Entity())
+        telegram_history_client.upsert_message(conn, Entity(), existing, "vcnews", "vc.ru", None, None)
+        conn.commit()
+
+        messages = [Message(10), Message(9)]
+        mark_calls: list[tuple[int | None, int | None]] = []
+
+        class FakeClient:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return None
+
+            async def get_entity(self, channel):
+                return Entity()
+
+            def iter_messages(self, entity, limit):
+                async def generator():
+                    for item in messages:
+                        yield item
+                return generator()
+
+            async def send_read_acknowledge(self, entity, max_id=None):
+                mark_calls.append((entity.id, max_id))
+
+        args = types.SimpleNamespace(limit=10, auth_mode="user", download_media=False, ocr=False, mark_read=True)
+        original_open = telegram_history_client.open_telethon_client
+        original_current_read = telegram_history_client.current_read_inbox_max_id
+        try:
+            async def fake_open(runtime, auth_mode):
+                return FakeClient()
+
+            async def fake_current_read(client, entity):
+                return 5
+
+            telegram_history_client.open_telethon_client = fake_open
+            telegram_history_client.current_read_inbox_max_id = fake_current_read
+            result = asyncio.run(telegram_history_client.sync_one_channel(conn, runtime, args, "update", "@vcnews"))
+        finally:
+            telegram_history_client.open_telethon_client = original_open
+            telegram_history_client.current_read_inbox_max_id = original_current_read
+
+        self.assertEqual(result["processed_messages"], 0)
+        self.assertTrue(result["marked_read"])
+        self.assertEqual(result["current_read_max_id"], 5)
+        self.assertEqual(result["marked_read_from"], 6)
+        self.assertEqual(result["marked_read_until"], 10)
+        self.assertEqual(mark_calls, [(1, 10)])
+
+    def test_sync_one_channel_mark_read_skips_ack_when_range_already_read(self) -> None:
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        telegram_history_client.init_db(conn)
+
+        runtime = telegram_history_client.RuntimeConfig(
+            db_path=Path("/tmp/db.sqlite3"),
+            media_root=Path("/tmp/media"),
+            user_session_name="user",
+            bot_session_name="bot",
+            api_id="1",
+            api_hash="hash",
+            phone="+1",
+            bot_token="token",
+            user_password="pw",
+            tesseract_binary="tesseract",
+            vision_prompt="prompt",
+            default_auth_mode="user",
+            public_auth_mode="bot",
+            private_auth_mode="user",
+            default_channels=[],
+        )
+
+        class Entity:
+            id = 1
+            username = "vcnews"
+            title = "vc.ru"
+            access_hash = None
+
+        class Message:
+            def __init__(self, message_id: int) -> None:
+                self.id = message_id
+                self.message = f"message {message_id}"
+                self.date = None
+                self.edit_date = None
+                self.sender_id = Entity.id
+                self.post = True
+                self.views = None
+                self.forwards = None
+                self.replies = None
+                self.media = None
+                self.grouped_id = None
+                self.sender = None
+
+        messages = [Message(10), Message(9)]
+        mark_calls: list[tuple[int | None, int | None]] = []
+
+        class FakeClient:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return None
+
+            async def get_entity(self, channel):
+                return Entity()
+
+            def iter_messages(self, entity, limit):
+                async def generator():
+                    for item in messages:
+                        yield item
+                return generator()
+
+            async def send_read_acknowledge(self, entity, max_id=None):
+                mark_calls.append((entity.id, max_id))
+
+        args = types.SimpleNamespace(limit=10, auth_mode="user", download_media=False, ocr=False, mark_read=True)
+        original_open = telegram_history_client.open_telethon_client
+        original_current_read = telegram_history_client.current_read_inbox_max_id
+        try:
+            async def fake_open(runtime, auth_mode):
+                return FakeClient()
+
+            async def fake_current_read(client, entity):
+                return 10
+
+            telegram_history_client.open_telethon_client = fake_open
+            telegram_history_client.current_read_inbox_max_id = fake_current_read
+            result = asyncio.run(telegram_history_client.sync_one_channel(conn, runtime, args, "tail", "@vcnews"))
+        finally:
+            telegram_history_client.open_telethon_client = original_open
+            telegram_history_client.current_read_inbox_max_id = original_current_read
+
+        self.assertEqual(result["processed_messages"], 2)
+        self.assertEqual(result["current_read_max_id"], 10)
+        self.assertFalse(result["marked_read"])
+        self.assertIsNone(result["marked_read_from"])
+        self.assertIsNone(result["marked_read_until"])
+        self.assertEqual(mark_calls, [])
+
+    def test_sync_one_channel_mark_read_uses_previously_processed_boundary_not_newly_arrived_messages(self) -> None:
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        telegram_history_client.init_db(conn)
+
+        runtime = telegram_history_client.RuntimeConfig(
+            db_path=Path("/tmp/db.sqlite3"),
+            media_root=Path("/tmp/media"),
+            user_session_name="user",
+            bot_session_name="bot",
+            api_id="1",
+            api_hash="hash",
+            phone="+1",
+            bot_token="token",
+            user_password="pw",
+            tesseract_binary="tesseract",
+            vision_prompt="prompt",
+            default_auth_mode="user",
+            public_auth_mode="bot",
+            private_auth_mode="user",
+            default_channels=[],
+        )
+
+        class Entity:
+            id = 1
+            username = "vcnews"
+            title = "vc.ru"
+            access_hash = None
+
+        class Message:
+            def __init__(self, message_id: int) -> None:
+                self.id = message_id
+                self.message = f"message {message_id}"
+                self.date = None
+                self.edit_date = None
+                self.sender_id = Entity.id
+                self.post = True
+                self.views = None
+                self.forwards = None
+                self.replies = None
+                self.media = None
+                self.grouped_id = None
+                self.sender = None
+
+        telegram_history_client.upsert_channel(conn, Entity())
+        telegram_history_client.upsert_message(conn, Entity(), Message(10), "vcnews", "vc.ru", None, None)
+        telegram_history_client.update_sync_state(
+            conn,
+            Entity.id,
+            last_tail_message_id=10,
+            last_tail_at="2026-03-17T00:00:00+00:00",
+            last_error=None,
+        )
+        conn.commit()
+
+        messages = [Message(12), Message(11), Message(10)]
+        mark_calls: list[tuple[int | None, int | None]] = []
+
+        class FakeClient:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return None
+
+            async def get_entity(self, channel):
+                return Entity()
+
+            def iter_messages(self, entity, limit):
+                async def generator():
+                    for item in messages:
+                        yield item
+                return generator()
+
+            async def send_read_acknowledge(self, entity, max_id=None):
+                mark_calls.append((entity.id, max_id))
+
+        args = types.SimpleNamespace(limit=10, auth_mode="user", download_media=False, ocr=False, mark_read=True)
+        original_open = telegram_history_client.open_telethon_client
+        original_current_read = telegram_history_client.current_read_inbox_max_id
+        try:
+            async def fake_open(runtime, auth_mode):
+                return FakeClient()
+
+            async def fake_current_read(client, entity):
+                return 8
+
+            telegram_history_client.open_telethon_client = fake_open
+            telegram_history_client.current_read_inbox_max_id = fake_current_read
+            result = asyncio.run(telegram_history_client.sync_one_channel(conn, runtime, args, "update", "@vcnews"))
+        finally:
+            telegram_history_client.open_telethon_client = original_open
+            telegram_history_client.current_read_inbox_max_id = original_current_read
+
+        self.assertEqual(result["processed_messages"], 2)
+        self.assertTrue(result["marked_read"])
+        self.assertEqual(result["current_read_max_id"], 8)
+        self.assertEqual(result["marked_read_from"], 9)
+        self.assertEqual(result["marked_read_until"], 10)
+        self.assertEqual(mark_calls, [(1, 10)])
+
+    def test_sync_one_channel_applies_since_until_filters(self) -> None:
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        telegram_history_client.init_db(conn)
+
+        runtime = telegram_history_client.RuntimeConfig(
+            db_path=Path("/tmp/db.sqlite3"),
+            media_root=Path("/tmp/media"),
+            user_session_name="user",
+            bot_session_name="bot",
+            api_id="1",
+            api_hash="hash",
+            phone="+1",
+            bot_token="token",
+            user_password="pw",
+            tesseract_binary="tesseract",
+            vision_prompt="prompt",
+            default_auth_mode="user",
+            public_auth_mode="bot",
+            private_auth_mode="user",
+            default_channels=[],
+        )
+
+        class Entity:
+            id = 1
+            username = "vcnews"
+            title = "vc.ru"
+            access_hash = None
+
+        class Message:
+            def __init__(self, message_id: int, date_value: datetime) -> None:
+                self.id = message_id
+                self.message = f"message {message_id}"
+                self.date = date_value
+                self.edit_date = None
+                self.sender_id = Entity.id
+                self.post = True
+                self.views = None
+                self.forwards = None
+                self.replies = None
+                self.media = None
+                self.grouped_id = None
+                self.sender = None
+
+        messages = [
+            Message(12, datetime(2026, 3, 17, 0, 0, tzinfo=timezone.utc)),
+            Message(11, datetime(2026, 3, 16, 12, 0, tzinfo=timezone.utc)),
+            Message(10, datetime(2026, 3, 15, 12, 0, tzinfo=timezone.utc)),
+            Message(9, datetime(2026, 3, 14, 12, 0, tzinfo=timezone.utc)),
+        ]
+
+        class FakeClient:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return None
+
+            async def get_entity(self, channel):
+                return Entity()
+
+            def iter_messages(self, entity, limit):
+                async def generator():
+                    for item in messages:
+                        yield item
+                return generator()
+
+        args = types.SimpleNamespace(
+            limit=10,
+            auth_mode="user",
+            download_media=False,
+            ocr=False,
+            mark_read=False,
+            since="2026-03-15",
+            until="2026-03-16",
+        )
+        original_open = telegram_history_client.open_telethon_client
+        try:
+            async def fake_open(runtime, auth_mode):
+                return FakeClient()
+
+            telegram_history_client.open_telethon_client = fake_open
+            result = asyncio.run(telegram_history_client.sync_one_channel(conn, runtime, args, "tail", "@vcnews"))
+        finally:
+            telegram_history_client.open_telethon_client = original_open
+
+        self.assertEqual(result["processed_messages"], 2)
+        self.assertEqual(result["since"], "2026-03-15")
+        self.assertEqual(result["until"], "2026-03-16")
+        stored_ids = [row["message_id"] for row in conn.execute("SELECT message_id FROM messages ORDER BY message_id DESC")]
+        self.assertEqual(stored_ids, [11, 10])
+
+    def test_iter_pending_ocr_applies_since_until_filters(self) -> None:
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        telegram_history_client.init_db(conn)
+        first = "2026-03-15T10:00:00+00:00"
+        second = "2026-03-16T10:00:00+00:00"
+        third = "2026-03-17T10:00:00+00:00"
+        conn.execute(
+            """
+            INSERT INTO channels(channel_id, access_hash, username, title, channel_type, raw_json, first_seen_at, last_seen_at)
+            VALUES (1, '', 'vcnews', 'vc.ru', 'Channel', '{}', ?, ?)
+            """,
+            (first, third),
+        )
+        conn.execute(
+            """
+            INSERT INTO messages(channel_id, message_id, grouped_id, date_utc, edit_date_utc, sender_id, sender_username, sender_display_name, text, views, forwards, replies, has_media, media_kind, raw_json, content_hash, imported_at)
+            VALUES
+                (1, 1, NULL, ?, NULL, NULL, NULL, NULL, 'older', NULL, NULL, NULL, 1, 'photo', '{}', 'h1', ?),
+                (1, 2, NULL, ?, NULL, NULL, NULL, NULL, 'mid', NULL, NULL, NULL, 1, 'photo', '{}', 'h2', ?),
+                (1, 3, NULL, ?, NULL, NULL, NULL, NULL, 'newer', NULL, NULL, NULL, 1, 'photo', '{}', 'h3', ?)
+            """,
+            (first, first, second, second, third, third),
+        )
+        conn.execute(
+            """
+            INSERT INTO media_assets(channel_id, message_id, ordinal, media_kind, local_path, mime_type, file_size, ocr_status, ocr_text, created_at)
+            VALUES
+                (1, 1, 0, 'photo', '/tmp/1.jpg', 'photo', 100, 'pending', NULL, ?),
+                (1, 2, 0, 'photo', '/tmp/2.jpg', 'photo', 100, 'pending', NULL, ?),
+                (1, 3, 0, 'photo', '/tmp/3.jpg', 'photo', 100, 'pending', NULL, ?)
+            """,
+            (first, second, third),
+        )
+        rows = telegram_history_client.iter_pending_ocr(
+            conn,
+            10,
+            channel_id=1,
+            since="2026-03-15",
+            until="2026-03-16",
+        )
+        self.assertEqual([(row["channel_id"], row["message_id"]) for row in rows], [(1, 1), (1, 2)])
 
     def test_resolve_runtime_reads_onepassword_references(self) -> None:
         original_file = telegram_history_client.RUNTIME_LOCAL_FILE

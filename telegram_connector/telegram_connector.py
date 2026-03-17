@@ -27,7 +27,7 @@ HISTORY_CLIENT_FILE = APP_DIR / "telegram_history_client.py"
 EXPORT_DIR = DATA_DIR / "exports"
 OP_REFERENCE_PREFIX = "op://"
 _SECRET_CACHE: dict[str, str] = {}
-SUPPORTED_BRIDGE_COMMANDS = {"help", "doctor", "state", "ocr", "exportcsv", "ocrhistory", "backfill", "tail", "update"}
+SUPPORTED_BRIDGE_COMMANDS = {"help", "ocr", "exportcsv", "ocrhistory", "backfill", "tail", "update"}
 HISTORY_CLIENT_SECRET_ENV_MAP = {
     "TELEGRAM_API_ID": ("telethon", "api_id", "Telegram API ID"),
     "TELEGRAM_API_HASH": ("secrets", "api_hash", "Telegram API hash"),
@@ -445,6 +445,10 @@ def build_safe_command_response(command_text: str, completed: subprocess.Complet
             "since",
             "until",
             "output_file",
+            "current_read_max_id",
+            "marked_read",
+            "marked_read_from",
+            "marked_read_until",
         ]
         for key in safe_keys:
             if key in json_output and json_output[key] not in {None, ""}:
@@ -467,6 +471,7 @@ def build_safe_command_response_any(command_text: str, completed: subprocess.Com
             if isinstance(parsed, list) and all(isinstance(item, dict) for item in parsed):
                 lines = [f"Command: {command_text}", f"Status: {'ok' if completed.returncode == 0 else f'failed ({completed.returncode})'}"]
                 safe_keys = ["channel", "channel_id", "mode", "auth_mode", "processed_messages", "skipped_existing", "row_count", "output_file"]
+                safe_keys += ["current_read_max_id", "marked_read", "marked_read_from", "marked_read_until"]
                 for item in parsed:
                     summary = []
                     for key in safe_keys:
@@ -481,33 +486,34 @@ def build_safe_command_response_any(command_text: str, completed: subprocess.Com
 
 def command_help_text() -> str:
     return (
-        "Available commands:\n"
+        "Bot commands:\n"
         "/help\n"
-        "/doctor\n"
-        "/state\n"
-        "/backfill [@channel[,@channel2]] [limit] [media] [bot|user|auto]\n"
-        "/tail [@channel[,@channel2]] [limit] [media|ocr] [bot|user|auto]\n"
-        "/update [@channel[,@channel2]] [limit] [media|ocr] [bot|user|auto]\n"
-        "/ocrhistory [@channel[,@channel2]] [limit] [bot|user|auto]\n"
-        "/exportcsv [@channel[,@channel2]] [limit] [bot|user|auto]\n"
-        "/exportcsv [@channel[,@channel2]] since=YYYY-MM-DD until=YYYY-MM-DD [bot|user|auto]\n"
-        "/ocr [limit]\n"
+        "/backfill [channel] [limit] [since=YYYY-MM-DD] [until=YYYY-MM-DD] [media] [bot|user|auto]\n"
+        "  historical load into SQLite\n"
+        "/tail [channel] [limit] [since=YYYY-MM-DD] [until=YYYY-MM-DD] [media|ocr|read] [bot|user|auto]\n"
+        "  latest window sync\n"
+        "/update [channel] [limit] [since=YYYY-MM-DD] [until=YYYY-MM-DD] [media|ocr|read] [bot|user|auto]\n"
+        "  only messages newer than saved history\n"
+        "/ocrhistory [channel] [limit] [since=YYYY-MM-DD] [until=YYYY-MM-DD] [bot|user|auto]\n"
+        "  tail + media download + OCR\n"
+        "/exportcsv [channel] [limit|since=... until=...] [bot|user|auto]\n"
+        "  export saved history to CSV\n"
+        "/ocr [limit] [channel] [since=YYYY-MM-DD] [until=YYYY-MM-DD]\n"
+        "  OCR only for already-downloaded pending images\n"
+        "\nNotes:\n"
+        "- channel may be omitted to use default channels from config\n"
+        "- channel may be a comma-separated list\n"
+        "- auth defaults to user\n"
+        "- since = start of day UTC, until = end of day UTC\n"
+        "- media downloads files only\n"
+        "- ocr downloads image media and runs OCR\n"
+        "- read is optional and only works in user auth mode\n"
         "\nExamples:\n"
-        "/backfill @vcnews 200\n"
         "/backfill 200\n"
         "/tail @vcnews 100 ocr\n"
-        "/update @vcnews 100\n"
-        "/update 100\n"
-        "/tail @vcnews 100 media\n"
-        "/ocrhistory @vcnews 50\n"
-        "/exportcsv @vcnews 100\n"
-        "/exportcsv 100\n"
+        "/update @vcnews 100 read\n"
         "/exportcsv @vcnews since=2026-03-15\n"
-        "/backfill https://t.me/+invitehash 100 user\n"
-        "/ocr 50\n"
-        "\nFlags meaning:\n"
-        "media = download media only\n"
-        "ocr = download image media and run OCR"
+        "/ocr @vcnews since=2026-03-15 until=2026-03-16"
     )
 
 
@@ -521,15 +527,23 @@ def build_history_command(text: str) -> list[str] | None:
 
     if command == "/help":
         return []
-    if command == "/doctor":
-        return base + ["doctor"]
-    if command == "/state":
-        return base + ["inspect-state"]
     if command == "/ocr":
         limit = "100"
-        if len(parts) >= 2:
-            limit = parts[1]
-        return base + ["ocr-pending", "--limit", limit]
+        argv = base + ["ocr-pending"]
+        extra_parts = parts[1:]
+        channel_arg, extra_parts = consume_channel_argument(extra_parts)
+        if channel_arg:
+            argv += ["--channel", channel_arg]
+        if extra_parts and extra_parts[0].isdigit():
+            limit = extra_parts[0]
+        argv += ["--limit", limit]
+        for part in extra_parts:
+            lowered = part.lower()
+            if lowered.startswith("since="):
+                argv += ["--since", part.split("=", 1)[1]]
+            elif lowered.startswith("until="):
+                argv += ["--until", part.split("=", 1)[1]]
+        return argv
     if command == "/exportcsv":
         argv = base + ["export-csv"]
         auth_mode = "user"
@@ -555,7 +569,7 @@ def build_history_command(text: str) -> list[str] | None:
             argv += ["--limit", "100"]
         return argv + ["--auth-mode", auth_mode]
     if command == "/ocrhistory":
-        argv = base + ["tail"]
+        argv = base + ["sync", "--mode", "tail"]
         limit = "100"
         auth_mode = "user"
         extra_parts = parts[1:]
@@ -567,6 +581,10 @@ def build_history_command(text: str) -> list[str] | None:
         argv += ["--limit", limit, "--download-media", "--ocr"]
         for part in extra_parts:
             lowered = part.lower()
+            if lowered.startswith("since="):
+                argv += ["--since", part.split("=", 1)[1]]
+            elif lowered.startswith("until="):
+                argv += ["--until", part.split("=", 1)[1]]
             if lowered in {"auto", "bot", "user"}:
                 auth_mode = lowered
         return argv + ["--auth-mode", auth_mode]
@@ -577,7 +595,7 @@ def build_history_command(text: str) -> list[str] | None:
             subcommand = "update"
         else:
             subcommand = "tail"
-        argv = base + [subcommand]
+        argv = base + (["sync", "--mode", subcommand] if subcommand in {"tail", "update"} else [subcommand])
         limit = "1000" if subcommand == "backfill" else "100"
         auth_mode = "user"
         extra_parts = parts[1:]
@@ -589,12 +607,18 @@ def build_history_command(text: str) -> list[str] | None:
         argv += ["--limit", limit]
         for part in extra_parts:
             lowered = part.lower()
+            if lowered.startswith("since="):
+                argv += ["--since", part.split("=", 1)[1]]
+            if lowered.startswith("until="):
+                argv += ["--until", part.split("=", 1)[1]]
             if lowered == "media":
                 argv.append("--download-media")
             if lowered == "ocr":
                 if "--download-media" not in argv:
                     argv.append("--download-media")
                 argv.append("--ocr")
+            if lowered == "read":
+                argv.append("--mark-read")
             if lowered in {"auto", "bot", "user"}:
                 auth_mode = lowered
         argv += ["--auth-mode", auth_mode]

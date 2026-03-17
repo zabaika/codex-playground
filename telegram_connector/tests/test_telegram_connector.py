@@ -22,41 +22,76 @@ class TelegramConnectorTests(unittest.TestCase):
             ["backfill", "--channel", "@vcnews", "--limit", "200", "--download-media", "--auth-mode", "user"],
         )
 
+    def test_build_history_command_for_backfill_with_period(self) -> None:
+        command = telegram_connector.build_history_command("/backfill @vcnews since=2026-03-15 until=2026-03-16")
+        self.assertEqual(
+            command[2:],
+            ["backfill", "--channel", "@vcnews", "--limit", "1000", "--since", "2026-03-15", "--until", "2026-03-16", "--auth-mode", "user"],
+        )
+
     def test_build_history_command_for_tail_uses_default_limit(self) -> None:
         command = telegram_connector.build_history_command("/tail @vcnews")
-        self.assertEqual(command[2:], ["tail", "--channel", "@vcnews", "--limit", "100", "--auth-mode", "user"])
+        self.assertEqual(command[2:], ["sync", "--mode", "tail", "--channel", "@vcnews", "--limit", "100", "--auth-mode", "user"])
 
     def test_build_history_command_for_tail_with_explicit_auth_mode(self) -> None:
         command = telegram_connector.build_history_command("/tail @vcnews 100 media ocr bot")
         self.assertEqual(
             command[2:],
-            ["tail", "--channel", "@vcnews", "--limit", "100", "--download-media", "--ocr", "--auth-mode", "bot"],
+            ["sync", "--mode", "tail", "--channel", "@vcnews", "--limit", "100", "--download-media", "--ocr", "--auth-mode", "bot"],
+        )
+
+    def test_build_history_command_for_tail_with_since_only(self) -> None:
+        command = telegram_connector.build_history_command("/tail @vcnews since=2026-03-15")
+        self.assertEqual(
+            command[2:],
+            ["sync", "--mode", "tail", "--channel", "@vcnews", "--limit", "100", "--since", "2026-03-15", "--auth-mode", "user"],
         )
 
     def test_build_history_command_for_ocrhistory(self) -> None:
         command = telegram_connector.build_history_command("/ocrhistory @vcnews 50 user")
         self.assertEqual(
             command[2:],
-            ["tail", "--channel", "@vcnews", "--limit", "50", "--download-media", "--ocr", "--auth-mode", "user"],
+            ["sync", "--mode", "tail", "--channel", "@vcnews", "--limit", "50", "--download-media", "--ocr", "--auth-mode", "user"],
+        )
+
+    def test_build_history_command_for_ocrhistory_with_period(self) -> None:
+        command = telegram_connector.build_history_command("/ocrhistory @vcnews since=2026-03-15 until=2026-03-16")
+        self.assertEqual(
+            command[2:],
+            ["sync", "--mode", "tail", "--channel", "@vcnews", "--limit", "100", "--download-media", "--ocr", "--since", "2026-03-15", "--until", "2026-03-16", "--auth-mode", "user"],
         )
 
     def test_build_history_command_for_update_defaults_to_user(self) -> None:
         command = telegram_connector.build_history_command("/update @vcnews 25")
         self.assertEqual(
             command[2:],
-            ["update", "--channel", "@vcnews", "--limit", "25", "--auth-mode", "user"],
+            ["sync", "--mode", "update", "--channel", "@vcnews", "--limit", "25", "--auth-mode", "user"],
         )
 
     def test_build_history_command_for_update_with_spaced_multi_channel_list(self) -> None:
         command = telegram_connector.build_history_command("/update @vcnews, @refugecard 10")
         self.assertEqual(
             command[2:],
-            ["update", "--channel", "@vcnews, @refugecard", "--limit", "10", "--auth-mode", "user"],
+            ["sync", "--mode", "update", "--channel", "@vcnews, @refugecard", "--limit", "10", "--auth-mode", "user"],
+        )
+
+    def test_build_history_command_for_update_with_mark_read(self) -> None:
+        command = telegram_connector.build_history_command("/update @vcnews 10 read")
+        self.assertEqual(
+            command[2:],
+            ["sync", "--mode", "update", "--channel", "@vcnews", "--limit", "10", "--mark-read", "--auth-mode", "user"],
+        )
+
+    def test_build_history_command_for_update_with_period(self) -> None:
+        command = telegram_connector.build_history_command("/update @vcnews 10 since=2026-03-15 until=2026-03-16")
+        self.assertEqual(
+            command[2:],
+            ["sync", "--mode", "update", "--channel", "@vcnews", "--limit", "10", "--since", "2026-03-15", "--until", "2026-03-16", "--auth-mode", "user"],
         )
 
     def test_build_history_command_for_update_without_channel_uses_runtime_defaults(self) -> None:
         command = telegram_connector.build_history_command("/update 25")
-        self.assertEqual(command[2:], ["update", "--limit", "25", "--auth-mode", "user"])
+        self.assertEqual(command[2:], ["sync", "--mode", "update", "--limit", "25", "--auth-mode", "user"])
 
     def test_normalize_bridge_command_text_supports_bare_command(self) -> None:
         self.assertEqual(telegram_connector.normalize_bridge_command_text("update 10"), "/update 10")
@@ -112,6 +147,13 @@ class TelegramConnectorTests(unittest.TestCase):
     def test_build_history_command_rejects_unknown_command(self) -> None:
         with self.assertRaises(ValueError):
             telegram_connector.build_history_command("/boom")
+
+    def test_build_history_command_for_ocr_pending_with_period_and_channel(self) -> None:
+        command = telegram_connector.build_history_command("/ocr @vcnews 50 since=2026-03-15 until=2026-03-16")
+        self.assertEqual(
+            command[2:],
+            ["ocr-pending", "--channel", "@vcnews", "--limit", "50", "--since", "2026-03-15", "--until", "2026-03-16"],
+        )
 
     def test_parse_allowed_chat_ids_falls_back_to_default_chat(self) -> None:
         config = {"telegram": {"default_chat_id": "133126275"}}
@@ -330,7 +372,7 @@ class TelegramConnectorTests(unittest.TestCase):
             "update_id": 1,
             "message": {
                 "date": 123,
-                "text": "/state",
+                "text": "/update 10",
                 "chat": {"id": 42, "type": "private"},
                 "from": {"id": 7, "username": "alice"},
             },

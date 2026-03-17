@@ -409,6 +409,25 @@ def require_telethon() -> Any:
     return TelegramClient
 
 
+async def current_read_inbox_max_id(client: Any, entity: Any) -> int | None:
+    try:
+        from telethon.tl import functions, types
+    except ImportError as exc:
+        raise SystemExit(
+            "Telethon is not installed. Install it first, for example: python3 -m pip install telethon"
+        ) from exc
+
+    response = await client(
+        functions.messages.GetPeerDialogsRequest(
+            peers=[types.InputDialogPeer(peer=entity)]
+        )
+    )
+    dialogs = getattr(response, "dialogs", None) or []
+    if not dialogs:
+        return None
+    return getattr(dialogs[0], "read_inbox_max_id", None)
+
+
 def require_tesseract(runtime: RuntimeConfig) -> str:
     binary = shutil.which(runtime.tesseract_binary)
     if not binary:
@@ -752,6 +771,24 @@ def latest_stored_message_id(conn: sqlite3.Connection, channel_id: int) -> int |
     return row["max_id"] if row and row["max_id"] is not None else None
 
 
+def latest_processed_message_id(conn: sqlite3.Connection, channel_id: int, mode: str) -> int | None:
+    row = conn.execute(
+        """
+        SELECT last_backfill_message_id, last_tail_message_id
+        FROM sync_state
+        WHERE channel_id = ?
+        LIMIT 1
+        """,
+        (channel_id,),
+    ).fetchone()
+    if row:
+        if mode == "backfill" and row["last_backfill_message_id"] is not None:
+            return row["last_backfill_message_id"]
+        if mode in {"tail", "update"} and row["last_tail_message_id"] is not None:
+            return row["last_tail_message_id"]
+    return latest_stored_message_id(conn, channel_id)
+
+
 def media_needs_download(conn: sqlite3.Connection, channel_id: int, message_id: int) -> bool:
     row = conn.execute(
         """
@@ -805,8 +842,18 @@ async def sync_one_channel(
         skipped_existing = 0
         refreshed_existing_media = 0
         highest_message_id = None
+        mark_read_target_id = latest_processed_message_id(conn, entity.id, mode) if getattr(args, "mark_read", False) else None
         existing_max_id = latest_stored_message_id(conn, entity.id) if mode == "update" else None
+        since_dt = parse_filter_datetime_value(getattr(args, "since", None))
+        until_dt = parse_filter_datetime_value(getattr(args, "until", None), end_of_day=True)
         async for message in iterator:
+            message_dt = getattr(message, "date", None)
+            if message_dt is not None and message_dt.tzinfo is None:
+                message_dt = message_dt.replace(tzinfo=timezone.utc)
+            if until_dt is not None and message_dt is not None and message_dt > until_dt:
+                continue
+            if since_dt is not None and message_dt is not None and message_dt < since_dt:
+                break
             if mode == "update" and existing_max_id is not None and message.id <= existing_max_id:
                 break
             downloaded_path = None
@@ -848,6 +895,20 @@ async def sync_one_channel(
         if getattr(args, "ocr", False):
             binary = require_tesseract(runtime)
             ocr_processed = process_pending_ocr(conn, binary, limit=args.limit, channel_id=entity.id)
+        if mark_read_target_id is None and highest_message_id is not None:
+            mark_read_target_id = highest_message_id
+        current_read_max_id = None
+        marked_read_from = None
+        marked_read_until = None
+        if getattr(args, "mark_read", False):
+            if auth_mode != "user":
+                raise SystemExit("Mark-as-read is only supported in user auth mode.")
+            if mark_read_target_id is not None:
+                current_read_max_id = await current_read_inbox_max_id(client, entity)
+                if current_read_max_id is None or mark_read_target_id > current_read_max_id:
+                    marked_read_from = (current_read_max_id + 1) if current_read_max_id is not None else 1
+                    await client.send_read_acknowledge(entity, max_id=mark_read_target_id)
+                    marked_read_until = mark_read_target_id
         conn.commit()
         return {
             "channel": channel,
@@ -859,6 +920,12 @@ async def sync_one_channel(
             "refreshed_existing_media": refreshed_existing_media,
             "download_media": bool(args.download_media),
             "ocr_processed": ocr_processed,
+            "since": getattr(args, "since", None),
+            "until": getattr(args, "until", None),
+            "current_read_max_id": current_read_max_id,
+            "marked_read": bool(marked_read_until is not None),
+            "marked_read_from": marked_read_from,
+            "marked_read_until": marked_read_until,
         }
 
 
@@ -873,32 +940,42 @@ async def sync_messages(runtime: RuntimeConfig, args: argparse.Namespace, mode: 
     return 0
 
 
-def iter_pending_ocr(conn: sqlite3.Connection, limit: int, channel_id: int | None = None) -> list[sqlite3.Row]:
-    if channel_id is None:
-        return list(
-            conn.execute(
-                """
-                SELECT channel_id, message_id, ordinal, local_path, media_kind
-                FROM media_assets
-                WHERE ocr_status = 'pending' AND local_path IS NOT NULL
-                  AND (media_kind = 'photo' OR media_kind LIKE 'image/%')
-                ORDER BY created_at ASC
-                LIMIT ?
-                """,
-                (limit,),
-            )
-        )
+def iter_pending_ocr(
+    conn: sqlite3.Connection,
+    limit: int,
+    channel_id: int | None = None,
+    *,
+    since: str | None = None,
+    until: str | None = None,
+) -> list[sqlite3.Row]:
+    params: list[Any] = []
+    where = [
+        "ma.ocr_status = 'pending'",
+        "ma.local_path IS NOT NULL",
+        "(ma.media_kind = 'photo' OR ma.media_kind LIKE 'image/%')",
+    ]
+    if channel_id is not None:
+        where.append("ma.channel_id = ?")
+        params.append(channel_id)
+    if since:
+        where.append("m.date_utc >= ?")
+        params.append(parse_since_datetime(since))
+    if until:
+        where.append("m.date_utc <= ?")
+        params.append(parse_until_datetime(until))
+    params.append(limit)
     return list(
         conn.execute(
-            """
-            SELECT channel_id, message_id, ordinal, local_path, media_kind
-            FROM media_assets
-            WHERE ocr_status = 'pending' AND local_path IS NOT NULL AND channel_id = ?
-              AND (media_kind = 'photo' OR media_kind LIKE 'image/%')
-            ORDER BY created_at ASC
+            f"""
+            SELECT ma.channel_id, ma.message_id, ma.ordinal, ma.local_path, ma.media_kind
+            FROM media_assets ma
+            JOIN messages m
+              ON m.channel_id = ma.channel_id AND m.message_id = ma.message_id
+            WHERE {' AND '.join(where)}
+            ORDER BY m.date_utc ASC, ma.created_at ASC
             LIMIT ?
             """,
-            (channel_id, limit),
+            params,
         )
     )
 
@@ -921,8 +998,10 @@ def process_pending_ocr(
     *,
     limit: int,
     channel_id: int | None = None,
+    since: str | None = None,
+    until: str | None = None,
 ) -> int:
-    rows = iter_pending_ocr(conn, limit, channel_id=channel_id)
+    rows = iter_pending_ocr(conn, limit, channel_id=channel_id, since=since, until=until)
     processed = 0
     for row in rows:
         try:
@@ -984,6 +1063,29 @@ def parse_filter_datetime(value: str) -> str:
     return value
 
 
+def parse_since_datetime(value: str) -> str:
+    return parse_filter_datetime(value)
+
+
+def parse_until_datetime(value: str) -> str:
+    value = value.strip()
+    if len(value) == 10:
+        return f"{value}T23:59:59+00:00"
+    if value.endswith("Z"):
+        return value[:-1] + "+00:00"
+    return value
+
+
+def parse_filter_datetime_value(value: str | None, *, end_of_day: bool = False) -> datetime | None:
+    if not value:
+        return None
+    raw = parse_until_datetime(value) if end_of_day else parse_since_datetime(value)
+    parsed = datetime.fromisoformat(raw)
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+
 def sanitize_filename(value: str) -> str:
     cleaned = "".join(ch if ch.isalnum() or ch in {"-", "_"} else "_" for ch in value)
     return cleaned.strip("_") or "channel"
@@ -1010,10 +1112,10 @@ def export_channel_csv(
 
     if since:
         where.append("m.date_utc >= ?")
-        params.append(parse_filter_datetime(since))
+        params.append(parse_since_datetime(since))
     if until:
         where.append("m.date_utc <= ?")
-        params.append(parse_filter_datetime(until))
+        params.append(parse_until_datetime(until))
     if since or until:
         order_by = "ORDER BY m.date_utc DESC, m.message_id DESC"
     elif limit is not None:
@@ -1105,8 +1207,33 @@ def cmd_ocr_pending(args: argparse.Namespace) -> int:
     conn = connect_db(runtime)
     init_db(conn)
     binary = require_tesseract(runtime)
-    processed = process_pending_ocr(conn, binary, limit=args.limit)
-    print(json.dumps({"processed_assets": processed}, ensure_ascii=False, indent=2))
+    channels = resolve_channels_argument(runtime, args.channel) if getattr(args, "channel", None) or runtime.default_channels else [None]
+    results = []
+    for channel in channels:
+        channel_id = None
+        if channel is not None:
+            channel_row = resolve_channel_filter(conn, channel)
+            if channel_row is None:
+                raise SystemExit(f"Channel '{channel}' is not present in the local database yet. Run tail/backfill first.")
+            channel_id = channel_row["channel_id"]
+        processed = process_pending_ocr(
+            conn,
+            binary,
+            limit=args.limit,
+            channel_id=channel_id,
+            since=args.since,
+            until=args.until,
+        )
+        results.append(
+            {
+                "channel": channel,
+                "processed_assets": processed,
+                "limit": args.limit,
+                "since": args.since,
+                "until": args.until,
+            }
+        )
+    print(json.dumps(results[0] if len(results) == 1 else results, ensure_ascii=False, indent=2))
     return 0
 
 
@@ -1210,32 +1337,34 @@ def build_parser() -> argparse.ArgumentParser:
     export_csv.add_argument("--auth-mode", choices=["auto", "bot", "user"], default=None, help="Accepted for bot-command compatibility; export reads from local SQLite only.")
     export_csv.set_defaults(func=cmd_export_csv)
 
+    sync = subparsers.add_parser("sync", help="Unified incremental sync command for tail and update modes.")
+    sync.add_argument("--mode", choices=["tail", "update"], required=True, help="Sync mode.")
+    sync.add_argument("--channel", help="Channel username/link or comma-separated list, for example @vcnews,@another.")
+    sync.add_argument("--limit", type=int, default=100, help="How many latest remote messages to scan.")
+    sync.add_argument("--since", help="Ingest only messages since this UTC date or datetime.")
+    sync.add_argument("--until", help="Ingest only messages until this UTC date or datetime.")
+    sync.add_argument("--download-media", action="store_true", help="Download message media locally.")
+    sync.add_argument("--ocr", action="store_true", help="Run OCR for downloaded images from this sync run.")
+    sync.add_argument("--mark-read", action="store_true", help="Mark the processed message range as read after a successful user-auth sync.")
+    sync.add_argument("--auth-mode", choices=["auto", "bot", "user"], default=None, help="Choose Telegram authorization type.")
+    sync.set_defaults(async_func="sync")
+
     backfill = subparsers.add_parser("backfill", help="Read channel history into SQLite.")
     backfill.add_argument("--channel", help="Channel username/link or comma-separated list, for example @vcnews,@another.")
     backfill.add_argument("--limit", type=int, default=1000, help="How many latest messages to ingest.")
+    backfill.add_argument("--since", help="Ingest only messages since this UTC date or datetime.")
+    backfill.add_argument("--until", help="Ingest only messages until this UTC date or datetime.")
     backfill.add_argument("--download-media", action="store_true", help="Download message media locally.")
     backfill.add_argument("--ocr", action="store_true", help="Run OCR for downloaded images from this sync run.")
+    backfill.add_argument("--mark-read", action="store_true", help="Mark the processed message range as read after a successful user-auth sync.")
     backfill.add_argument("--auth-mode", choices=["auto", "bot", "user"], default=None, help="Choose Telegram authorization type.")
     backfill.set_defaults(async_func="backfill")
 
-    tail = subparsers.add_parser("tail", help="Fetch the latest N messages for incremental sync.")
-    tail.add_argument("--channel", help="Channel username/link or comma-separated list, for example @vcnews,@another.")
-    tail.add_argument("--limit", type=int, default=100, help="How many latest messages to ingest.")
-    tail.add_argument("--download-media", action="store_true", help="Download message media locally.")
-    tail.add_argument("--ocr", action="store_true", help="Run OCR for downloaded images from this sync run.")
-    tail.add_argument("--auth-mode", choices=["auto", "bot", "user"], default=None, help="Choose Telegram authorization type.")
-    tail.set_defaults(async_func="tail")
-
-    update = subparsers.add_parser("update", help="Fetch only messages newer than the latest saved one.")
-    update.add_argument("--channel", help="Channel username/link or comma-separated list, for example @vcnews,@another.")
-    update.add_argument("--limit", type=int, default=100, help="How many latest remote messages to scan.")
-    update.add_argument("--download-media", action="store_true", help="Download message media locally.")
-    update.add_argument("--ocr", action="store_true", help="Run OCR for downloaded images from this sync run.")
-    update.add_argument("--auth-mode", choices=["auto", "bot", "user"], default=None, help="Choose Telegram authorization type.")
-    update.set_defaults(async_func="update")
-
     ocr_pending = subparsers.add_parser("ocr-pending", help="Run Tesseract for downloaded images pending OCR.")
+    ocr_pending.add_argument("--channel", help="Channel username/id or comma-separated list.")
     ocr_pending.add_argument("--limit", type=int, default=100, help="How many media assets to process.")
+    ocr_pending.add_argument("--since", help="Process only assets whose message date is on or after this UTC date or datetime.")
+    ocr_pending.add_argument("--until", help="Process only assets whose message date is on or before this UTC date or datetime.")
     ocr_pending.set_defaults(func=cmd_ocr_pending)
 
     return parser
@@ -1252,7 +1381,8 @@ def main() -> int:
     runtime = resolve_runtime()
     if getattr(args, "auth_mode", None) is None:
         args.auth_mode = runtime.default_auth_mode
-    return asyncio.run(sync_messages(runtime, args, args.async_func))
+    mode = args.mode if getattr(args, "async_func", None) == "sync" else args.async_func
+    return asyncio.run(sync_messages(runtime, args, mode))
 
 
 if __name__ == "__main__":
