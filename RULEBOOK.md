@@ -72,6 +72,7 @@ Do not commit secrets in tracked files.
 Preferred storage:
 
 - 1Password CLI references via `op://...`
+- macOS Keychain is an acceptable local-runtime alternative when prompt frequency from 1Password becomes a material operational problem
 
 Recommended fields in 1Password:
 
@@ -94,6 +95,31 @@ Rules:
 - never include secrets in tests
 - never include secrets in committed examples
 - if a secret was pasted into chat or logs, rotate it
+- never serialize the full runtime config when it contains secret-backed values
+- never dump process environment for debugging in production-like flows
+
+Daemon secret-handling rules:
+
+- a long-running daemon should resolve required secrets once during process startup, not on every handled command
+- after startup, keep resolved secrets only in process memory
+- do not persist resolved secrets back to files, temp files, sqlite, json logs, or launchd logs
+- if the daemon invokes child processes, pass only the minimum required secrets through environment variables at spawn time
+- do not forward the entire parent environment to child processes unless there is a strong reason and an explicit allowlist
+- secret env vars should be treated as ephemeral runtime transport, not as durable storage
+
+Recommended daemon pattern:
+
+1. read config
+2. resolve secrets once
+3. keep them in an in-memory cache owned by the main daemon process
+4. reuse the cached bot token for Telegram polling and replies
+5. pass only the minimum secret subset to child workers through an allowlisted env
+
+Tradeoff guidance:
+
+- resolving secrets once in the daemon and keeping them in memory is usually a better balance than calling `op read` on every request
+- this is still safer than storing plaintext secrets in tracked or local runtime files
+- if prompt frequency becomes the main usability issue on a single Mac, Keychain-backed runtime resolution may be preferable to repeated 1Password CLI prompts
 
 ## 4. Path and Filesystem Rules
 
