@@ -24,16 +24,18 @@ DATA_DIR = BASE_DIR / "data"
 OFFSET_FILE = DATA_DIR / "offset.local.json"
 INBOX_FILE = DATA_DIR / "inbox.jsonl"
 HISTORY_CLIENT_FILE = APP_DIR / "telegram_history_client.py"
+DIGEST_FILE = APP_DIR / "telegram_digest.py"
 EXPORT_DIR = DATA_DIR / "exports"
 OP_REFERENCE_PREFIX = "op://"
 _SECRET_CACHE: dict[str, str] = {}
-SUPPORTED_BRIDGE_COMMANDS = {"help", "ocr", "exportcsv", "ocrhistory", "backfill", "tail", "update"}
+SUPPORTED_BRIDGE_COMMANDS = {"help", "ocr", "exportcsv", "ocrhistory", "backfill", "tail", "update", "digest"}
 HISTORY_CLIENT_SECRET_ENV_MAP = {
     "TELEGRAM_API_ID": ("telethon", "api_id", "Telegram API ID"),
     "TELEGRAM_API_HASH": ("secrets", "api_hash", "Telegram API hash"),
     "TELEGRAM_PHONE": ("telethon", "phone", "Telegram phone"),
     "TELEGRAM_BOT_TOKEN": ("secrets", "bot_token", "Telegram bot token"),
     "TELEGRAM_USER_PASSWORD": ("secrets", "user_password", "Telegram user password"),
+    "OPENAI_API_KEY": ("secrets", "openai_api_key", "OpenAI API key"),
 }
 SAFE_SUBPROCESS_ENV_KEYS = {
     "HOME",
@@ -152,6 +154,23 @@ def parse_allowed_chat_ids(config: dict[str, Any]) -> set[str]:
         default_chat = get_config_value(config, "telegram", "default_chat_id")
         return {default_chat} if default_chat else set()
     return {item.strip() for item in raw.split(",") if item.strip()}
+
+
+def resolve_sync_mode_limit(config: dict[str, Any], mode: str) -> str:
+    raw = get_config_value(config, "sync", f"{mode}_limit")
+    if not raw:
+        raise SystemExit(f"Missing sync.{mode}_limit in runtime config.")
+    return raw
+
+
+def resolve_text_chunk_size(config: dict[str, Any] | None = None) -> int:
+    runtime_config = config if config is not None else load_runtime_config()
+    raw = get_config_value(runtime_config, "bridge", "text_chunk_size")
+    try:
+        value = int(raw) if raw else 3900
+    except ValueError:
+        value = 3900
+    return max(500, min(4096, value))
 
 
 def is_channel_token(value: str) -> bool:
@@ -351,10 +370,14 @@ def send_text_message(token: str, chat_id: str | int, text: str) -> None:
     )
 
 
-def send_text_chunks(token: str, chat_id: str | int, text: str, chunk_size: int = 3500) -> None:
+def send_text_chunks(token: str, chat_id: str | int, text: str, chunk_size: int | None = None) -> None:
+    active_chunk_size = resolve_text_chunk_size() if chunk_size is None else chunk_size
     remaining = text.strip() or "<empty response>"
+    if len(remaining) <= min(4096, active_chunk_size):
+        send_text_message(token, chat_id, remaining)
+        return
     while remaining:
-        chunk = remaining[:chunk_size]
+        chunk = remaining[:active_chunk_size]
         split_at = chunk.rfind("\n")
         if split_at > 100:
             chunk = chunk[:split_at]
@@ -433,6 +456,8 @@ def build_safe_command_response(command_text: str, completed: subprocess.Complet
             "channel_id",
             "mode",
             "auth_mode",
+            "sync_mode",
+            "limit_profile",
             "processed_messages",
             "skipped_existing",
             "refreshed_existing_media",
@@ -440,8 +465,11 @@ def build_safe_command_response(command_text: str, completed: subprocess.Complet
             "ocr_processed",
             "processed_assets",
             "status",
+            "channels",
             "row_count",
             "limit",
+            "sync_limit",
+            "batch_size",
             "since",
             "until",
             "output_file",
@@ -496,6 +524,8 @@ def command_help_text() -> str:
         "  only messages newer than saved history\n"
         "/ocrhistory [channel] [limit] [since=YYYY-MM-DD] [until=YYYY-MM-DD] [bot|user|auto]\n"
         "  tail + media download + OCR\n"
+        "/digest [channel] [since=YYYY-MM-DD] [until=YYYY-MM-DD] [bot|user|auto]\n"
+        "  config-driven morning AI digest and Telegram delivery\n"
         "/exportcsv [channel] [limit|since=... until=...] [bot|user|auto]\n"
         "  export saved history to CSV\n"
         "/ocr [limit] [channel] [since=YYYY-MM-DD] [until=YYYY-MM-DD]\n"
@@ -505,6 +535,7 @@ def command_help_text() -> str:
         "- channel may be a comma-separated list\n"
         "- auth defaults to user\n"
         "- since = start of day UTC, until = end of day UTC\n"
+        "- since/until aliases: today, yesterday, week, month, -Nd\n"
         "- media downloads files only\n"
         "- ocr downloads image media and runs OCR\n"
         "- read is optional and only works in user auth mode\n"
@@ -512,6 +543,9 @@ def command_help_text() -> str:
         "/backfill 200\n"
         "/tail @vcnews 100 ocr\n"
         "/update @vcnews 100 read\n"
+        "/digest\n"
+        "/digest since=week\n"
+        "/digest @vcnews since=2026-03-15 until=2026-03-16\n"
         "/exportcsv @vcnews since=2026-03-15\n"
         "/ocr @vcnews since=2026-03-15 until=2026-03-16"
     )
@@ -522,11 +556,31 @@ def build_history_command(text: str) -> list[str] | None:
     if not parts:
         return None
 
+    config = load_runtime_config()
     command = parts[0].lower()
     base = [sys.executable, str(HISTORY_CLIENT_FILE)]
+    digest_base = [sys.executable, str(DIGEST_FILE)]
 
     if command == "/help":
         return []
+    if command == "/digest":
+        argv = digest_base + ["run"]
+        auth_mode = "user"
+        extra_parts = parts[1:]
+        channel_arg, extra_parts = consume_channel_argument(extra_parts)
+        if channel_arg:
+            argv += ["--channel", channel_arg]
+        for part in extra_parts:
+            lowered = part.lower()
+            if lowered.startswith("since="):
+                argv += ["--since", part.split("=", 1)[1]]
+            elif lowered.startswith("until="):
+                argv += ["--until", part.split("=", 1)[1]]
+            elif lowered in {"auto", "bot", "user"}:
+                auth_mode = lowered
+            else:
+                raise ValueError(f"Unsupported digest argument: {part}")
+        return argv + ["--auth-mode", auth_mode]
     if command == "/ocr":
         limit = "100"
         argv = base + ["ocr-pending"]
@@ -570,7 +624,7 @@ def build_history_command(text: str) -> list[str] | None:
         return argv + ["--auth-mode", auth_mode]
     if command == "/ocrhistory":
         argv = base + ["sync", "--mode", "tail"]
-        limit = "100"
+        limit = resolve_sync_mode_limit(config, "tail")
         auth_mode = "user"
         extra_parts = parts[1:]
         channel_arg, extra_parts = consume_channel_argument(extra_parts)
@@ -595,8 +649,8 @@ def build_history_command(text: str) -> list[str] | None:
             subcommand = "update"
         else:
             subcommand = "tail"
-        argv = base + (["sync", "--mode", subcommand] if subcommand in {"tail", "update"} else [subcommand])
-        limit = "1000" if subcommand == "backfill" else "100"
+        argv = base + ["sync", "--mode", subcommand]
+        limit = resolve_sync_mode_limit(config, subcommand)
         auth_mode = "user"
         extra_parts = parts[1:]
         channel_arg, extra_parts = consume_channel_argument(extra_parts)
@@ -644,11 +698,6 @@ def handle_history_command(token: str, config: dict[str, Any], update: dict[str,
         send_text_message(token, chat_id, command_help_text())
         return
 
-    history_client_path = resolve_history_client_path(config)
-    if not history_client_path.exists():
-        send_text_message(token, chat_id, f"History client not found: {history_client_path}")
-        return
-
     try:
         argv = build_history_command(text)
     except ValueError as exc:
@@ -657,6 +706,11 @@ def handle_history_command(token: str, config: dict[str, Any], update: dict[str,
 
     if not argv:
         send_text_message(token, chat_id, command_help_text())
+        return
+
+    script_path = Path(argv[1])
+    if not script_path.exists():
+        send_text_message(token, chat_id, f"Bridge command target not found: {script_path.name}")
         return
 
     try:

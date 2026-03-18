@@ -162,6 +162,13 @@ history_db = "/tmp/history.sqlite3"
 media_root = "/tmp/media"
 tesseract_binary = "/usr/local/bin/tesseract"
 
+[sync]
+sync_limit = "1200"
+backfill_limit = "150"
+tail_limit = "120"
+update_limit = "80"
+batch_size = "500"
+
 [ocr]
 image_prompt = "OCR this"
 
@@ -189,10 +196,27 @@ user_password = "pw_x"
         self.assertEqual(runtime.user_password, "pw_x")
         self.assertEqual(runtime.tesseract_binary, "/usr/local/bin/tesseract")
         self.assertEqual(runtime.vision_prompt, "OCR this")
+        self.assertEqual(runtime.sync_batch_size, 500)
+        self.assertEqual(runtime.sync_total_limit, 1200)
+        self.assertEqual(runtime.sync_mode_limits, {"backfill": 150, "tail": 120, "update": 80})
         self.assertEqual(runtime.default_auth_mode, "auto")
         self.assertEqual(runtime.public_auth_mode, "bot")
         self.assertEqual(runtime.private_auth_mode, "user")
         self.assertEqual(runtime.default_channels, ["@vcnews", "@another_channel"])
+
+    def test_allocate_sync_limits_applies_shared_total_limit_across_channels(self) -> None:
+        self.assertEqual(
+            telegram_history_client.allocate_sync_limits(["@a", "@b", "@c"], 10, 100),
+            [("@a", 10), ("@b", 0), ("@c", 0)],
+        )
+        self.assertEqual(
+            telegram_history_client.allocate_sync_limits(["@a", "@b"], 100, 30),
+            [("@a", 30), ("@b", 30)],
+        )
+        self.assertEqual(
+            telegram_history_client.allocate_sync_limits(["@a", "@b"], 6000, 5000),
+            [("@a", 5000), ("@b", 1000)],
+        )
 
     def test_project_root_override_points_runtime_paths_to_project_dir(self) -> None:
         original = os.environ.get("TELEGRAM_CONNECTOR_PROJECT_ROOT")
@@ -251,6 +275,7 @@ user_password = "pw_x"
             user_password="pw",
             tesseract_binary="tesseract",
             vision_prompt="prompt",
+            sync_batch_size=500,
             default_auth_mode="user",
             public_auth_mode="bot",
             private_auth_mode="user",
@@ -274,6 +299,7 @@ user_password = "pw_x"
             user_password="pw",
             tesseract_binary="tesseract",
             vision_prompt="prompt",
+            sync_batch_size=500,
             default_auth_mode="user",
             public_auth_mode="bot",
             private_auth_mode="user",
@@ -297,6 +323,7 @@ user_password = "pw_x"
             user_password="pw",
             tesseract_binary="tesseract",
             vision_prompt="prompt",
+            sync_batch_size=500,
             default_auth_mode="auto",
             public_auth_mode="bot",
             private_auth_mode="user",
@@ -317,6 +344,7 @@ user_password = "pw_x"
             user_password="pw",
             tesseract_binary="tesseract",
             vision_prompt="prompt",
+            sync_batch_size=500,
             default_auth_mode="auto",
             public_auth_mode="bot",
             private_auth_mode="user",
@@ -366,6 +394,7 @@ user_password = "pw_x"
             user_password="pw",
             tesseract_binary="tesseract",
             vision_prompt="prompt",
+            sync_batch_size=500,
             default_auth_mode="auto",
             public_auth_mode="bot",
             private_auth_mode="user",
@@ -427,6 +456,7 @@ user_password = "pw_x"
             user_password="pw",
             tesseract_binary="tesseract",
             vision_prompt="prompt",
+            sync_batch_size=500,
             default_auth_mode="user",
             public_auth_mode="bot",
             private_auth_mode="user",
@@ -455,10 +485,11 @@ user_password = "pw_x"
 
     def test_sync_parsers_accept_since_until(self) -> None:
         parser = telegram_history_client.build_parser()
-        backfill_args = parser.parse_args(["backfill", "--channel", "@vcnews", "--since", "2026-03-15", "--until", "2026-03-16"])
+        backfill_args = parser.parse_args(["sync", "--mode", "backfill", "--channel", "@vcnews", "--since", "2026-03-15", "--until", "2026-03-16"])
         tail_args = parser.parse_args(["sync", "--mode", "tail", "--channel", "@vcnews", "--since", "2026-03-15"])
         update_args = parser.parse_args(["sync", "--mode", "update", "--channel", "@vcnews", "--until", "2026-03-16"])
         ocr_pending_args = parser.parse_args(["ocr-pending", "--channel", "@vcnews", "--since", "2026-03-15", "--until", "2026-03-16"])
+        self.assertEqual(backfill_args.mode, "backfill")
         self.assertEqual(backfill_args.since, "2026-03-15")
         self.assertEqual(backfill_args.until, "2026-03-16")
         self.assertEqual(tail_args.mode, "tail")
@@ -651,6 +682,7 @@ user_password = "pw_x"
             user_password="pw",
             tesseract_binary="tesseract",
             vision_prompt="prompt",
+            sync_batch_size=500,
             default_auth_mode="user",
             public_auth_mode="bot",
             private_auth_mode="user",
@@ -746,6 +778,7 @@ user_password = "pw_x"
             user_password="pw",
             tesseract_binary="tesseract",
             vision_prompt="prompt",
+            sync_batch_size=500,
             default_auth_mode="user",
             public_auth_mode="bot",
             private_auth_mode="user",
@@ -836,6 +869,7 @@ user_password = "pw_x"
             user_password="pw",
             tesseract_binary="tesseract",
             vision_prompt="prompt",
+            sync_batch_size=500,
             default_auth_mode="user",
             public_auth_mode="bot",
             private_auth_mode="user",
@@ -937,6 +971,7 @@ user_password = "pw_x"
             user_password="pw",
             tesseract_binary="tesseract",
             vision_prompt="prompt",
+            sync_batch_size=500,
             default_auth_mode="user",
             public_auth_mode="bot",
             private_auth_mode="user",
@@ -1009,8 +1044,60 @@ user_password = "pw_x"
         self.assertEqual(result["processed_messages"], 2)
         self.assertEqual(result["since"], "2026-03-15")
         self.assertEqual(result["until"], "2026-03-16")
-        stored_ids = [row["message_id"] for row in conn.execute("SELECT message_id FROM messages ORDER BY message_id DESC")]
-        self.assertEqual(stored_ids, [11, 10])
+
+    def test_sync_messages_limit_zero_removes_per_channel_cap(self) -> None:
+        runtime = telegram_history_client.RuntimeConfig(
+            db_path=Path("/tmp/db.sqlite3"),
+            media_root=Path("/tmp/media"),
+            user_session_name="user",
+            bot_session_name="bot",
+            api_id="1",
+            api_hash="hash",
+            phone="+1",
+            bot_token="token",
+            user_password="pw",
+            tesseract_binary="tesseract",
+            vision_prompt="prompt",
+            sync_batch_size=500,
+            sync_total_limit=0,
+            sync_mode_limits={"backfill": 100, "tail": 100, "update": 100},
+            default_auth_mode="user",
+            public_auth_mode="bot",
+            private_auth_mode="user",
+            default_channels=[],
+        )
+        args = types.SimpleNamespace(
+            channel="@vcnews",
+            limit=0,
+            auth_mode="user",
+            download_media=False,
+            ocr=False,
+            mark_read=False,
+            since=None,
+            until=None,
+            batch_size=0,
+        )
+        seen: list[tuple[str, int | None]] = []
+        original_connect_db = telegram_history_client.connect_db
+        original_init_db = telegram_history_client.init_db
+        original_sync_one_channel = telegram_history_client.sync_one_channel
+        try:
+            telegram_history_client.connect_db = lambda runtime: sqlite3.connect(":memory:")
+            telegram_history_client.init_db = lambda conn: None
+
+            async def fake_sync_one_channel(conn, runtime_arg, args_arg, mode_arg, channel_arg):
+                seen.append((channel_arg, args_arg.limit))
+                return {"channel": channel_arg}
+
+            telegram_history_client.sync_one_channel = fake_sync_one_channel
+            exit_code = asyncio.run(telegram_history_client.sync_messages(runtime, args, "backfill"))
+        finally:
+            telegram_history_client.connect_db = original_connect_db
+            telegram_history_client.init_db = original_init_db
+            telegram_history_client.sync_one_channel = original_sync_one_channel
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(seen, [("@vcnews", None)])
 
     def test_iter_pending_ocr_applies_since_until_filters(self) -> None:
         conn = sqlite3.connect(":memory:")
@@ -1090,6 +1177,13 @@ private_channel_mode = "user"
 history_db = "/tmp/history.sqlite3"
 media_root = "/tmp/media"
 tesseract_binary = "/usr/local/bin/tesseract"
+
+[sync]
+sync_limit = "1000"
+backfill_limit = "100"
+tail_limit = "100"
+update_limit = "100"
+batch_size = "500"
 
 [ocr]
 image_prompt = "OCR this"

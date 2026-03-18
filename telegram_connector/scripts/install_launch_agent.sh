@@ -19,6 +19,7 @@ rm -f "$SERVICE_ROOT"/data/launchd/bridge.stdout.log "$SERVICE_ROOT"/data/launch
 
 cp "$SOURCE_ROOT/telegram_connector.py" "$SERVICE_ROOT/telegram_connector.py"
 cp "$SOURCE_ROOT/telegram_history_client.py" "$SERVICE_ROOT/telegram_history_client.py"
+cp "$SOURCE_ROOT/telegram_digest.py" "$SERVICE_ROOT/telegram_digest.py"
 cp "$SOURCE_ROOT/config/runtime.local.toml" "$SERVICE_ROOT/config/runtime.local.toml"
 cp "$SOURCE_ROOT/config/runtime.example.toml" "$SERVICE_ROOT/config/runtime.example.toml"
 

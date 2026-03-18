@@ -30,6 +30,10 @@ Recommended pattern:
 - keep Telethon or other heavy data logic in a separate script
 - let the bridge invoke the data client as a subprocess
 - keep command syntax stable between CLI and bot usage
+- separate data ingestion from downstream enrichment, AI analysis, export, or delivery whenever possible
+- treat persisted raw data as the system of record and run expensive analysis as a second stage over stored data
+- if multiple sources are processed in one run, keep source-level work units isolated so failures and summaries can be reported per source
+- when outputs are independently useful, prefer progressive delivery per source over waiting for one final all-or-nothing payload
 
 ## 2. Config Rules
 
@@ -120,6 +124,8 @@ Tradeoff guidance:
 - resolving secrets once in the daemon and keeping them in memory is usually a better balance than calling `op read` on every request
 - this is still safer than storing plaintext secrets in tracked or local runtime files
 - if prompt frequency becomes the main usability issue on a single Mac, Keychain-backed runtime resolution may be preferable to repeated 1Password CLI prompts
+- jobs started from `crontab` or another non-interactive scheduler should use a secret backend that can resolve without GUI prompts
+- if 1Password CLI prompts make scheduled jobs unreliable, prefer Keychain or another non-interactive local secret source for that specific scheduled job
 
 ## 4. Path and Filesystem Rules
 
@@ -191,11 +197,10 @@ Rules:
 Recommended commands:
 
 - `help`
-- `doctor`
-- `state`
 - `backfill`
 - `tail`
 - `update`
+- `digest`
 - `ocrhistory`
 - `exportcsv`
 - `ocr`
@@ -240,6 +245,13 @@ Rules:
 - for `update`, stop at the boundary of already-known history
 - keep sync state per channel
 - support multiple channels in one run
+- daily digest-style commands should take defaults from local config and allow explicit manual overrides to win when the operator passes them
+- for long-running ingestion, commit database writes in batches instead of one row at a time
+- distinguish between a shared run budget and a per-source cap:
+  the shared budget limits total work in one run, while the per-source cap limits how much one source may consume before the next source is considered
+- when multiple sources are requested, process them in the explicit order given by the operator or config
+- if a shared run budget is used, stop the run cleanly when the budget is exhausted rather than overrunning it silently
+- keep batch size and total run budget as separate knobs; they solve different problems and should not be conflated
 
 Recommended database keys:
 
@@ -265,6 +277,21 @@ Rules:
 - if OCR is requested for already-stored messages without local files, allow media refresh without duplicating the message row
 - store OCR text separately from the original message text
 - store OCR failure state in a sanitized form
+
+AI processing guidance:
+
+- prefer hierarchical batching for large inputs:
+  summarize smaller batches first, then summarize the batch summaries
+- do not mix unrelated sources inside one AI batch if source-level context matters
+- include lightweight provenance in prompts when it improves quality, such as source name, sender identity, timestamp, and message id
+- if per-source AI results are independently readable, emit them progressively and send a final status summary only when something failed or was skipped
+- structure prompts for cache-friendly reuse:
+  keep the longest stable instruction and format prefix identical across repeated calls, and append variable payload later
+- avoid putting highly variable metadata at the very start of a prompt when prompt caching matters
+- treat token usage as an observable production metric:
+  log input tokens, cached input tokens, output tokens, total tokens, latency, model, stage, and status for every AI call
+- optimize batch sizes using measured token usage and latency from real runs, not only record counts
+- when batching large inputs, preserve quality by keeping the batch format and rubric stable while varying only the content payload
 
 ## 10. Export Rules
 
@@ -339,6 +366,8 @@ Rules:
 - installer may render runtime-specific paths locally
 - service bundle may live outside the repo
 - but config and data should still point back to the project
+- for once-per-day AI analysis, prefer a scheduler like `crontab` over introducing a second always-on AI daemon
+- keep scheduler command lines thin and config-driven; do not duplicate business defaults in multiple shell scripts
 
 After code changes:
 

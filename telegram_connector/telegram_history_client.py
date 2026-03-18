@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tomllib
 from dataclasses import dataclass
+from dataclasses import field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -92,8 +93,29 @@ CREATE TABLE IF NOT EXISTS sync_state (
     last_error TEXT
 );
 
+CREATE TABLE IF NOT EXISTS ai_usage_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at TEXT NOT NULL,
+    feature TEXT NOT NULL,
+    stage TEXT NOT NULL,
+    channel TEXT,
+    since TEXT,
+    until TEXT,
+    model TEXT NOT NULL,
+    request_index INTEGER,
+    message_count INTEGER,
+    input_tokens INTEGER,
+    cached_input_tokens INTEGER,
+    output_tokens INTEGER,
+    total_tokens INTEGER,
+    latency_ms INTEGER,
+    status TEXT NOT NULL,
+    error TEXT
+);
+
 CREATE INDEX IF NOT EXISTS idx_messages_channel_date ON messages(channel_id, date_utc DESC);
 CREATE INDEX IF NOT EXISTS idx_media_assets_ocr_status ON media_assets(ocr_status, created_at);
+CREATE INDEX IF NOT EXISTS idx_ai_usage_log_created_at ON ai_usage_log(created_at DESC);
 """
 
 MESSAGES_TABLE_SQL = """
@@ -153,10 +175,13 @@ class RuntimeConfig:
     user_password: str
     tesseract_binary: str
     vision_prompt: str
+    sync_batch_size: int
     default_auth_mode: str
     public_auth_mode: str
     private_auth_mode: str
     default_channels: list[str]
+    sync_total_limit: int = 0
+    sync_mode_limits: dict[str, int] = field(default_factory=dict)
 
 
 def load_runtime_config() -> dict[str, Any]:
@@ -173,6 +198,17 @@ def get_config_value(config: dict[str, Any], section: str, key: str) -> str:
         return ""
     value = section_data.get(key, "")
     return str(value).strip()
+
+
+def require_int_config_value(config: dict[str, Any], section: str, key: str, *, min_value: int = 0) -> int:
+    raw = get_config_value(config, section, key)
+    if not raw:
+        raise SystemExit(f"Missing {section}.{key} in runtime config.")
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise SystemExit(f"Invalid integer in {section}.{key}: {raw}") from exc
+    return max(min_value, value)
 
 
 def parse_default_channel_entry(raw: str) -> str:
@@ -264,6 +300,13 @@ def resolve_runtime() -> RuntimeConfig:
     )
     tesseract_binary = get_config_value(config, "paths", "tesseract_binary") or "tesseract"
     vision_prompt = get_config_value(config, "ocr", "image_prompt") or "Extract all readable text from the image."
+    sync_batch_size = require_int_config_value(config, "sync", "batch_size", min_value=0)
+    sync_total_limit = require_int_config_value(config, "sync", "sync_limit", min_value=0)
+    sync_mode_limits = {
+        "backfill": require_int_config_value(config, "sync", "backfill_limit", min_value=1),
+        "tail": require_int_config_value(config, "sync", "tail_limit", min_value=1),
+        "update": require_int_config_value(config, "sync", "update_limit", min_value=1),
+    }
     default_auth_mode = get_config_value(config, "auth", "default_mode") or "auto"
     public_auth_mode = get_config_value(config, "auth", "public_channel_mode") or "bot"
     private_auth_mode = get_config_value(config, "auth", "private_channel_mode") or "user"
@@ -280,10 +323,13 @@ def resolve_runtime() -> RuntimeConfig:
         user_password=user_password,
         tesseract_binary=tesseract_binary,
         vision_prompt=vision_prompt,
+        sync_batch_size=sync_batch_size,
         default_auth_mode=default_auth_mode,
         public_auth_mode=public_auth_mode,
         private_auth_mode=private_auth_mode,
         default_channels=default_channels,
+        sync_total_limit=sync_total_limit,
+        sync_mode_limits=sync_mode_limits,
     )
 
 
@@ -820,6 +866,35 @@ def resolve_channels_argument(runtime: RuntimeConfig, raw_channel: str | None) -
     raise SystemExit("At least one channel is required. Pass --channel or set [channels].default_list in runtime.local.toml.")
 
 
+def allocate_sync_limits(channels: list[str], total_limit: int, per_channel_limit: int | None) -> list[tuple[str, int]]:
+    if not channels:
+        return []
+    if per_channel_limit is not None and per_channel_limit <= 0:
+        per_channel_limit = None
+    if total_limit <= 0:
+        return [(channel, per_channel_limit if per_channel_limit is not None else -1) for channel in channels]
+    remaining = total_limit
+    plans: list[tuple[str, int]] = []
+    for channel in channels:
+        if remaining <= 0:
+            plans.append((channel, 0))
+            continue
+        if per_channel_limit is None:
+            limit = remaining
+        else:
+            limit = min(max(1, per_channel_limit), remaining)
+        plans.append((channel, limit))
+        remaining -= limit
+    return plans
+
+
+def default_sync_limit_for_mode(runtime: RuntimeConfig, mode: str) -> int:
+    limit = runtime.sync_mode_limits.get(mode)
+    if limit is None:
+        raise SystemExit(f"Missing default sync limit for mode '{mode}' in runtime config.")
+    return max(1, int(limit))
+
+
 async def sync_one_channel(
     conn: sqlite3.Connection,
     runtime: RuntimeConfig,
@@ -832,9 +907,14 @@ async def sync_one_channel(
     async with client:
         entity = await client.get_entity(channel)
         upsert_channel(conn, entity)
+        batch_commit_size = max(0, int(getattr(args, "batch_size", 0) or runtime.sync_batch_size or 0))
+        pending_db_changes = 0
+        scan_limit = getattr(args, "limit", None)
+        if scan_limit is not None and scan_limit <= 0:
+            scan_limit = None
 
         if mode in {"backfill", "tail", "update"}:
-            iterator = client.iter_messages(entity, limit=args.limit)
+            iterator = client.iter_messages(entity, limit=scan_limit)
         else:
             raise SystemExit(f"Unsupported sync mode: {mode}")
 
@@ -867,12 +947,20 @@ async def sync_one_channel(
                     upsert_message(conn, entity, message, sender_username, sender_display_name, downloaded_path, downloaded_size)
                     if downloaded_path:
                         refreshed_existing_media += 1
+                        pending_db_changes += 1
+                        if batch_commit_size and pending_db_changes >= batch_commit_size:
+                            conn.commit()
+                            pending_db_changes = 0
                 continue
             if args.download_media and getattr(message, "media", None):
                 downloaded_path, downloaded_size = await download_media_if_present(runtime, client, message, entity.id)
             upsert_message(conn, entity, message, sender_username, sender_display_name, downloaded_path, downloaded_size)
             highest_message_id = max(highest_message_id or message.id, message.id)
             processed += 1
+            pending_db_changes += 1
+            if batch_commit_size and pending_db_changes >= batch_commit_size:
+                conn.commit()
+                pending_db_changes = 0
 
         now = now_utc()
         if mode == "backfill":
@@ -894,7 +982,7 @@ async def sync_one_channel(
         ocr_processed = 0
         if getattr(args, "ocr", False):
             binary = require_tesseract(runtime)
-            ocr_processed = process_pending_ocr(conn, binary, limit=args.limit, channel_id=entity.id)
+            ocr_processed = process_pending_ocr(conn, binary, limit=scan_limit, channel_id=entity.id)
         if mark_read_target_id is None and highest_message_id is not None:
             mark_read_target_id = highest_message_id
         current_read_max_id = None
@@ -934,15 +1022,25 @@ async def sync_messages(runtime: RuntimeConfig, args: argparse.Namespace, mode: 
     init_db(conn)
     channels = resolve_channels_argument(runtime, args.channel)
     results = []
-    for channel in channels:
-        results.append(await sync_one_channel(conn, runtime, args, mode, channel))
+    per_channel_limit = getattr(args, "limit", None)
+    if per_channel_limit is None:
+        per_channel_limit = default_sync_limit_for_mode(runtime, mode)
+    elif per_channel_limit <= 0:
+        per_channel_limit = None
+    plans = allocate_sync_limits(channels, runtime.sync_total_limit, per_channel_limit)
+    for channel, limit in plans:
+        if limit == 0:
+            continue
+        channel_args = argparse.Namespace(**vars(args))
+        channel_args.limit = None if limit < 0 else limit
+        results.append(await sync_one_channel(conn, runtime, channel_args, mode, channel))
     print(json.dumps(results[0] if len(results) == 1 else results, ensure_ascii=False, indent=2))
     return 0
 
 
 def iter_pending_ocr(
     conn: sqlite3.Connection,
-    limit: int,
+    limit: int | None,
     channel_id: int | None = None,
     *,
     since: str | None = None,
@@ -963,7 +1061,10 @@ def iter_pending_ocr(
     if until:
         where.append("m.date_utc <= ?")
         params.append(parse_until_datetime(until))
-    params.append(limit)
+    limit_sql = ""
+    if limit is not None and limit > 0:
+        params.append(limit)
+        limit_sql = "\n            LIMIT ?"
     return list(
         conn.execute(
             f"""
@@ -972,8 +1073,7 @@ def iter_pending_ocr(
             JOIN messages m
               ON m.channel_id = ma.channel_id AND m.message_id = ma.message_id
             WHERE {' AND '.join(where)}
-            ORDER BY m.date_utc ASC, ma.created_at ASC
-            LIMIT ?
+            ORDER BY m.date_utc ASC, ma.created_at ASC{limit_sql}
             """,
             params,
         )
@@ -996,7 +1096,7 @@ def process_pending_ocr(
     conn: sqlite3.Connection,
     binary: str,
     *,
-    limit: int,
+    limit: int | None,
     channel_id: int | None = None,
     since: str | None = None,
     until: str | None = None,
@@ -1103,7 +1203,7 @@ def export_channel_csv(
 ) -> tuple[Path, int]:
     channel_row = resolve_channel_filter(conn, channel)
     if channel_row is None:
-        raise SystemExit(f"Channel '{channel}' is not present in the local database yet. Run tail/backfill first.")
+        raise SystemExit(f"Channel '{channel}' is not present in the local database yet. Run sync --mode tail or sync --mode backfill first.")
 
     params: list[Any] = [channel_row["channel_id"]]
     where = ["m.channel_id = ?"]
@@ -1214,7 +1314,7 @@ def cmd_ocr_pending(args: argparse.Namespace) -> int:
         if channel is not None:
             channel_row = resolve_channel_filter(conn, channel)
             if channel_row is None:
-                raise SystemExit(f"Channel '{channel}' is not present in the local database yet. Run tail/backfill first.")
+                raise SystemExit(f"Channel '{channel}' is not present in the local database yet. Run sync --mode tail or sync --mode backfill first.")
             channel_id = channel_row["channel_id"]
         processed = process_pending_ocr(
             conn,
@@ -1337,10 +1437,10 @@ def build_parser() -> argparse.ArgumentParser:
     export_csv.add_argument("--auth-mode", choices=["auto", "bot", "user"], default=None, help="Accepted for bot-command compatibility; export reads from local SQLite only.")
     export_csv.set_defaults(func=cmd_export_csv)
 
-    sync = subparsers.add_parser("sync", help="Unified incremental sync command for tail and update modes.")
-    sync.add_argument("--mode", choices=["tail", "update"], required=True, help="Sync mode.")
+    sync = subparsers.add_parser("sync", help="Unified sync command for backfill, tail, and update modes.")
+    sync.add_argument("--mode", choices=["backfill", "tail", "update"], required=True, help="Sync mode.")
     sync.add_argument("--channel", help="Channel username/link or comma-separated list, for example @vcnews,@another.")
-    sync.add_argument("--limit", type=int, default=100, help="How many latest remote messages to scan.")
+    sync.add_argument("--limit", type=int, default=None, help="How many latest remote messages to scan. Defaults depend on mode; use 0 to remove the per-channel cap.")
     sync.add_argument("--since", help="Ingest only messages since this UTC date or datetime.")
     sync.add_argument("--until", help="Ingest only messages until this UTC date or datetime.")
     sync.add_argument("--download-media", action="store_true", help="Download message media locally.")
@@ -1348,17 +1448,6 @@ def build_parser() -> argparse.ArgumentParser:
     sync.add_argument("--mark-read", action="store_true", help="Mark the processed message range as read after a successful user-auth sync.")
     sync.add_argument("--auth-mode", choices=["auto", "bot", "user"], default=None, help="Choose Telegram authorization type.")
     sync.set_defaults(async_func="sync")
-
-    backfill = subparsers.add_parser("backfill", help="Read channel history into SQLite.")
-    backfill.add_argument("--channel", help="Channel username/link or comma-separated list, for example @vcnews,@another.")
-    backfill.add_argument("--limit", type=int, default=1000, help="How many latest messages to ingest.")
-    backfill.add_argument("--since", help="Ingest only messages since this UTC date or datetime.")
-    backfill.add_argument("--until", help="Ingest only messages until this UTC date or datetime.")
-    backfill.add_argument("--download-media", action="store_true", help="Download message media locally.")
-    backfill.add_argument("--ocr", action="store_true", help="Run OCR for downloaded images from this sync run.")
-    backfill.add_argument("--mark-read", action="store_true", help="Mark the processed message range as read after a successful user-auth sync.")
-    backfill.add_argument("--auth-mode", choices=["auto", "bot", "user"], default=None, help="Choose Telegram authorization type.")
-    backfill.set_defaults(async_func="backfill")
 
     ocr_pending = subparsers.add_parser("ocr-pending", help="Run Tesseract for downloaded images pending OCR.")
     ocr_pending.add_argument("--channel", help="Channel username/id or comma-separated list.")

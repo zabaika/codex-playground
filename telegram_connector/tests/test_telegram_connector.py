@@ -15,18 +15,38 @@ SPEC.loader.exec_module(telegram_connector)
 
 
 class TelegramConnectorTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._original_load_runtime_config = telegram_connector.load_runtime_config
+        telegram_connector.load_runtime_config = lambda: {
+            "sync": {
+                "backfill_limit": "100",
+                "tail_limit": "100",
+                "update_limit": "100",
+            }
+        }
+
+    def tearDown(self) -> None:
+        telegram_connector.load_runtime_config = self._original_load_runtime_config
+
     def test_build_history_command_for_backfill_with_media(self) -> None:
         command = telegram_connector.build_history_command("/backfill @vcnews 200 media")
         self.assertEqual(
             command[2:],
-            ["backfill", "--channel", "@vcnews", "--limit", "200", "--download-media", "--auth-mode", "user"],
+            ["sync", "--mode", "backfill", "--channel", "@vcnews", "--limit", "200", "--download-media", "--auth-mode", "user"],
         )
 
     def test_build_history_command_for_backfill_with_period(self) -> None:
         command = telegram_connector.build_history_command("/backfill @vcnews since=2026-03-15 until=2026-03-16")
         self.assertEqual(
             command[2:],
-            ["backfill", "--channel", "@vcnews", "--limit", "1000", "--since", "2026-03-15", "--until", "2026-03-16", "--auth-mode", "user"],
+            ["sync", "--mode", "backfill", "--channel", "@vcnews", "--limit", "100", "--since", "2026-03-15", "--until", "2026-03-16", "--auth-mode", "user"],
+        )
+
+    def test_build_history_command_for_backfill_with_zero_limit(self) -> None:
+        command = telegram_connector.build_history_command("/backfill @vcnews 0")
+        self.assertEqual(
+            command[2:],
+            ["sync", "--mode", "backfill", "--channel", "@vcnews", "--limit", "0", "--auth-mode", "user"],
         )
 
     def test_build_history_command_for_tail_uses_default_limit(self) -> None:
@@ -59,6 +79,56 @@ class TelegramConnectorTests(unittest.TestCase):
         self.assertEqual(
             command[2:],
             ["sync", "--mode", "tail", "--channel", "@vcnews", "--limit", "100", "--download-media", "--ocr", "--since", "2026-03-15", "--until", "2026-03-16", "--auth-mode", "user"],
+        )
+
+    def test_build_history_command_for_digest_uses_config_defaults_when_omitted(self) -> None:
+        command = telegram_connector.build_history_command("/digest")
+        self.assertEqual(command[1:], [str(telegram_connector.DIGEST_FILE), "run", "--auth-mode", "user"])
+
+    def test_build_history_command_for_digest_with_overrides(self) -> None:
+        command = telegram_connector.build_history_command("/digest @vcnews since=2026-03-15 until=2026-03-16 bot")
+        self.assertEqual(
+            command[1:],
+            [
+                str(telegram_connector.DIGEST_FILE),
+                "run",
+                "--channel",
+                "@vcnews",
+                "--since",
+                "2026-03-15",
+                "--until",
+                "2026-03-16",
+                "--auth-mode",
+                "bot",
+            ],
+        )
+
+    def test_build_history_command_for_digest_with_spaced_multi_channel_list(self) -> None:
+        command = telegram_connector.build_history_command("/digest @vcnews, @refugecard since=2026-03-15")
+        self.assertEqual(
+            command[1:],
+            [
+                str(telegram_connector.DIGEST_FILE),
+                "run",
+                "--channel",
+                "@vcnews, @refugecard",
+                "--since",
+                "2026-03-15",
+                "--auth-mode",
+                "user",
+            ],
+        )
+
+    def test_resolve_text_chunk_size_reads_bridge_config(self) -> None:
+        self.assertEqual(
+            telegram_connector.resolve_text_chunk_size({"bridge": {"text_chunk_size": "3900"}}),
+            3900,
+        )
+
+    def test_resolve_sync_mode_limit_reads_bridge_config(self) -> None:
+        self.assertEqual(
+            telegram_connector.resolve_sync_mode_limit({"sync": {"backfill_limit": "120"}}, "backfill"),
+            "120",
         )
 
     def test_build_history_command_for_update_defaults_to_user(self) -> None:
@@ -95,6 +165,9 @@ class TelegramConnectorTests(unittest.TestCase):
 
     def test_normalize_bridge_command_text_supports_bare_command(self) -> None:
         self.assertEqual(telegram_connector.normalize_bridge_command_text("update 10"), "/update 10")
+
+    def test_normalize_bridge_command_text_supports_bare_digest_command(self) -> None:
+        self.assertEqual(telegram_connector.normalize_bridge_command_text("digest"), "/digest")
 
     def test_normalize_bridge_command_text_strips_bot_suffix(self) -> None:
         self.assertEqual(
@@ -147,6 +220,10 @@ class TelegramConnectorTests(unittest.TestCase):
     def test_build_history_command_rejects_unknown_command(self) -> None:
         with self.assertRaises(ValueError):
             telegram_connector.build_history_command("/boom")
+
+    def test_build_history_command_rejects_unsupported_digest_argument(self) -> None:
+        with self.assertRaises(ValueError):
+            telegram_connector.build_history_command("/digest 10")
 
     def test_build_history_command_for_ocr_pending_with_period_and_channel(self) -> None:
         command = telegram_connector.build_history_command("/ocr @vcnews 50 since=2026-03-15 until=2026-03-16")

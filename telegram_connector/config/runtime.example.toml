@@ -17,12 +17,118 @@ private_channel_mode = "user"
 
 [bridge]
 allowed_chat_ids = ""
+# Preferred Telegram text message chunk size for long replies. Keep it below 4096.
+text_chunk_size = "3900"
 # history_client_path = "/absolute/path/to/telegram_history_client.py"
 
 [channels]
 default_list = [
   "@vcnews, vc.ru",
 ]
+
+[processing]
+# Default AI model for analysis commands.
+model = "gpt-5.4-mini"
+# Whether processing flows should download image media and run OCR by default.
+ocr = "true"
+
+[digest]
+# Time in local machine time for the daily crontab entry.
+time = "08:00"
+# Default analysis window start. Supports today, yesterday, week, month, and -Nd.
+since = "yesterday"
+# Default analysis window end. Uses the same aliases as since and expands date-only values to the end of that UTC day.
+until = "yesterday"
+# History sync mode before analysis: backfill = historical range, tail = latest window, update = only new messages.
+sync_mode = "update"
+
+[digest_limits.day]
+# Recommended defaults for a daily window when the total traffic across all channels is about 5000 messages/day.
+sync_limit = "6000"
+# Number of messages per AI summarization chunk inside one channel.
+# This does not affect SQLite commit batching.
+ai_batch_size = "120"
+
+[digest_limits.week]
+# Recommended defaults for a 7-day window with the same traffic assumption.
+sync_limit = "42000"
+# Number of messages per AI summarization chunk inside one channel.
+# This does not affect SQLite commit batching.
+ai_batch_size = "180"
+
+[digest_limits.month]
+# Recommended defaults for a 30-day window with the same traffic assumption.
+sync_limit = "180000"
+# Number of messages per AI summarization chunk inside one channel.
+# This does not affect SQLite commit batching.
+ai_batch_size = "240"
+
+[sync]
+# Total Telegram download cap across all selected channels for one non-digest sync run.
+# Set 0 to disable the shared cap and rely only on the command's own --limit.
+sync_limit = "6000"
+# Default per-channel limit for sync --mode backfill when --limit is omitted.
+backfill_limit = "100"
+# Default per-channel limit for sync --mode tail when --limit is omitted.
+tail_limit = "100"
+# Default per-channel limit for sync --mode update when --limit is omitted.
+update_limit = "100"
+# Shared SQLite commit batch size for all sync flows, including digest-prep sync.
+batch_size = "500"
+
+[digest_prompts]
+# System instructions sent to the model.
+system_instructions = "You are a concise Telegram channel analyst. Return compact, high-signal Russian summaries."
+# Prompt template for each intermediate batch summary.
+# Available placeholders: {channel_name}, {since}, {until}, {batch_index}, {message_count}, {message_block}, {previous_batch_summary}
+batch_digest_template = """
+Сделай краткую промежуточную сводку части сообщений на русском языке.
+Используй только факты из входных данных.
+Формат ответа:
+1. Одна короткая строка с главным выводом.
+2. 3-4 коротких пункта с темами и событиями.
+3. Блок 'Наиболее популярное' с 1-5 пунктами в формате '<ссылка> - короткий заголовок'.
+Учитывай replies и forwards как сигналы популярности и приоритета.
+4. Блок 'Незакрытые вопросы/продолжения', если они есть.
+Не упоминай слова 'батч' или 'часть сообщений' в самом тексте ответа.
+Не используй markdown-таблицы.
+
+Метаданные части сообщений:
+- Канал: {channel_name}
+- Период UTC: {since} .. {until}
+- Порядковый номер части: {batch_index}
+- Сообщений в части: {message_count}
+
+Короткий контекст предыдущего батча:
+{previous_batch_summary}
+
+Сырые сообщения:
+{message_block}
+"""
+# Prompt template for the final per-channel digest built from batch summaries.
+# Available placeholders: {channel_name}, {since}, {until}, {message_count}, {batch_count}, {batch_summary_block}
+final_digest_template = """
+Собери финальный дайджест на русском языке для Telegram.
+Используй только факты из промежуточных сводок.
+Формат ответа:
+1. Одна короткая строка с главным выводом.
+2. 3-5 коротких пунктов с основными темами и событиями.
+3. Блок 'Наиболее популярное' с 1-10 пунктами в формате '<ссылка> - короткий заголовок'.
+Выбирай в него самые заметные сообщения периода с учётом replies и forwards. Если активность низкая, можно меньше 10 пунктов.
+4. Блок 'Связки вопрос-ответ/развитие темы' только если он добавляет важный контекст сверх тем и блока популярного.
+Если блок нужен, для каждой связки указывай ссылку на самое популярное сообщение этой темы в формате '<ссылка> - короткое пояснение связи'.
+Не упоминай слово 'батч' в самом тексте ответа.
+Не используй markdown-таблицы.
+
+Метаданные канала:
+- Канал: {channel_name}
+- Период UTC: {since} .. {until}
+- Всего сообщений в анализе: {message_count}
+- Число батчей: {batch_count}
+
+Промежуточные сводки по батчам:
+{batch_summary_block}
+"""
 
 [paths]
 # Add local-only absolute paths here when needed.
@@ -39,3 +145,4 @@ image_prompt = "Extract all readable text from the image."
 bot_token = "op://Personal/telegram-connector/bot_token"
 api_hash = "op://Personal/telegram-connector/api_hash"
 user_password = "op://Personal/telegram-connector/user_password"
+openai_api_key = "op://Personal/OPENAI API key/credential"
