@@ -7,7 +7,6 @@ Use it as an entry guide. For repository-wide engineering policy, safety rules, 
 
 ## Repo Layout
 
-- [README.md](/Users/andrejzabaev/Documents/Playground/README.md): top-level project index
 - [README.md](./README.md): top-level project index
 - [RULEBOOK.md](./RULEBOOK.md): global engineering and safety rules
 - [telegram_connector](./telegram_connector): Telegram ingestion, OCR, digest, and bot bridge project
