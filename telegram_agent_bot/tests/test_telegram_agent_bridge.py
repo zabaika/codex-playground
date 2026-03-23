@@ -379,6 +379,7 @@ class TelegramAgentBridgeTests(unittest.TestCase):
     def test_send_text_message_uses_html_parse_mode(self) -> None:
         captured: dict[str, object] = {}
         original_api_call = telegram_agent_bridge.api_call
+        original_append_outbox_record = telegram_agent_bridge.append_outbox_record
 
         def fake_api_call(token: str, method: str, payload: dict[str, object] | None = None) -> object:
             captured["token"] = token
@@ -387,10 +388,12 @@ class TelegramAgentBridgeTests(unittest.TestCase):
             return {}
 
         telegram_agent_bridge.api_call = fake_api_call
+        telegram_agent_bridge.append_outbox_record = lambda record: captured.update({"outbox": record})
         try:
             telegram_agent_bridge.send_text_message("token", 42, "a < b")
         finally:
             telegram_agent_bridge.api_call = original_api_call
+            telegram_agent_bridge.append_outbox_record = original_append_outbox_record
 
         self.assertEqual(captured["method"], "sendMessage")
         payload = captured["payload"]
@@ -398,6 +401,103 @@ class TelegramAgentBridgeTests(unittest.TestCase):
         self.assertEqual(payload["parse_mode"], "HTML")
         self.assertEqual(payload["disable_web_page_preview"], True)
         self.assertEqual(payload["text"], "a &lt; b")
+        outbox = captured["outbox"]
+        assert isinstance(outbox, dict)
+        self.assertEqual(outbox["status"], "sent")
+        self.assertEqual(outbox["attempt"], 1)
+
+    def test_send_text_message_retries_and_logs_failed_attempt(self) -> None:
+        original_api_call = telegram_agent_bridge.api_call
+        original_append_outbox_record = telegram_agent_bridge.append_outbox_record
+        original_log_bridge_error = telegram_agent_bridge.log_bridge_error
+        original_sleep = telegram_agent_bridge.time.sleep
+        attempts: list[int] = []
+        records: list[dict[str, object]] = []
+        errors: list[str] = []
+
+        def fake_api_call(token: str, method: str, payload: dict[str, object] | None = None) -> object:
+            attempts.append(len(attempts) + 1)
+            if len(attempts) == 1:
+                raise SystemExit("Telegram API request failed while calling sendMessage.")
+            return {"message_id": 99}
+
+        telegram_agent_bridge.api_call = fake_api_call
+        telegram_agent_bridge.append_outbox_record = lambda record: records.append(record)
+        telegram_agent_bridge.log_bridge_error = lambda message: errors.append(message)
+        telegram_agent_bridge.time.sleep = lambda seconds: None
+        try:
+            telegram_agent_bridge.send_text_message("token", 42, "retry me")
+        finally:
+            telegram_agent_bridge.api_call = original_api_call
+            telegram_agent_bridge.append_outbox_record = original_append_outbox_record
+            telegram_agent_bridge.log_bridge_error = original_log_bridge_error
+            telegram_agent_bridge.time.sleep = original_sleep
+
+        self.assertEqual(attempts, [1, 2])
+        self.assertEqual(len(records), 2)
+        self.assertEqual(records[0]["status"], "failed")
+        self.assertEqual(records[0]["attempt"], 1)
+        self.assertEqual(records[1]["status"], "sent")
+        self.assertEqual(records[1]["attempt"], 2)
+        self.assertIn("sendMessage failed attempt=1", errors[0])
+
+    def test_cmd_listen_logs_send_failures_and_keeps_running(self) -> None:
+        original_load_runtime_config = telegram_agent_bridge.load_runtime_config
+        original_fetch_updates = telegram_agent_bridge.fetch_updates
+        original_append_inbox = telegram_agent_bridge.append_inbox
+        original_print_update = telegram_agent_bridge.print_update
+        original_save_offset = telegram_agent_bridge.save_offset
+        original_handle_agent_command = telegram_agent_bridge.handle_agent_command
+        original_log_bridge_error = telegram_agent_bridge.log_bridge_error
+        logged_errors: list[str] = []
+
+        telegram_agent_bridge.load_runtime_config = lambda: {
+            "secrets": {"bot_token": "token"},
+            "bridge": {"allowed_chat_ids": "42"},
+        }
+        telegram_agent_bridge.fetch_updates = lambda token, offset, timeout: [
+            {
+                "update_id": 1,
+                "message": {
+                    "date": 123,
+                    "text": "/agent test",
+                    "chat": {"id": 42, "type": "private"},
+                    "from": {"id": 7, "username": "alice"},
+                },
+            }
+        ]
+        telegram_agent_bridge.append_inbox = lambda update: None
+        telegram_agent_bridge.print_update = lambda update, runtime: None
+        telegram_agent_bridge.save_offset = lambda offset: None
+        telegram_agent_bridge.handle_agent_command = lambda runtime, update: (_ for _ in ()).throw(
+            SystemExit("Telegram API error while calling sendMessage: bad request")
+        )
+        telegram_agent_bridge.log_bridge_error = lambda message: logged_errors.append(message)
+        try:
+            args = type(
+                "Args",
+                (),
+                {
+                    "timeout": 1,
+                    "once": True,
+                    "echo": False,
+                    "run_commands": True,
+                    "from_scratch": True,
+                },
+            )()
+            result = telegram_agent_bridge.cmd_listen(args)
+        finally:
+            telegram_agent_bridge.load_runtime_config = original_load_runtime_config
+            telegram_agent_bridge.fetch_updates = original_fetch_updates
+            telegram_agent_bridge.append_inbox = original_append_inbox
+            telegram_agent_bridge.print_update = original_print_update
+            telegram_agent_bridge.save_offset = original_save_offset
+            telegram_agent_bridge.handle_agent_command = original_handle_agent_command
+            telegram_agent_bridge.log_bridge_error = original_log_bridge_error
+
+        self.assertEqual(result, 0)
+        self.assertEqual(len(logged_errors), 1)
+        self.assertIn("command handling failed for update_id=1", logged_errors[0])
 
     def test_handle_agent_command_rejects_unknown_user(self) -> None:
         update = {

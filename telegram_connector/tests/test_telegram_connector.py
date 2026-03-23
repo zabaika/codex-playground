@@ -1,6 +1,7 @@
 import importlib.util
 import io
 import os
+import sqlite3
 import subprocess
 import tempfile
 import unittest
@@ -146,6 +147,12 @@ class TelegramConnectorTests(unittest.TestCase):
             3900,
         )
 
+    def test_resolve_agent_stats_row_limit_reads_bridge_config(self) -> None:
+        self.assertEqual(
+            telegram_connector.resolve_agent_stats_row_limit({"bridge": {"agent_stats_row_limit": "150"}}),
+            150,
+        )
+
     def test_resolve_sync_mode_limit_reads_bridge_config(self) -> None:
         self.assertEqual(
             telegram_connector.resolve_sync_mode_limit({"sync": {"backfill_limit": "120"}}, "backfill"),
@@ -189,6 +196,9 @@ class TelegramConnectorTests(unittest.TestCase):
 
     def test_normalize_bridge_command_text_supports_bare_digest_command(self) -> None:
         self.assertEqual(telegram_connector.normalize_bridge_command_text("digest"), "/digest")
+
+    def test_normalize_bridge_command_text_supports_agent_stats_command(self) -> None:
+        self.assertEqual(telegram_connector.normalize_bridge_command_text("agent-stats"), "/agent-stats")
 
     def test_normalize_bridge_command_text_strips_bot_suffix(self) -> None:
         self.assertEqual(
@@ -257,6 +267,26 @@ class TelegramConnectorTests(unittest.TestCase):
         config = {"telegram": {"default_chat_id": "133126275"}}
         self.assertEqual(telegram_connector.parse_allowed_chat_ids(config), {"133126275"})
 
+    def test_parse_allowed_usernames_normalizes_values(self) -> None:
+        config = {"bridge": {"allowed_usernames": "@Andrej, codex_user"}}
+        self.assertEqual(telegram_connector.parse_allowed_usernames(config), {"andrej", "codex_user"})
+
+    def test_parse_allowed_usernames_supports_onepassword_reference(self) -> None:
+        original_run = telegram_connector.subprocess.run
+        telegram_connector._SECRET_CACHE.clear()
+
+        def fake_run(*args, **kwargs):
+            return subprocess.CompletedProcess(args=args[0], returncode=0, stdout="@Andrej, codex_user\n", stderr="")
+
+        telegram_connector.subprocess.run = fake_run
+        try:
+            config = {"bridge": {"allowed_usernames": "op://Personal/test-bot/allowed_users"}}
+            result = telegram_connector.parse_allowed_usernames(config)
+        finally:
+            telegram_connector.subprocess.run = original_run
+
+        self.assertEqual(result, {"andrej", "codex_user"})
+
     def test_send_text_chunks_splits_long_messages(self) -> None:
         sent_messages: list[str] = []
 
@@ -274,6 +304,31 @@ class TelegramConnectorTests(unittest.TestCase):
 
         self.assertGreater(len(sent_messages), 1)
         self.assertEqual("".join(sent_messages), "a" * 4000)
+
+    def test_send_text_message_preserves_preformatted_html_when_parse_mode_is_html(self) -> None:
+        captured: dict[str, object] = {}
+        original_api_call = telegram_connector.api_call
+
+        def fake_api_call(token: str, method: str, payload: dict[str, object]) -> dict[str, object]:
+            captured["token"] = token
+            captured["method"] = method
+            captured["payload"] = payload
+            return {"ok": True}
+
+        telegram_connector.api_call = fake_api_call
+        try:
+            telegram_connector.send_text_message("token", 42, "Bot commands:\n/update 10", parse_mode="HTML")
+        finally:
+            telegram_connector.api_call = original_api_call
+
+        payload = captured["payload"]
+        assert isinstance(payload, dict)
+        self.assertEqual(captured["token"], "token")
+        self.assertEqual(captured["method"], "sendMessage")
+        self.assertEqual(payload["chat_id"], "42")
+        self.assertEqual(payload["text"], "Bot commands:\n/update 10")
+        self.assertEqual(payload["parse_mode"], "HTML")
+        self.assertTrue(payload["disable_web_page_preview"])
 
     def test_redact_update_for_storage_removes_message_text(self) -> None:
         update = {
@@ -345,6 +400,22 @@ class TelegramConnectorTests(unittest.TestCase):
         self.assertIn("<path>", text)
         self.assertIn("<bot_token>", text)
         self.assertIsNone(payload)
+
+    def test_redact_sensitive_text_masks_secret_refs_and_keys(self) -> None:
+        text = (
+            "op://Personal/test/item Authorization: Bearer abcdefghijklmnop "
+            "OPENAI_API_KEY=sk-123456789012 /Users/alice/file bot123456:ABCDEF"
+        )
+        redacted = telegram_connector.redact_sensitive_text(text)
+        self.assertNotIn("op://Personal/test/item", redacted)
+        self.assertNotIn("abcdefghijklmnop", redacted)
+        self.assertNotIn("sk-123456789012", redacted)
+        self.assertNotIn("/Users/alice/file", redacted)
+        self.assertNotIn("bot123456:ABCDEF", redacted)
+        self.assertIn("<secret_ref>", redacted)
+        self.assertIn("OPENAI_API_KEY=<redacted>", redacted)
+        self.assertIn("<path>", redacted)
+        self.assertIn("<bot_token>", redacted)
 
     def test_resolve_secret_value_reads_onepassword_reference(self) -> None:
         original_run = telegram_connector.subprocess.run
@@ -460,6 +531,104 @@ class TelegramConnectorTests(unittest.TestCase):
         self.assertIn("output_file=another.csv", text)
         self.assertEqual(payload[0]["output_file"], "vcnews.csv")
 
+    def test_fetch_digest_usage_summary_uses_bounded_recent_window(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            db_path = Path(tmp_dir) / "history.sqlite3"
+            conn = sqlite3.connect(db_path)
+            conn.row_factory = sqlite3.Row
+            try:
+                conn.executescript(
+                    """
+                    CREATE TABLE ai_usage_log (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        created_at TEXT NOT NULL,
+                        feature TEXT NOT NULL,
+                        stage TEXT NOT NULL,
+                        channel TEXT,
+                        since TEXT,
+                        until TEXT,
+                        model TEXT NOT NULL,
+                        response_id TEXT,
+                        prompt_cache_key TEXT,
+                        prompt_cache_retention TEXT,
+                        request_index INTEGER,
+                        message_count INTEGER,
+                        system_chars INTEGER,
+                        prompt_chars INTEGER,
+                        shared_prefix_chars INTEGER,
+                        shared_prefix_hash TEXT,
+                        prompt_hash TEXT,
+                        previous_prompt_hash TEXT,
+                        previous_response_id TEXT,
+                        prefix_match_chars_with_previous INTEGER,
+                        prompt_text TEXT,
+                        input_tokens INTEGER,
+                        cached_input_tokens INTEGER,
+                        output_tokens INTEGER,
+                        total_tokens INTEGER,
+                        latency_ms INTEGER,
+                        status TEXT NOT NULL,
+                        error TEXT
+                    );
+                    """
+                )
+                conn.execute(
+                    """
+                    INSERT INTO ai_usage_log (
+                        created_at, feature, stage, channel, since, until, model, response_id, prompt_cache_key,
+                        request_index, message_count, prompt_text, input_tokens, cached_input_tokens, output_tokens,
+                        total_tokens, latency_ms, status
+                    )
+                    VALUES
+                    ('2026-03-23T10:00:00+00:00', 'digest', 'batch', '@vcnews', '2026-03-22', '2026-03-22', 'gpt-5.4-mini', 'resp_1', 'digest:a', 1, 10, 'p1', 100, 50, 20, 120, 200, 'ok'),
+                    ('2026-03-23T10:05:00+00:00', 'digest', 'final', '@vcnews', '2026-03-22', '2026-03-22', 'gpt-5.4-mini', 'resp_2', 'digest:a', 2, 5, 'p2', 90, 10, 18, 108, 210, 'ok'),
+                    ('2026-03-23T10:10:00+00:00', 'digest', 'final', '@other', '2026-03-22', '2026-03-22', 'gpt-5.4-mini', 'resp_3', 'digest:b', 3, 5, 'p3', 80, 0, 16, 96, 220, 'ok')
+                    """
+                )
+                conn.commit()
+            finally:
+                conn.close()
+            summary = telegram_connector.fetch_digest_usage_summary({"paths": {"history_db": str(db_path)}}, row_limit=2)
+        assert summary is not None
+        self.assertEqual(summary["global"]["total_requests"], 2)
+        self.assertEqual(summary["global"]["input_tokens"], 170)
+        self.assertEqual(summary["global"]["cached_input_tokens"], 10)
+
+    def test_format_digest_usage_summary_includes_cached_share(self) -> None:
+        text = telegram_connector.format_digest_usage_summary(
+            {
+                "global": {
+                    "total_requests": 3,
+                    "ok_requests": 2,
+                    "error_requests": 1,
+                    "cached_requests": 2,
+                    "cache_keys": 1,
+                    "first_request_at": "2026-03-23T10:00:00+00:00",
+                    "last_request_at": "2026-03-23T10:10:00+00:00",
+                    "input_tokens": 200,
+                    "cached_input_tokens": 50,
+                    "output_tokens": 40,
+                },
+                "filtered": None,
+                "recent_rows": [
+                    {
+                        "stage": "final",
+                        "status": "ok",
+                        "input_tokens": 100,
+                        "cached_input_tokens": 25,
+                        "output_tokens": 15,
+                    }
+                ],
+                "row_limit": 200,
+            }
+        )
+        self.assertIn("Digest stats:", text)
+        self.assertIn("cached input tokens: 50", text)
+        self.assertIn("cached share of input tokens: 25.0%", text)
+        self.assertIn("analysis window: latest 200 requests", text)
+        self.assertIn("Latest rounds:", text)
+        self.assertIn("final: ok, input=100, cached=25 (25.0%), output=15", text)
+
     def test_project_root_override_points_data_files_to_project_dir(self) -> None:
         original = os.environ.get("TELEGRAM_CONNECTOR_PROJECT_ROOT")
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -550,6 +719,89 @@ class TelegramConnectorTests(unittest.TestCase):
             telegram_connector.send_text_chunks = original_send
 
         self.assertEqual(sent_messages, [])
+
+    def test_handle_history_command_rejects_unknown_user(self) -> None:
+        update = {
+            "update_id": 2,
+            "message": {
+                "date": 123,
+                "text": "/update 10",
+                "chat": {"id": 42, "type": "private"},
+                "from": {"id": 99, "username": "mallory"},
+            },
+        }
+        config = {"bridge": {"allowed_chat_ids": "42", "allowed_user_ids": "7", "allowed_usernames": ""}}
+        original_send = telegram_connector.send_text_message
+        original_run = telegram_connector.subprocess.run
+        captured: dict[str, object] = {}
+
+        def fail_run(*args, **kwargs):
+            raise AssertionError("subprocess.run should not be called for a rejected user")
+
+        telegram_connector.send_text_message = lambda token, chat_id, text, parse_mode=None: captured.update(
+            {"chat_id": chat_id, "text": text}
+        )
+        telegram_connector.subprocess.run = fail_run
+        try:
+            telegram_connector.handle_history_command("bot-token", config, update, secret_env={})
+        finally:
+            telegram_connector.send_text_message = original_send
+            telegram_connector.subprocess.run = original_run
+
+        self.assertEqual(captured["chat_id"], 42)
+        self.assertIn("not allowed", str(captured["text"]))
+
+    def test_handle_history_command_serves_agent_stats_without_subprocess(self) -> None:
+        update = {
+            "update_id": 3,
+            "message": {
+                "date": 123,
+                "text": "/agent-stats",
+                "chat": {"id": 42, "type": "private"},
+                "from": {"id": 7, "username": "alice"},
+            },
+        }
+        config = {"bridge": {"allowed_chat_ids": "42", "agent_stats_row_limit": "200", "text_chunk_size": "3900"}}
+        original_summary = telegram_connector.fetch_digest_usage_summary
+        original_send_chunks = telegram_connector.send_text_chunks
+        original_run = telegram_connector.subprocess.run
+        captured: dict[str, object] = {}
+
+        telegram_connector.fetch_digest_usage_summary = lambda cfg, row_limit: {
+            "global": {
+                "total_requests": 1,
+                "ok_requests": 1,
+                "error_requests": 0,
+                "cached_requests": 1,
+                "cache_keys": 1,
+                "first_request_at": "2026-03-23T10:00:00+00:00",
+                "last_request_at": "2026-03-23T10:00:00+00:00",
+                "input_tokens": 100,
+                "cached_input_tokens": 20,
+                "output_tokens": 15,
+            },
+            "filtered": None,
+            "recent_rows": [
+                {"stage": "final", "status": "ok", "input_tokens": 100, "cached_input_tokens": 20, "output_tokens": 15}
+            ],
+            "row_limit": row_limit,
+        }
+        telegram_connector.send_text_chunks = (
+            lambda token, chat_id, text, chunk_size=3500, parse_mode=None: captured.update({"chat_id": chat_id, "text": text})
+        )
+
+        def fail_run(*args, **kwargs):
+            raise AssertionError("subprocess.run should not be called for /agent-stats")
+
+        telegram_connector.subprocess.run = fail_run
+        try:
+            telegram_connector.handle_history_command("bot-token", config, update, secret_env={})
+        finally:
+            telegram_connector.fetch_digest_usage_summary = original_summary
+            telegram_connector.send_text_chunks = original_send_chunks
+            telegram_connector.subprocess.run = original_run
+        self.assertEqual(captured["chat_id"], 42)
+        self.assertIn("Digest stats:", str(captured["text"]))
 
 
 if __name__ == "__main__":

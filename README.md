@@ -10,6 +10,9 @@ Workspace for local experiments, tools, and reusable operating conventions.
 - [telegram_agent_bot](./telegram_agent_bot/README.md)  
   Standalone Telegram task agent with its own bridge, OpenAI-backed worker, local read-only tools, public web search/fetch, and separate daemon flow.
 
+- [telegram_shared](./telegram_shared/)  
+  Shared infrastructure primitives reused by the Telegram projects: config loading, secret resolution, bridge env helpers, Bot API helpers, formatting, redaction, and OpenAI usage/stats utilities.
+
 - [skills](./skills/README.md)  
   Local Codex skill collection for workspace-specific workflows, including Obsidian knowledge-base generation from engineering articles.
 

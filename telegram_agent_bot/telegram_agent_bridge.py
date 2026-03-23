@@ -1,20 +1,47 @@
 #!/usr/bin/env python3
 import argparse
-import html
 import json
 import os
 import re
 import shlex
-import sqlite3
 import subprocess
 import sys
-import uuid
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-import tomllib
-from urllib import error, request
+
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from telegram_shared import secrets as shared_secrets
+from telegram_shared.ai_usage_stats import fetch_ai_usage_summary as shared_fetch_ai_usage_summary
+from telegram_shared.ai_usage_stats import format_ai_usage_summary as shared_format_ai_usage_summary
+from telegram_shared.bot_api import api_call as shared_api_call
+from telegram_shared.bot_api import append_jsonl_record as shared_append_jsonl_record
+from telegram_shared.bot_api import extract_chat_id as shared_extract_chat_id
+from telegram_shared.bot_api import extract_text as shared_extract_text
+from telegram_shared.bot_api import extract_user_id as shared_extract_user_id
+from telegram_shared.bot_api import extract_username as shared_extract_username
+from telegram_shared.bot_api import fetch_updates as shared_fetch_updates
+from telegram_shared.bot_api import load_offset as shared_load_offset
+from telegram_shared.bot_api import save_offset as shared_save_offset
+from telegram_shared.bot_api import split_text_chunks as shared_split_text_chunks
+from telegram_shared.bridge_env import build_child_env as shared_build_child_env
+from telegram_shared.bridge_env import is_user_allowed as shared_is_user_allowed
+from telegram_shared.bridge_env import parse_allowed_chat_ids as shared_parse_allowed_chat_ids
+from telegram_shared.bridge_env import parse_allowed_user_ids as shared_parse_allowed_user_ids
+from telegram_shared.bridge_env import parse_allowed_usernames as shared_parse_allowed_usernames
+from telegram_shared.command_text import normalize_bridge_command_text as shared_normalize_bridge_command_text
+from telegram_shared.config import get_config_value as shared_get_config_value
+from telegram_shared.config import load_runtime_config as shared_load_runtime_config
+from telegram_shared.formatting import format_inline_telegram_html as shared_format_inline_telegram_html
+from telegram_shared.formatting import format_telegram_html as shared_format_telegram_html
+from telegram_shared.formatting import format_telegram_line as shared_format_telegram_line
+from telegram_shared.redaction import redact_sensitive_text as shared_redact_sensitive_text
 
 
 APP_DIR = Path(__file__).resolve().parent
@@ -25,10 +52,11 @@ RUNTIME_LOCAL_FILE = CONFIG_DIR / "runtime.local.toml"
 DATA_DIR = BASE_DIR / "data"
 OFFSET_FILE = DATA_DIR / "offset.local.json"
 INBOX_FILE = DATA_DIR / "inbox.jsonl"
+OUTBOX_FILE = DATA_DIR / "outbox.jsonl"
 AGENT_DB_FILE = DATA_DIR / "telegram_agent.sqlite3"
 WORKER_FILE = APP_DIR / "telegram_agent_worker.py"
-OP_REFERENCE_PREFIX = "op://"
-_SECRET_CACHE: dict[str, str] = {}
+OP_REFERENCE_PREFIX = shared_secrets.OP_REFERENCE_PREFIX
+_SECRET_CACHE = shared_secrets._SECRET_CACHE
 SUPPORTED_BRIDGE_COMMANDS = {"help", "agent", "agent-stats", "reset"}
 WORKER_SECRET_ENV_MAP = {
     "OPENAI_API_KEY": ("secrets", "openai_api_key", "OpenAI API key"),
@@ -49,6 +77,7 @@ SAFE_SUBPROCESS_ENV_KEYS = {
     "TMPDIR",
     "USER",
 }
+SEND_RETRY_DELAYS = (0.5, 1.0)
 
 
 @dataclass
@@ -64,55 +93,19 @@ class BridgeRuntime:
 
 
 def load_runtime_config() -> dict[str, Any]:
-    if not RUNTIME_LOCAL_FILE.exists():
-        return {}
-    with RUNTIME_LOCAL_FILE.open("rb") as fh:
-        data = tomllib.load(fh)
-    return data if isinstance(data, dict) else {}
+    return shared_load_runtime_config(RUNTIME_LOCAL_FILE)
 
 
 def get_config_value(config: dict[str, Any], section: str, key: str) -> str:
-    section_data = config.get(section, {})
-    if not isinstance(section_data, dict):
-        return ""
-    value = section_data.get(key, "")
-    return str(value).strip()
+    return shared_get_config_value(config, section, key)
 
 
 def resolve_onepassword_secret(reference: str, label: str) -> str:
-    cached = _SECRET_CACHE.get(reference)
-    if cached is not None:
-        return cached
-    try:
-        completed = subprocess.run(
-            ["op", "read", reference],
-            capture_output=True,
-            text=True,
-            timeout=30,
-            check=False,
-        )
-    except FileNotFoundError as exc:
-        raise SystemExit(
-            f"1Password CLI 'op' is required to resolve {label}. Install 1Password CLI and sign in first."
-        ) from exc
-    except subprocess.TimeoutExpired as exc:
-        raise SystemExit(f"Timed out while resolving {label} from 1Password.") from exc
-    if completed.returncode != 0:
-        raise SystemExit(
-            f"Failed to resolve {label} from 1Password. Make sure 'op' is signed in and the secret reference is valid."
-        )
-    value = completed.stdout.strip()
-    _SECRET_CACHE[reference] = value
-    return value
+    return shared_secrets.resolve_onepassword_secret(reference, label)
 
 
 def resolve_secret_value(raw_value: str, label: str) -> str:
-    value = raw_value.strip()
-    if not value:
-        return ""
-    if value.startswith(OP_REFERENCE_PREFIX):
-        return resolve_onepassword_secret(value, label)
-    return value
+    return shared_secrets.resolve_secret_value(raw_value, label)
 
 
 def require_token() -> str:
@@ -162,30 +155,31 @@ def resolve_bridge_runtime(config: dict[str, Any], *, include_worker_secrets: bo
 
 
 def build_worker_subprocess_env(secret_env: dict[str, str]) -> dict[str, str]:
-    child_env = {key: value for key, value in os.environ.items() if key in SAFE_SUBPROCESS_ENV_KEYS}
-    project_root = os.environ.get("TELEGRAM_AGENT_BOT_PROJECT_ROOT", "").strip()
-    if project_root:
-        child_env["TELEGRAM_AGENT_BOT_PROJECT_ROOT"] = project_root
-    child_env.update({key: value for key, value in secret_env.items() if value})
-    return child_env
+    return shared_build_child_env(
+        secret_env,
+        safe_keys=SAFE_SUBPROCESS_ENV_KEYS,
+        project_root_env_var="TELEGRAM_AGENT_BOT_PROJECT_ROOT",
+    )
 
 
 def parse_allowed_chat_ids(config: dict[str, Any]) -> set[str]:
-    raw = get_config_value(config, "bridge", "allowed_chat_ids")
-    if not raw:
-        default_chat = get_config_value(config, "telegram", "default_chat_id")
-        return {default_chat} if default_chat else set()
-    return {item.strip() for item in raw.split(",") if item.strip()}
+    return shared_parse_allowed_chat_ids(config, get_config_value=get_config_value)
 
 
 def parse_allowed_user_ids(config: dict[str, Any]) -> set[str]:
-    raw = resolve_secret_value(get_config_value(config, "bridge", "allowed_user_ids"), "allowed Telegram user ids")
-    return {item.strip() for item in raw.split(",") if item.strip()}
+    return shared_parse_allowed_user_ids(
+        config,
+        get_config_value=get_config_value,
+        resolve_secret_value=resolve_secret_value,
+    )
 
 
 def parse_allowed_usernames(config: dict[str, Any]) -> set[str]:
-    raw = resolve_secret_value(get_config_value(config, "bridge", "allowed_usernames"), "allowed Telegram usernames")
-    return {item.strip().lower().lstrip("@") for item in raw.split(",") if item.strip()}
+    return shared_parse_allowed_usernames(
+        config,
+        get_config_value=get_config_value,
+        resolve_secret_value=resolve_secret_value,
+    )
 
 
 def resolve_text_chunk_size(config: dict[str, Any] | None = None) -> int:
@@ -219,27 +213,12 @@ def resolve_default_command(config: dict[str, Any] | None = None) -> str:
 
 
 def normalize_bridge_command_text(text: str, config: dict[str, Any] | None = None, default_command: str = "") -> str:
-    raw = text.strip()
-    if not raw:
-        return ""
-    parts = shlex.split(raw)
-    if not parts:
-        return ""
-    command = parts[0].strip()
-    if command.startswith("/"):
-        bare = command[1:]
-        if "@" in bare:
-            bare = bare.split("@", 1)[0]
-        parts[0] = f"/{bare.lower()}"
-        return " ".join(parts)
-    normalized = command.lower()
-    if normalized in SUPPORTED_BRIDGE_COMMANDS:
-        parts[0] = f"/{normalized}"
-        return " ".join(parts)
     active_default_command = default_command or resolve_default_command(config)
-    if active_default_command:
-        return f"/{active_default_command} {raw}".strip()
-    return raw
+    return shared_normalize_bridge_command_text(
+        text,
+        supported_commands=SUPPORTED_BRIDGE_COMMANDS,
+        default_command=active_default_command,
+    )
 
 
 def sanitize_text_for_storage(text: str) -> str:
@@ -258,24 +237,7 @@ def resolve_worker_path(config: dict[str, Any]) -> Path:
 
 
 def api_call(token: str, method: str, payload: dict[str, Any] | None = None) -> Any:
-    url = f"https://api.telegram.org/bot{token}/{method}"
-    data = None
-    headers = {}
-    if payload is not None:
-        data = json.dumps(payload).encode("utf-8")
-        headers["Content-Type"] = "application/json"
-    req = request.Request(url, data=data, headers=headers, method="POST" if data else "GET")
-    try:
-        with request.urlopen(req, timeout=65) as resp:
-            response = json.loads(resp.read().decode("utf-8"))
-    except error.HTTPError as exc:
-        raise SystemExit(f"Telegram API HTTP {exc.code} while calling {method}.") from exc
-    except error.URLError as exc:
-        raise SystemExit(f"Telegram API request failed while calling {method}.") from exc
-    if not response.get("ok"):
-        description = response.get("description") or "request failed"
-        raise SystemExit(f"Telegram API error while calling {method}: {description}")
-    return response["result"]
+    return shared_api_call(token, method, payload)
 
 
 def ensure_data_dir() -> None:
@@ -283,18 +245,11 @@ def ensure_data_dir() -> None:
 
 
 def load_offset() -> int | None:
-    if not OFFSET_FILE.exists():
-        return None
-    try:
-        data = json.loads(OFFSET_FILE.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
-        return None
-    return data.get("offset")
+    return shared_load_offset(OFFSET_FILE)
 
 
 def save_offset(offset: int) -> None:
-    ensure_data_dir()
-    OFFSET_FILE.write_text(json.dumps({"offset": offset}, ensure_ascii=True, indent=2), encoding="utf-8")
+    shared_save_offset(OFFSET_FILE, offset)
 
 
 def redact_update_for_storage(update: dict[str, Any]) -> dict[str, Any]:
@@ -321,48 +276,70 @@ def redact_update_for_storage(update: dict[str, Any]) -> dict[str, Any]:
 
 
 def append_inbox(update: dict[str, Any]) -> None:
-    ensure_data_dir()
-    with INBOX_FILE.open("a", encoding="utf-8") as fh:
-        fh.write(json.dumps(redact_update_for_storage(update), ensure_ascii=False) + "\n")
+    shared_append_jsonl_record(INBOX_FILE, redact_update_for_storage(update))
+
+
+def build_outbox_record(
+    *,
+    chat_id: str | int,
+    text: str,
+    formatted_text: str,
+    status: str,
+    attempt: int,
+    error: str = "",
+    api_result: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    preview = sanitize_text_for_storage(redact_sensitive_text(text))
+    formatted_preview = sanitize_text_for_storage(redact_sensitive_text(formatted_text))
+    payload: dict[str, Any] = {
+        "created_at": now_utc(),
+        "direction": "out",
+        "chat_id": str(chat_id),
+        "status": status,
+        "attempt": attempt,
+        "text_length": len(text),
+        "formatted_text_length": len(formatted_text),
+        "text_preview": preview[:200],
+        "formatted_preview": formatted_preview[:200],
+    }
+    if error:
+        payload["error"] = redact_sensitive_text(error)
+    if isinstance(api_result, dict):
+        payload["message_id"] = api_result.get("message_id")
+    return payload
+
+
+def append_outbox_record(record: dict[str, Any]) -> None:
+    shared_append_jsonl_record(OUTBOX_FILE, record)
+
+
+def log_bridge_error(message: str) -> None:
+    print(redact_sensitive_text(message), file=sys.stderr, flush=True)
 
 
 def extract_text(update: dict[str, Any]) -> str:
-    message = update.get("message") or update.get("edited_message") or {}
-    return (
-        message.get("text")
-        or message.get("caption")
-        or f"<non-text message keys={','.join(sorted(message.keys()))}>"
-    )
+    return shared_extract_text(update)
 
 
 def extract_chat_id(update: dict[str, Any]) -> int | None:
-    message = update.get("message") or update.get("edited_message") or {}
-    chat = message.get("chat") or {}
-    return chat.get("id")
+    return shared_extract_chat_id(update)
 
 
 def extract_user_id(update: dict[str, Any]) -> int | None:
-    message = update.get("message") or update.get("edited_message") or {}
-    user = message.get("from") or {}
-    return user.get("id")
+    return shared_extract_user_id(update)
 
 
 def extract_username(update: dict[str, Any]) -> str:
-    message = update.get("message") or update.get("edited_message") or {}
-    user = message.get("from") or {}
-    return user.get("username") or user.get("first_name") or "unknown"
+    return shared_extract_username(update)
 
 
 def is_user_allowed(update: dict[str, Any], *, allowed_user_ids: set[str], allowed_usernames: set[str]) -> bool:
-    if not allowed_user_ids and not allowed_usernames:
-        return True
-    user_id = extract_user_id(update)
-    username = extract_username(update).lower().lstrip("@")
-    if allowed_user_ids and str(user_id or "") not in allowed_user_ids:
-        return False
-    if allowed_usernames and username not in allowed_usernames:
-        return False
-    return True
+    return shared_is_user_allowed(
+        user_id=extract_user_id(update),
+        username=extract_username(update),
+        allowed_user_ids=allowed_user_ids,
+        allowed_usernames=allowed_usernames,
+    )
 
 
 def extract_date(update: dict[str, Any]) -> str:
@@ -373,77 +350,72 @@ def extract_date(update: dict[str, Any]) -> str:
     return datetime.fromtimestamp(unix_ts, tz=timezone.utc).isoformat()
 
 
+def now_utc() -> str:
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+
+
 def send_text_message(token: str, chat_id: str | int, text: str) -> None:
     formatted_text = format_telegram_html(text)
-    api_call(
-        token,
-        "sendMessage",
-        {
-            "chat_id": str(chat_id),
-            "text": formatted_text,
-            "parse_mode": "HTML",
-            "disable_web_page_preview": True,
-        },
-    )
+    payload = {
+        "chat_id": str(chat_id),
+        "text": formatted_text,
+        "parse_mode": "HTML",
+        "disable_web_page_preview": True,
+    }
+    max_attempts = 1 + len(SEND_RETRY_DELAYS)
+    for attempt in range(1, max_attempts + 1):
+        try:
+            result = api_call(token, "sendMessage", payload)
+        except SystemExit as exc:
+            error_text = str(exc)
+            append_outbox_record(
+                build_outbox_record(
+                    chat_id=chat_id,
+                    text=text,
+                    formatted_text=formatted_text,
+                    status="failed",
+                    attempt=attempt,
+                    error=error_text,
+                )
+            )
+            log_bridge_error(f"sendMessage failed attempt={attempt} chat_id={chat_id}: {error_text}")
+            if attempt >= max_attempts:
+                raise
+            time.sleep(SEND_RETRY_DELAYS[attempt - 1])
+            continue
+        append_outbox_record(
+            build_outbox_record(
+                chat_id=chat_id,
+                text=text,
+                formatted_text=formatted_text,
+                status="sent",
+                attempt=attempt,
+                api_result=result if isinstance(result, dict) else None,
+            )
+        )
+        return
 
 
 def send_text_chunks(token: str, chat_id: str | int, text: str, chunk_size: int | None = None) -> None:
     active_chunk_size = resolve_text_chunk_size() if chunk_size is None else chunk_size
-    remaining = text.strip() or "<empty response>"
-    if len(remaining) <= min(4096, active_chunk_size):
-        send_text_message(token, chat_id, remaining)
-        return
-    while remaining:
-        chunk = remaining[:active_chunk_size]
-        split_at = chunk.rfind("\n")
-        if split_at > 100:
-            chunk = chunk[:split_at]
+    for chunk in shared_split_text_chunks(text, active_chunk_size):
         send_text_message(token, chat_id, chunk)
-        remaining = remaining[len(chunk):].lstrip()
 
 
 def format_telegram_html(text: str) -> str:
-    normalized = text.replace("\r\n", "\n").replace("\r", "\n").strip() or "<empty response>"
-    normalized = re.sub(r"[ \t]+\n", "\n", normalized)
-    normalized = re.sub(r"\n{3,}", "\n\n", normalized)
-    lines = [format_telegram_line(line) for line in normalized.split("\n")]
-    return "\n".join(lines)
+    return shared_format_telegram_html(text)
 
 
 def format_telegram_line(line: str) -> str:
-    stripped = line.strip()
-    if not stripped:
-        return ""
-    if stripped.startswith(("- ", "* ")):
-        return f"• {format_inline_telegram_html(stripped[2:].strip())}"
-    if re.fullmatch(r"/[a-z0-9_@ -]+", stripped, flags=re.IGNORECASE):
-        return f"<code>{html.escape(stripped)}</code>"
-    if stripped.endswith(":") and len(stripped) <= 80:
-        return f"<b>{html.escape(stripped[:-1])}:</b>"
-    return format_inline_telegram_html(stripped)
+    return shared_format_telegram_line(line)
 
 
 def format_inline_telegram_html(text: str) -> str:
-    escaped = html.escape(text)
-    escaped = re.sub(r"`([^`\n]+)`", r"<code>\1</code>", escaped)
-    escaped = re.sub(r"\*\*([^*\n]+)\*\*", r"<b>\1</b>", escaped)
-    return escaped
+    return shared_format_inline_telegram_html(text)
 
 
 def redact_sensitive_text(text: str) -> str:
-    if not text:
-        return text
-    redacted = text
-    redacted = re.sub(r"/Users/[^\s\"']+", "<path>", redacted)
-    redacted = re.sub(r"/home/[^\s\"']+", "<path>", redacted)
-    redacted = re.sub(r"/tmp/[^\s\"']+", "<path>", redacted)
-    redacted = re.sub(r"op://[^\s\"']+", "<secret_ref>", redacted)
-    redacted = re.sub(r"bot\d{6,}:[A-Za-z0-9_-]+", "<bot_token>", redacted)
-    redacted = re.sub(r"\bsk-[A-Za-z0-9_-]{12,}\b", "<api_key>", redacted)
-    redacted = re.sub(r"(?i)authorization:\s*bearer\s+\S+", "Authorization: Bearer <redacted>", redacted)
-    redacted = re.sub(r"(?i)\bbearer\s+[A-Za-z0-9._-]{12,}\b", "Bearer <redacted>", redacted)
-    redacted = re.sub(r"(?i)\b(openai[_ -]?api[_ -]?key|bot[_ -]?token)\b\s*[:=]\s*\S+", r"\1=<redacted>", redacted)
-    return redacted
+    return shared_redact_sensitive_text(text)
 
 
 def build_safe_command_response(command_text: str, completed: subprocess.CompletedProcess[str]) -> tuple[str, dict[str, Any] | None]:
@@ -515,141 +487,35 @@ def build_worker_command(text: str) -> list[str] | None:
 
 
 def fetch_agent_usage_summary(*, chat_id: str, row_limit: int, recent_rounds_limit: int = 3) -> dict[str, Any] | None:
-    if not AGENT_DB_FILE.exists():
-        return None
-    conn = sqlite3.connect(AGENT_DB_FILE)
-    conn.row_factory = sqlite3.Row
-    try:
-        global_row = conn.execute(
-            """
-            WITH recent AS (
-                SELECT *
-                FROM ai_usage_log
-                WHERE feature = 'agent'
-                ORDER BY id DESC
-                LIMIT ?
-            )
-            SELECT
-                COUNT(*) AS total_requests,
-                SUM(CASE WHEN status = 'ok' THEN 1 ELSE 0 END) AS ok_requests,
-                SUM(CASE WHEN status = 'error' THEN 1 ELSE 0 END) AS error_requests,
-                SUM(CASE WHEN COALESCE(cached_input_tokens, 0) > 0 THEN 1 ELSE 0 END) AS cached_requests,
-                COUNT(DISTINCT prompt_cache_key) AS cache_keys,
-                MIN(created_at) AS first_request_at,
-                MAX(created_at) AS last_request_at,
-                SUM(COALESCE(input_tokens, 0)) AS input_tokens,
-                SUM(COALESCE(cached_input_tokens, 0)) AS cached_input_tokens,
-                SUM(COALESCE(output_tokens, 0)) AS output_tokens
-            FROM recent
-            """
-            ,
-            (row_limit,),
-        ).fetchone()
-        chat_row = conn.execute(
-            """
-            WITH recent AS (
-                SELECT *
-                FROM ai_usage_log
-                WHERE feature = 'agent'
-                ORDER BY id DESC
-                LIMIT ?
-            )
-            SELECT
-                COUNT(*) AS total_requests,
-                SUM(CASE WHEN status = 'ok' THEN 1 ELSE 0 END) AS ok_requests,
-                SUM(CASE WHEN status = 'error' THEN 1 ELSE 0 END) AS error_requests,
-                SUM(CASE WHEN COALESCE(cached_input_tokens, 0) > 0 THEN 1 ELSE 0 END) AS cached_requests,
-                MIN(created_at) AS first_request_at,
-                MAX(created_at) AS last_request_at,
-                SUM(COALESCE(input_tokens, 0)) AS input_tokens,
-                SUM(COALESCE(cached_input_tokens, 0)) AS cached_input_tokens,
-                SUM(COALESCE(output_tokens, 0)) AS output_tokens
-            FROM recent
-            WHERE channel = ?
-            """,
-            (row_limit, chat_id),
-        ).fetchone()
-        recent_rows = conn.execute(
-            """
-            WITH recent AS (
-                SELECT *
-                FROM ai_usage_log
-                WHERE feature = 'agent'
-                ORDER BY id DESC
-                LIMIT ?
-            )
-            SELECT created_at, stage, channel, status, input_tokens, cached_input_tokens,
-                   output_tokens, prompt_cache_key
-            FROM recent
-            ORDER BY id DESC
-            LIMIT ?
-            """,
-            (row_limit, recent_rounds_limit),
-        ).fetchall()
-    finally:
-        conn.close()
-    if global_row is None or int(global_row["total_requests"] or 0) == 0:
+    summary = shared_fetch_ai_usage_summary(
+        AGENT_DB_FILE,
+        feature="agent",
+        row_limit=row_limit,
+        filter_channel=chat_id,
+        recent_rows_limit=recent_rounds_limit,
+    )
+    if summary is None:
         return None
     return {
-        "global": dict(global_row),
-        "chat": dict(chat_row) if chat_row is not None else None,
-        "recent_rows": [dict(row) for row in recent_rows],
-        "row_limit": row_limit,
+        "global": summary["global"],
+        "chat": summary.get("filtered"),
+        "recent_rows": summary["recent_rows"],
+        "row_limit": summary["row_limit"],
     }
 
 
 def format_agent_usage_summary(summary: dict[str, Any], *, chat_id: str) -> str:
-    global_stats = summary["global"]
-    chat_stats = summary.get("chat") or {}
-    recent_rows = summary.get("recent_rows") or []
-    row_limit = int(summary.get("row_limit") or 0)
-    global_input = int(global_stats.get("input_tokens") or 0)
-    global_cached = int(global_stats.get("cached_input_tokens") or 0)
-    global_saved_pct = round((global_cached / global_input) * 100, 1) if global_input > 0 else 0.0
-    lines = [
-        "Agent stats:",
-        f"- analysis window: latest {row_limit} requests",
-        f"- all requests: {int(global_stats.get('total_requests') or 0)}",
-        f"- ok: {int(global_stats.get('ok_requests') or 0)}",
-        f"- errors: {int(global_stats.get('error_requests') or 0)}",
-        f"- requests with cached input: {int(global_stats.get('cached_requests') or 0)}",
-        f"- cache keys: {int(global_stats.get('cache_keys') or 0)}",
-        f"- input tokens: {global_input}",
-        f"- cached input tokens: {global_cached}",
-        f"- output tokens: {int(global_stats.get('output_tokens') or 0)}",
-        f"- cached share of input tokens: {global_saved_pct}%",
-    ]
-    first_request_at = str(global_stats.get("first_request_at") or "").strip()
-    last_request_at = str(global_stats.get("last_request_at") or "").strip()
-    if first_request_at:
-        lines.append(f"- first request: {first_request_at}")
-    if last_request_at:
-        lines.append(f"- last request: {last_request_at}")
-    chat_total = int(chat_stats.get("total_requests") or 0)
-    if chat_total > 0:
-        chat_input = int(chat_stats.get("input_tokens") or 0)
-        chat_cached = int(chat_stats.get("cached_input_tokens") or 0)
-        chat_saved_pct = round((chat_cached / chat_input) * 100, 1) if chat_input > 0 else 0.0
-        lines.extend(
-            [
-                "",
-                f"This chat ({chat_id}):",
-                f"- requests: {chat_total}",
-                f"- cached input tokens: {chat_cached}",
-                f"- cached share of input tokens: {chat_saved_pct}%",
-            ]
-        )
-    if recent_rows:
-        lines.append("")
-        lines.append("Latest rounds:")
-        for row in recent_rows:
-            input_tokens = int(row.get("input_tokens") or 0)
-            cached_tokens = int(row.get("cached_input_tokens") or 0)
-            cached_pct = round((cached_tokens / input_tokens) * 100, 1) if input_tokens > 0 else 0.0
-            lines.append(
-                f"- {row.get('stage')}: {row.get('status')}, input={input_tokens}, cached={cached_tokens} ({cached_pct}%), output={int(row.get('output_tokens') or 0)}"
-            )
-    return "\n".join(lines)
+    return shared_format_ai_usage_summary(
+        {
+            "global": summary["global"],
+            "filtered": summary.get("chat"),
+            "recent_rows": summary.get("recent_rows") or [],
+            "row_limit": summary.get("row_limit"),
+        },
+        title="Agent stats",
+        subject_label="This chat",
+        subject_value=chat_id,
+    )
 
 
 def handle_agent_command(runtime: BridgeRuntime, update: dict[str, Any]) -> None:
@@ -752,13 +618,7 @@ def cmd_send(args: argparse.Namespace) -> int:
 
 
 def fetch_updates(token: str, offset: int | None, timeout: int) -> list[dict[str, Any]]:
-    payload: dict[str, Any] = {"timeout": timeout, "allowed_updates": ["message", "edited_message"]}
-    if offset is not None:
-        payload["offset"] = offset
-    result = api_call(token, "getUpdates", payload)
-    if not isinstance(result, list):
-        raise SystemExit(f"Unexpected getUpdates payload: {result}")
-    return result
+    return shared_fetch_updates(token, offset, timeout, api_call_func=api_call)
 
 
 def print_update(update: dict[str, Any], runtime: BridgeRuntime) -> None:
@@ -791,9 +651,15 @@ def cmd_listen(args: argparse.Namespace) -> int:
             if args.echo:
                 chat_id = extract_chat_id(update)
                 if chat_id is not None:
-                    send_text_message(runtime.bot_token, chat_id, f"Echo: {extract_text(update)}")
+                    try:
+                        send_text_message(runtime.bot_token, chat_id, f"Echo: {extract_text(update)}")
+                    except SystemExit as exc:
+                        log_bridge_error(f"echo reply failed for update_id={update_id}: {exc}")
             if args.run_commands:
-                handle_agent_command(runtime, update)
+                try:
+                    handle_agent_command(runtime, update)
+                except SystemExit as exc:
+                    log_bridge_error(f"command handling failed for update_id={update_id}: {exc}")
         if args.once:
             return 0
 

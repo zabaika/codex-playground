@@ -13,6 +13,7 @@ Project-specific bot and maintenance rules live in [./AGENTS.md](./AGENTS.md).
 - checks bot connectivity with `getMe`
 - receives incoming messages with long polling via `getUpdates`
 - stores redacted inbound updates in `data/inbox.jsonl`
+- stores redacted outbound reply summaries in `data/outbox.jsonl`
 - remembers the latest processed update offset in `data/offset.local.json`
 - sends outbound messages with `sendMessage`
 - runs a conversational task agent from Telegram
@@ -148,6 +149,8 @@ Bot command notes:
 - `/agent-stats` is handled locally by the bridge and does not spend OpenAI tokens
 - `/agent-stats` reports over a bounded recent window, not over the whole table
 - the bridge sends Telegram replies with explicit `HTML` parse mode and post-processes text for stable readability
+- outbound Telegram replies are written to `data/outbox.jsonl` as redacted summaries
+- `sendMessage` retries transient failures before giving up and logs reply-send errors into launchd stderr
 
 Start the bridge manually:
 

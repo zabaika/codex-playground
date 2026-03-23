@@ -14,6 +14,20 @@ The goal is to standardize:
 - reproducible local service setup
 - test expectations before changes ship
 
+## Document Roles
+
+Keep documentation split by responsibility:
+
+- `RULEBOOK.md`: cross-project engineering policy, security rules, daemon/runtime conventions, shared architecture guidance
+- `<project>/AGENTS.md`: project-specific coding-agent contract, boundaries, and local checklists
+- `<project>/README.md`: operator-facing setup, config, commands, runtime behavior, and troubleshooting
+
+Rules:
+
+- put a rule in only one primary place unless a short pointer is needed elsewhere
+- prefer links to duplication when a project follows a repository-wide rule
+- if behavior changes, update code, tests, and the relevant source-of-truth document in the same change
+
 ## 1. Architecture Rules
 
 Use a split architecture instead of a single monolith:

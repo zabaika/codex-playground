@@ -2,6 +2,7 @@
 # Keep runtime.local.toml untracked.
 
 [telegram]
+# Default Telegram chat id used by manual send commands and as a fallback for chat allowlist.
 default_chat_id = ""
 
 [telethon]
@@ -16,9 +17,16 @@ public_channel_mode = "bot"
 private_channel_mode = "user"
 
 [bridge]
+# Allowed Telegram chat ids. Empty = do not restrict by chat.
 allowed_chat_ids = ""
+# Allowed Telegram user ids from message.from.id. Empty = do not restrict by stable user id.
+allowed_user_ids = ""
+# Allowed Telegram usernames from message.from.username. Empty = do not restrict by username.
+allowed_usernames = ""
 # Preferred Telegram text message chunk size for long replies. Keep it below 4096.
 text_chunk_size = "3900"
+# Maximum number of latest ai_usage_log rows scanned by /agent-stats.
+agent_stats_row_limit = "200"
 # history_client_path = "/absolute/path/to/telegram_history_client.py"
 
 [channels]

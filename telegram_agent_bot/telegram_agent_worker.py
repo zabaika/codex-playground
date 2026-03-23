@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 import argparse
-import hashlib
 import ipaddress
 import json
 import os
@@ -16,8 +15,24 @@ from html import unescape
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
-import tomllib
 from urllib import error, parse, request
+
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from telegram_shared import secrets as shared_secrets
+from telegram_shared.config import get_config_value as shared_get_config_value
+from telegram_shared.config import load_runtime_config as shared_load_runtime_config
+from telegram_shared.openai_usage import OpenAIUsage
+from telegram_shared.openai_usage import PromptCacheInfo
+from telegram_shared.openai_usage import build_prompt_cache_info as shared_build_prompt_cache_info
+from telegram_shared.openai_usage import common_prefix_length as shared_common_prefix_length
+from telegram_shared.openai_usage import extract_usage as shared_extract_usage
+from telegram_shared.openai_usage import hash_cache_key as shared_hash_cache_key
+from telegram_shared.openai_usage import log_openai_usage as shared_log_openai_usage
+from telegram_shared.openai_usage import short_hash as shared_short_hash
 
 
 APP_DIR = Path(__file__).resolve().parent
@@ -36,8 +51,8 @@ DEFAULT_FETCH_CHAR_LIMIT = 12000
 MAX_LOCAL_MATCHES = 50
 MAX_FILE_LINES = 400
 MAX_DIRECTORY_ENTRIES = 200
-OP_REFERENCE_PREFIX = "op://"
-_SECRET_CACHE: dict[str, str] = {}
+OP_REFERENCE_PREFIX = shared_secrets.OP_REFERENCE_PREFIX
+_SECRET_CACHE = shared_secrets._SECRET_CACHE
 
 SCHEMA_SQL = """
 PRAGMA journal_mode = WAL;
@@ -79,26 +94,6 @@ CREATE INDEX IF NOT EXISTS idx_ai_usage_log_cache_key ON ai_usage_log(prompt_cac
 """
 
 
-@dataclass
-class OpenAIUsage:
-    input_tokens: int
-    cached_input_tokens: int
-    output_tokens: int
-    total_tokens: int
-    latency_ms: int
-
-
-@dataclass
-class PromptCacheInfo:
-    cache_key: str
-    cache_retention: str
-    system_chars: int
-    prompt_chars: int
-    shared_prefix_chars: int
-    shared_prefix_hash: str
-    prompt_hash: str
-
-
 class HTMLTextExtractor(HTMLParser):
     def __init__(self) -> None:
         super().__init__()
@@ -127,55 +122,19 @@ class HTMLTextExtractor(HTMLParser):
 
 
 def load_runtime_config() -> dict[str, Any]:
-    if not RUNTIME_LOCAL_FILE.exists():
-        return {}
-    with RUNTIME_LOCAL_FILE.open("rb") as fh:
-        data = tomllib.load(fh)
-    return data if isinstance(data, dict) else {}
+    return shared_load_runtime_config(RUNTIME_LOCAL_FILE)
 
 
 def get_config_value(config: dict[str, Any], section: str, key: str) -> str:
-    section_data = config.get(section, {})
-    if not isinstance(section_data, dict):
-        return ""
-    value = section_data.get(key, "")
-    return str(value).strip()
+    return shared_get_config_value(config, section, key)
 
 
 def resolve_onepassword_secret(reference: str, label: str) -> str:
-    cached = _SECRET_CACHE.get(reference)
-    if cached is not None:
-        return cached
-    try:
-        completed = subprocess.run(
-            ["op", "read", reference],
-            capture_output=True,
-            text=True,
-            timeout=30,
-            check=False,
-        )
-    except FileNotFoundError as exc:
-        raise SystemExit(
-            f"1Password CLI 'op' is required to resolve {label}. Install 1Password CLI and sign in first."
-        ) from exc
-    except subprocess.TimeoutExpired as exc:
-        raise SystemExit(f"Timed out while resolving {label} from 1Password.") from exc
-    if completed.returncode != 0:
-        raise SystemExit(
-            f"Failed to resolve {label} from 1Password. Make sure 'op' is signed in and the secret reference is valid."
-        )
-    value = completed.stdout.strip()
-    _SECRET_CACHE[reference] = value
-    return value
+    return shared_secrets.resolve_onepassword_secret(reference, label)
 
 
 def resolve_secret_value(raw_value: str, label: str) -> str:
-    value = raw_value.strip()
-    if not value:
-        return ""
-    if value.startswith(OP_REFERENCE_PREFIX):
-        return resolve_onepassword_secret(value, label)
-    return value
+    return shared_secrets.resolve_secret_value(raw_value, label)
 
 
 def parse_int(value: str, default: int, *, min_value: int = 1, max_value: int | None = None) -> int:
@@ -603,27 +562,15 @@ def api_request(payload: dict[str, Any], api_key: str) -> dict[str, Any]:
 
 
 def extract_usage(response: dict[str, Any]) -> OpenAIUsage:
-    usage = response.get("usage") or {}
-    input_details = usage.get("input_tokens_details") or {}
-    return OpenAIUsage(
-        input_tokens=int(usage.get("input_tokens") or 0),
-        cached_input_tokens=int(input_details.get("cached_tokens") or 0),
-        output_tokens=int(usage.get("output_tokens") or 0),
-        total_tokens=int(usage.get("total_tokens") or 0),
-        latency_ms=max(0, int(response.get("_latency_ms") or 0)),
-    )
+    return shared_extract_usage(response)
 
 
 def common_prefix_length(left: str, right: str) -> int:
-    limit = min(len(left), len(right))
-    idx = 0
-    while idx < limit and left[idx] == right[idx]:
-        idx += 1
-    return idx
+    return shared_common_prefix_length(left, right)
 
 
 def short_hash(text: str) -> str:
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
+    return shared_short_hash(text)
 
 
 def build_prompt_cache_key(*, model: str, scope: str, chat_id: str, allowed_roots: list[Path]) -> str:
@@ -631,9 +578,13 @@ def build_prompt_cache_key(*, model: str, scope: str, chat_id: str, allowed_root
         scope = "global"
     scope_value = chat_id.strip() or "no-chat" if scope == "chat" else "global"
     roots_value = "|".join(str(root) for root in allowed_roots)
-    raw = "|".join([model.strip().lower() or "unknown-model", scope, scope_value, roots_value])
-    digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:24]
-    return f"agent:{digest}"
+    return shared_hash_cache_key(
+        "agent",
+        model.strip().lower() or "unknown-model",
+        scope,
+        scope_value,
+        roots_value,
+    )
 
 
 def build_agent_prompt_prefix(username: str, allowed_roots: list[Path]) -> str:
@@ -701,14 +652,11 @@ def build_round_prompt_text(
 
 
 def build_prompt_cache_info(*, model: str, cache_key: str, system_instructions: str, prompt_text: str, shared_prefix: str) -> PromptCacheInfo:
-    return PromptCacheInfo(
+    return shared_build_prompt_cache_info(
         cache_key=cache_key,
-        cache_retention="in_memory",
-        system_chars=len(system_instructions),
-        prompt_chars=len(prompt_text),
-        shared_prefix_chars=len(shared_prefix),
-        shared_prefix_hash=hashlib.sha256(shared_prefix.encode("utf-8")).hexdigest()[:16],
-        prompt_hash=hashlib.sha256(prompt_text.encode("utf-8")).hexdigest()[:16],
+        system_instructions=system_instructions,
+        prompt_text=prompt_text,
+        shared_prefix=shared_prefix,
     )
 
 
@@ -727,63 +675,24 @@ def log_openai_usage(
     response_id: str | None = None,
     error: str | None = None,
 ) -> None:
-    previous = conn.execute(
-        """
-        SELECT response_id, prompt_hash, prompt_text
-        FROM ai_usage_log
-        WHERE feature = 'agent'
-          AND prompt_cache_key = ?
-        ORDER BY id DESC
-        LIMIT 1
-        """,
-        (cache_info.cache_key,),
-    ).fetchone()
-    previous_response_id = previous["response_id"] if previous else None
-    previous_prompt_hash = previous["prompt_hash"] if previous else None
-    prefix_match_chars_with_previous = 0
-    if previous and previous["prompt_text"]:
-        prefix_match_chars_with_previous = common_prefix_length(previous["prompt_text"], prompt_text)
-    conn.execute(
-        """
-        INSERT INTO ai_usage_log (
-            created_at, feature, stage, channel, since, until, model, response_id,
-            prompt_cache_key, prompt_cache_retention, request_index, message_count,
-            system_chars, prompt_chars, shared_prefix_chars, shared_prefix_hash,
-            prompt_hash, previous_prompt_hash, previous_response_id, prefix_match_chars_with_previous,
-            prompt_text, input_tokens, cached_input_tokens, output_tokens, total_tokens,
-            latency_ms, status, error
-        )
-        VALUES (?, 'agent', ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            now_utc(),
-            stage,
-            channel,
-            model,
-            response_id,
-            cache_info.cache_key,
-            cache_info.cache_retention,
-            request_index,
-            message_count,
-            cache_info.system_chars,
-            cache_info.prompt_chars,
-            cache_info.shared_prefix_chars,
-            cache_info.shared_prefix_hash,
-            cache_info.prompt_hash,
-            previous_prompt_hash,
-            previous_response_id,
-            prefix_match_chars_with_previous,
-            prompt_text,
-            usage.input_tokens if usage else None,
-            usage.cached_input_tokens if usage else None,
-            usage.output_tokens if usage else None,
-            usage.total_tokens if usage else None,
-            usage.latency_ms if usage else None,
-            status,
-            optional_text(error),
-        ),
+    shared_log_openai_usage(
+        conn,
+        feature="agent",
+        created_at=now_utc(),
+        stage=stage,
+        channel=channel,
+        since=None,
+        until=None,
+        model=model,
+        request_index=request_index,
+        message_count=message_count,
+        status=status,
+        cache_info=cache_info,
+        prompt_text=prompt_text,
+        usage=usage,
+        response_id=response_id,
+        error=optional_text(error),
     )
-    conn.commit()
 
 
 def extract_output_text(response: dict[str, Any]) -> str:

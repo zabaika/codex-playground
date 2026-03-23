@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 import argparse
-import hashlib
 import html
 import json
 import os
@@ -16,6 +15,13 @@ from urllib import error, request
 
 import telegram_connector as bridge
 import telegram_history_client as history_client
+from telegram_shared.openai_usage import OpenAIUsage
+from telegram_shared.openai_usage import PromptCacheInfo
+from telegram_shared.openai_usage import build_prompt_cache_info as shared_build_prompt_cache_info
+from telegram_shared.openai_usage import common_prefix_length as shared_common_prefix_length
+from telegram_shared.openai_usage import extract_usage as shared_extract_usage
+from telegram_shared.openai_usage import hash_cache_key as shared_hash_cache_key
+from telegram_shared.openai_usage import log_openai_usage as shared_log_openai_usage
 
 
 APP_DIR = Path(__file__).resolve().parent
@@ -108,26 +114,6 @@ class DigestLimits:
     profile: str
     sync_limit: int
     ai_batch_size: int
-
-
-@dataclass
-class OpenAIUsage:
-    input_tokens: int
-    cached_input_tokens: int
-    output_tokens: int
-    total_tokens: int
-    latency_ms: int
-
-
-@dataclass
-class PromptCacheInfo:
-    cache_key: str
-    cache_retention: str
-    system_chars: int
-    prompt_chars: int
-    shared_prefix_chars: int
-    shared_prefix_hash: str
-    prompt_hash: str
 
 
 @dataclass
@@ -580,27 +566,16 @@ def extract_response_text(response: dict[str, Any]) -> str:
 
 
 def extract_usage(response: dict[str, Any], latency_ms: int) -> OpenAIUsage:
-    usage = response.get("usage") or {}
-    input_details = usage.get("input_tokens_details") or {}
-    return OpenAIUsage(
-        input_tokens=int(usage.get("input_tokens") or 0),
-        cached_input_tokens=int(input_details.get("cached_tokens") or 0),
-        output_tokens=int(usage.get("output_tokens") or 0),
-        total_tokens=int(usage.get("total_tokens") or 0),
-        latency_ms=max(0, int(latency_ms)),
-    )
+    return shared_extract_usage(response, latency_ms)
 
 
 def build_prompt_cache_key(*, model: str, channel: str, profile: str) -> str:
-    raw = "|".join(
-        [
-            model.strip().lower() or "unknown-model",
-            channel.strip().lstrip("@").lower() or "unknown-channel",
-            profile.strip().lower() or "day",
-        ]
+    return shared_hash_cache_key(
+        "digest",
+        model.strip().lower() or "unknown-model",
+        channel.strip().lstrip("@").lower() or "unknown-channel",
+        profile.strip().lower() or "day",
     )
-    digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:24]
-    return f"digest:{digest}"
 
 
 def build_prompt_cache_info(
@@ -620,23 +595,16 @@ def build_prompt_cache_info(
         since=since,
         until=until,
     ).strip()
-    return PromptCacheInfo(
+    return shared_build_prompt_cache_info(
         cache_key=build_prompt_cache_key(model=model, channel=cache_channel, profile=profile),
-        cache_retention="in_memory",
-        system_chars=len(system_instructions),
-        prompt_chars=len(prompt),
-        shared_prefix_chars=len(prefix_text),
-        shared_prefix_hash=hashlib.sha256(prefix_text.encode("utf-8")).hexdigest()[:16],
-        prompt_hash=hashlib.sha256(prompt.encode("utf-8")).hexdigest()[:16],
+        system_instructions=system_instructions,
+        prompt_text=prompt,
+        shared_prefix=prefix_text,
     )
 
 
 def common_prefix_length(left: str, right: str) -> int:
-    limit = min(len(left), len(right))
-    idx = 0
-    while idx < limit and left[idx] == right[idx]:
-        idx += 1
-    return idx
+    return shared_common_prefix_length(left, right)
 
 
 def log_openai_usage(
@@ -656,65 +624,24 @@ def log_openai_usage(
     response_id: str | None = None,
     error: str | None = None,
 ) -> None:
-    previous = conn.execute(
-        """
-        SELECT response_id, prompt_hash, prompt_text
-        FROM ai_usage_log
-        WHERE feature = 'digest'
-          AND prompt_cache_key = ?
-        ORDER BY id DESC
-        LIMIT 1
-        """,
-        (cache_info.cache_key,),
-    ).fetchone()
-    previous_response_id = previous["response_id"] if previous else None
-    previous_prompt_hash = previous["prompt_hash"] if previous else None
-    prefix_match_chars_with_previous = 0
-    if previous and previous["prompt_text"]:
-        prefix_match_chars_with_previous = common_prefix_length(previous["prompt_text"], prompt_text)
-    conn.execute(
-        """
-        INSERT INTO ai_usage_log (
-            created_at, feature, stage, channel, since, until, model, response_id,
-            prompt_cache_key, prompt_cache_retention, request_index, message_count,
-            system_chars, prompt_chars, shared_prefix_chars, shared_prefix_hash,
-            prompt_hash, previous_prompt_hash, previous_response_id, prefix_match_chars_with_previous,
-            input_tokens, cached_input_tokens, output_tokens, total_tokens,
-            latency_ms, status, error, prompt_text
-        )
-        VALUES (?, 'digest', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            history_client.now_utc(),
-            stage,
-            channel,
-            since,
-            until,
-            model,
-            response_id,
-            cache_info.cache_key,
-            cache_info.cache_retention,
-            request_index,
-            message_count,
-            cache_info.system_chars,
-            cache_info.prompt_chars,
-            cache_info.shared_prefix_chars,
-            cache_info.shared_prefix_hash,
-            cache_info.prompt_hash,
-            previous_prompt_hash,
-            previous_response_id,
-            prefix_match_chars_with_previous,
-            usage.input_tokens if usage else None,
-            usage.cached_input_tokens if usage else None,
-            usage.output_tokens if usage else None,
-            usage.total_tokens if usage else None,
-            usage.latency_ms if usage else None,
-            status,
-            history_client.optional_text(error),
-            prompt_text,
-        ),
+    shared_log_openai_usage(
+        conn,
+        feature="digest",
+        created_at=history_client.now_utc(),
+        stage=stage,
+        channel=channel,
+        since=since,
+        until=until,
+        model=model,
+        request_index=request_index,
+        message_count=message_count,
+        status=status,
+        cache_info=cache_info,
+        prompt_text=prompt_text,
+        usage=usage,
+        response_id=response_id,
+        error=history_client.optional_text(error),
     )
-    conn.commit()
 
 
 def run_openai_digest(

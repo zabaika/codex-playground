@@ -6,12 +6,13 @@ Telegram toolkit with two local clients:
 - `telegram_history_client.py`: channel history ingester based on Telethon + SQLite + Tesseract
 
 Project-wide implementation rules and reusable conventions are documented in `../RULEBOOK.md`.
+Project-specific coding guidance is documented in [./AGENTS.md](./AGENTS.md).
 
 ## What it does
 
 - checks bot connectivity with `getMe`
 - receives incoming messages with long polling via `getUpdates`
-- stores raw inbound updates in `data/inbox.jsonl`
+- stores redacted inbound update summaries in `data/inbox.jsonl`
 - remembers the latest processed update offset in `data/offset.local.json`
 - sends outbound messages with `sendMessage`
 - ingests public and private channel history through a Telegram user session
@@ -97,6 +98,11 @@ final_digest_template = """
 # media_root = "/absolute/path/to/telegram_media"
 # tesseract_binary = "/opt/homebrew/bin/tesseract"
 
+[bridge]
+allowed_chat_ids = "<comma-separated chat ids or empty>"
+text_chunk_size = "<500..4096>"
+agent_stats_row_limit = "<20..2000>"
+
 [secrets]
 bot_token = "<secret reference or local secret>"
 api_hash = "<secret reference or local secret>"
@@ -123,6 +129,7 @@ For the history client:
 - `processing.model` is the default OpenAI model used by digest and other analysis commands
 - `processing.ocr` controls whether processing flows should download image media and run OCR by default
 - `bridge.text_chunk_size` controls how long Telegram text replies may grow before the bot splits them into multiple messages
+- `bridge.agent_stats_row_limit` limits `/agent-stats` to the latest N rows from `ai_usage_log`, so the command stays fast as the database grows
 - `[digest]` stores default daily-digest behavior
 - `digest.since` and `digest.until` define the default analysis window; `yesterday` is the recommended morning default
 - `digest.until` uses the same aliases as `since`, but date-only values are expanded to the end of that UTC day
@@ -214,6 +221,7 @@ Bridge commands are accepted in these forms:
 - `/update 10`
 - `update 10`
 - `/update@verter_the_bot 10`
+- `/agent-stats`
 
 Only `chat_id` values from `[bridge].allowed_chat_ids` may run bot-triggered commands.
 If auth is omitted in a bot command, `user` is used by default.
@@ -221,6 +229,8 @@ The leading `/` is optional for supported bridge commands.
 
 Bot command quick reference:
 
+- `/agent-stats`
+  show local OpenAI usage and prompt-cache summary from recent digest runs
 - `/backfill [channel] [limit] [since=...] [until=...] [media] [bot|user|auto]`
   historical load into SQLite
 - `/tail [channel] [limit] [since=...] [until=...] [media|ocr|read] [bot|user|auto]`
@@ -245,6 +255,7 @@ Bot command notes:
 - supported date aliases: `today`, `yesterday`, `week`, `month`, `-Nd`
 - `/digest` keeps processing defaults, sync behavior, batch size, prompts, and schedule in config; bot parameters only override `channel`, `since`, `until`, and auth mode
 - `/digest -3d` is a shorthand for a one-day digest window with `since=-3d` and `until=-3d`
+- `/agent-stats` is handled locally by the bridge and scans only the latest configured `ai_usage_log` rows
 
 Start the bridge manually:
 

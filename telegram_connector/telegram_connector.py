@@ -6,13 +6,39 @@ import re
 import shlex
 import subprocess
 import sys
-import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-import tomllib
 from urllib import error, parse, request
+
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from telegram_shared import secrets as shared_secrets
+from telegram_shared.ai_usage_stats import fetch_ai_usage_summary as shared_fetch_ai_usage_summary
+from telegram_shared.ai_usage_stats import format_ai_usage_summary as shared_format_ai_usage_summary
+from telegram_shared.bot_api import api_call as shared_api_call
+from telegram_shared.bot_api import append_jsonl_record as shared_append_jsonl_record
+from telegram_shared.bot_api import extract_chat_id as shared_extract_chat_id
+from telegram_shared.bot_api import extract_text as shared_extract_text
+from telegram_shared.bot_api import extract_user_id as shared_extract_user_id
+from telegram_shared.bot_api import extract_username as shared_extract_username
+from telegram_shared.bot_api import fetch_updates as shared_fetch_updates
+from telegram_shared.bot_api import load_offset as shared_load_offset
+from telegram_shared.bot_api import save_offset as shared_save_offset
+from telegram_shared.bot_api import split_text_chunks as shared_split_text_chunks
+from telegram_shared.bridge_env import build_child_env as shared_build_child_env
+from telegram_shared.bridge_env import is_user_allowed as shared_is_user_allowed
+from telegram_shared.bridge_env import parse_allowed_chat_ids as shared_parse_allowed_chat_ids
+from telegram_shared.bridge_env import parse_allowed_user_ids as shared_parse_allowed_user_ids
+from telegram_shared.bridge_env import parse_allowed_usernames as shared_parse_allowed_usernames
+from telegram_shared.command_text import normalize_bridge_command_text as shared_normalize_bridge_command_text
+from telegram_shared.config import get_config_value as shared_get_config_value
+from telegram_shared.config import load_runtime_config as shared_load_runtime_config
+from telegram_shared.redaction import redact_sensitive_text as shared_redact_sensitive_text
 
 
 APP_DIR = Path(__file__).resolve().parent
@@ -26,9 +52,9 @@ INBOX_FILE = DATA_DIR / "inbox.jsonl"
 HISTORY_CLIENT_FILE = APP_DIR / "telegram_history_client.py"
 DIGEST_FILE = APP_DIR / "telegram_digest.py"
 EXPORT_DIR = DATA_DIR / "exports"
-OP_REFERENCE_PREFIX = "op://"
-_SECRET_CACHE: dict[str, str] = {}
-SUPPORTED_BRIDGE_COMMANDS = {"help", "ocr", "exportcsv", "ocrhistory", "backfill", "tail", "update", "digest"}
+OP_REFERENCE_PREFIX = shared_secrets.OP_REFERENCE_PREFIX
+_SECRET_CACHE = shared_secrets._SECRET_CACHE
+SUPPORTED_BRIDGE_COMMANDS = {"help", "agent-stats", "ocr", "exportcsv", "ocrhistory", "backfill", "tail", "update", "digest"}
 HISTORY_CLIENT_SECRET_ENV_MAP = {
     "TELEGRAM_API_ID": ("telethon", "api_id", "Telegram API ID"),
     "TELEGRAM_API_HASH": ("secrets", "api_hash", "Telegram API hash"),
@@ -56,55 +82,19 @@ SAFE_SUBPROCESS_ENV_KEYS = {
 
 
 def load_runtime_config() -> dict[str, Any]:
-    if not RUNTIME_LOCAL_FILE.exists():
-        return {}
-    with RUNTIME_LOCAL_FILE.open("rb") as fh:
-        data = tomllib.load(fh)
-    return data if isinstance(data, dict) else {}
+    return shared_load_runtime_config(RUNTIME_LOCAL_FILE)
 
 
 def get_config_value(config: dict[str, Any], section: str, key: str) -> str:
-    section_data = config.get(section, {})
-    if not isinstance(section_data, dict):
-        return ""
-    value = section_data.get(key, "")
-    return str(value).strip()
+    return shared_get_config_value(config, section, key)
 
 
 def resolve_onepassword_secret(reference: str, label: str) -> str:
-    cached = _SECRET_CACHE.get(reference)
-    if cached is not None:
-        return cached
-    try:
-        completed = subprocess.run(
-            ["op", "read", reference],
-            capture_output=True,
-            text=True,
-            timeout=30,
-            check=False,
-        )
-    except FileNotFoundError as exc:
-        raise SystemExit(
-            f"1Password CLI 'op' is required to resolve {label}. Install 1Password CLI and sign in first."
-        ) from exc
-    except subprocess.TimeoutExpired as exc:
-        raise SystemExit(f"Timed out while resolving {label} from 1Password.") from exc
-    if completed.returncode != 0:
-        raise SystemExit(
-            f"Failed to resolve {label} from 1Password. Make sure 'op' is signed in and the secret reference is valid."
-        )
-    value = completed.stdout.strip()
-    _SECRET_CACHE[reference] = value
-    return value
+    return shared_secrets.resolve_onepassword_secret(reference, label)
 
 
 def resolve_secret_value(raw_value: str, label: str) -> str:
-    value = raw_value.strip()
-    if not value:
-        return ""
-    if value.startswith(OP_REFERENCE_PREFIX):
-        return resolve_onepassword_secret(value, label)
-    return value
+    return shared_secrets.resolve_secret_value(raw_value, label)
 
 
 def require_token() -> str:
@@ -140,20 +130,31 @@ def require_bot_token_from_secrets(secret_env: dict[str, str]) -> str:
 
 
 def build_history_client_subprocess_env(secret_env: dict[str, str]) -> dict[str, str]:
-    child_env = {key: value for key, value in os.environ.items() if key in SAFE_SUBPROCESS_ENV_KEYS}
-    project_root = os.environ.get("TELEGRAM_CONNECTOR_PROJECT_ROOT", "").strip()
-    if project_root:
-        child_env["TELEGRAM_CONNECTOR_PROJECT_ROOT"] = project_root
-    child_env.update({key: value for key, value in secret_env.items() if value})
-    return child_env
+    return shared_build_child_env(
+        secret_env,
+        safe_keys=SAFE_SUBPROCESS_ENV_KEYS,
+        project_root_env_var="TELEGRAM_CONNECTOR_PROJECT_ROOT",
+    )
 
 
 def parse_allowed_chat_ids(config: dict[str, Any]) -> set[str]:
-    raw = get_config_value(config, "bridge", "allowed_chat_ids")
-    if not raw:
-        default_chat = get_config_value(config, "telegram", "default_chat_id")
-        return {default_chat} if default_chat else set()
-    return {item.strip() for item in raw.split(",") if item.strip()}
+    return shared_parse_allowed_chat_ids(config, get_config_value=get_config_value)
+
+
+def parse_allowed_user_ids(config: dict[str, Any]) -> set[str]:
+    return shared_parse_allowed_user_ids(
+        config,
+        get_config_value=get_config_value,
+        resolve_secret_value=resolve_secret_value,
+    )
+
+
+def parse_allowed_usernames(config: dict[str, Any]) -> set[str]:
+    return shared_parse_allowed_usernames(
+        config,
+        get_config_value=get_config_value,
+        resolve_secret_value=resolve_secret_value,
+    )
 
 
 def resolve_sync_mode_limit(config: dict[str, Any], mode: str) -> str:
@@ -173,6 +174,16 @@ def resolve_text_chunk_size(config: dict[str, Any] | None = None) -> int:
     return max(500, min(4096, value))
 
 
+def resolve_agent_stats_row_limit(config: dict[str, Any] | None = None) -> int:
+    runtime_config = config if config is not None else load_runtime_config()
+    raw = get_config_value(runtime_config, "bridge", "agent_stats_row_limit")
+    try:
+        value = int(raw) if raw else 200
+    except ValueError:
+        value = 200
+    return max(20, min(2000, value))
+
+
 def is_channel_token(value: str) -> bool:
     token = value.strip()
     if not token:
@@ -190,24 +201,7 @@ def is_channel_token(value: str) -> bool:
 
 
 def normalize_bridge_command_text(text: str) -> str:
-    raw = text.strip()
-    if not raw:
-        return ""
-    parts = shlex.split(raw)
-    if not parts:
-        return ""
-    command = parts[0].strip()
-    if command.startswith("/"):
-        bare = command[1:]
-        if "@" in bare:
-            bare = bare.split("@", 1)[0]
-        parts[0] = f"/{bare.lower()}"
-        return " ".join(parts)
-    normalized = command.lower()
-    if normalized in SUPPORTED_BRIDGE_COMMANDS:
-        parts[0] = f"/{normalized}"
-        return " ".join(parts)
-    return raw
+    return shared_normalize_bridge_command_text(text, supported_commands=SUPPORTED_BRIDGE_COMMANDS)
 
 
 def sanitize_text_for_storage(text: str) -> str:
@@ -267,26 +261,7 @@ def append_option(argv: list[str], name: str, value: str) -> None:
 
 
 def api_call(token: str, method: str, payload: dict[str, Any] | None = None) -> Any:
-    url = f"https://api.telegram.org/bot{token}/{method}"
-    data = None
-    headers = {}
-    if payload is not None:
-        data = json.dumps(payload).encode("utf-8")
-        headers["Content-Type"] = "application/json"
-
-    req = request.Request(url, data=data, headers=headers, method="POST" if data else "GET")
-    try:
-        with request.urlopen(req, timeout=65) as resp:
-            response = json.loads(resp.read().decode("utf-8"))
-    except error.HTTPError as exc:
-        raise SystemExit(f"Telegram API HTTP {exc.code} while calling {method}.") from exc
-    except error.URLError as exc:
-        raise SystemExit(f"Telegram API request failed while calling {method}.") from exc
-
-    if not response.get("ok"):
-        description = response.get("description") or "request failed"
-        raise SystemExit(f"Telegram API error while calling {method}: {description}")
-    return response["result"]
+    return shared_api_call(token, method, payload)
 
 
 def ensure_data_dir() -> None:
@@ -294,18 +269,11 @@ def ensure_data_dir() -> None:
 
 
 def load_offset() -> int | None:
-    if not OFFSET_FILE.exists():
-        return None
-    try:
-        data = json.loads(OFFSET_FILE.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
-        return None
-    return data.get("offset")
+    return shared_load_offset(OFFSET_FILE)
 
 
 def save_offset(offset: int) -> None:
-    ensure_data_dir()
-    OFFSET_FILE.write_text(json.dumps({"offset": offset}, ensure_ascii=True, indent=2), encoding="utf-8")
+    shared_save_offset(OFFSET_FILE, offset)
 
 
 def redact_update_for_storage(update: dict[str, Any]) -> dict[str, Any]:
@@ -332,30 +300,32 @@ def redact_update_for_storage(update: dict[str, Any]) -> dict[str, Any]:
 
 
 def append_inbox(update: dict[str, Any]) -> None:
-    ensure_data_dir()
-    with INBOX_FILE.open("a", encoding="utf-8") as fh:
-        fh.write(json.dumps(redact_update_for_storage(update), ensure_ascii=False) + "\n")
+    shared_append_jsonl_record(INBOX_FILE, redact_update_for_storage(update))
 
 
 def extract_text(update: dict[str, Any]) -> str:
-    message = update.get("message") or update.get("edited_message") or {}
-    return (
-        message.get("text")
-        or message.get("caption")
-        or f"<non-text message keys={','.join(sorted(message.keys()))}>"
-    )
+    return shared_extract_text(update)
 
 
 def extract_chat_id(update: dict[str, Any]) -> int | None:
-    message = update.get("message") or update.get("edited_message") or {}
-    chat = message.get("chat") or {}
-    return chat.get("id")
+    return shared_extract_chat_id(update)
+
+
+def extract_user_id(update: dict[str, Any]) -> int | None:
+    return shared_extract_user_id(update)
 
 
 def extract_username(update: dict[str, Any]) -> str:
-    message = update.get("message") or update.get("edited_message") or {}
-    user = message.get("from") or {}
-    return user.get("username") or user.get("first_name") or "unknown"
+    return shared_extract_username(update)
+
+
+def is_user_allowed(update: dict[str, Any], *, allowed_user_ids: set[str], allowed_usernames: set[str]) -> bool:
+    return shared_is_user_allowed(
+        user_id=extract_user_id(update),
+        username=extract_username(update),
+        allowed_user_ids=allowed_user_ids,
+        allowed_usernames=allowed_usernames,
+    )
 
 
 def extract_date(update: dict[str, Any]) -> str:
@@ -373,6 +343,8 @@ def send_text_message(token: str, chat_id: str | int, text: str, parse_mode: str
     }
     if parse_mode:
         payload["parse_mode"] = parse_mode
+    if parse_mode == "HTML":
+        payload["disable_web_page_preview"] = True
     api_call(token, "sendMessage", payload)
 
 
@@ -384,17 +356,8 @@ def send_text_chunks(
     parse_mode: str | None = None,
 ) -> None:
     active_chunk_size = resolve_text_chunk_size() if chunk_size is None else chunk_size
-    remaining = text.strip() or "<empty response>"
-    if len(remaining) <= min(4096, active_chunk_size):
-        send_text_message(token, chat_id, remaining, parse_mode=parse_mode)
-        return
-    while remaining:
-        chunk = remaining[:active_chunk_size]
-        split_at = chunk.rfind("\n")
-        if split_at > 100:
-            chunk = chunk[:split_at]
+    for chunk in shared_split_text_chunks(text, active_chunk_size):
         send_text_message(token, chat_id, chunk, parse_mode=parse_mode)
-        remaining = remaining[len(chunk):].lstrip()
 
 
 def send_document(token: str, chat_id: str | int, file_path: Path, caption: str = "") -> None:
@@ -441,14 +404,7 @@ def send_document(token: str, chat_id: str | int, file_path: Path, caption: str 
 
 
 def redact_sensitive_text(text: str) -> str:
-    if not text:
-        return text
-    redacted = text
-    redacted = re.sub(r"/Users/[^\s\"']+", "<path>", redacted)
-    redacted = re.sub(r"/home/[^\s\"']+", "<path>", redacted)
-    redacted = re.sub(r"/tmp/[^\s\"']+", "<path>", redacted)
-    redacted = re.sub(r"bot\d{6,}:[A-Za-z0-9_-]+", "<bot_token>", redacted)
-    return redacted
+    return shared_redact_sensitive_text(text)
 
 
 def build_safe_command_response(command_text: str, completed: subprocess.CompletedProcess[str]) -> tuple[str, dict[str, Any] | None]:
@@ -535,6 +491,8 @@ def command_help_text() -> str:
     return (
         "Bot commands:\n"
         "/help\n"
+        "/agent-stats\n"
+        "  show local OpenAI usage and prompt-cache summary for digest runs\n"
         "/backfill [channel] [limit] [since=YYYY-MM-DD] [until=YYYY-MM-DD] [media] [bot|user|auto]\n"
         "  historical load into SQLite\n"
         "/tail [channel] [limit] [since=YYYY-MM-DD] [until=YYYY-MM-DD] [media|ocr|read] [bot|user|auto]\n"
@@ -566,9 +524,28 @@ def command_help_text() -> str:
         "/digest -3d\n"
         "/digest since=week\n"
         "/digest @vcnews since=2026-03-15 until=2026-03-16\n"
+        "/agent-stats\n"
         "/exportcsv @vcnews since=2026-03-15\n"
         "/ocr @vcnews since=2026-03-15 until=2026-03-16"
     )
+
+
+def resolve_history_db_path(config: dict[str, Any]) -> Path:
+    raw = get_config_value(config, "paths", "history_db")
+    return Path(raw) if raw else DATA_DIR / "telegram_history.sqlite3"
+
+
+def fetch_digest_usage_summary(config: dict[str, Any], *, row_limit: int, recent_rounds_limit: int = 3) -> dict[str, Any] | None:
+    return shared_fetch_ai_usage_summary(
+        resolve_history_db_path(config),
+        feature="digest",
+        row_limit=row_limit,
+        recent_rows_limit=recent_rounds_limit,
+    )
+
+
+def format_digest_usage_summary(summary: dict[str, Any]) -> str:
+    return shared_format_ai_usage_summary(summary, title="Digest stats")
 
 
 def build_history_command(text: str) -> list[str] | None:
@@ -717,6 +694,13 @@ def handle_history_command(token: str, config: dict[str, Any], update: dict[str,
     if allowed_chat_ids and str(chat_id) not in allowed_chat_ids:
         send_text_message(token, chat_id, f"Chat {chat_id} is not allowed to run bridge commands.")
         return
+    if not is_user_allowed(
+        update,
+        allowed_user_ids=parse_allowed_user_ids(config),
+        allowed_usernames=parse_allowed_usernames(config),
+    ):
+        send_text_message(token, chat_id, "This Telegram user is not allowed to run bot commands.")
+        return
 
     text = normalize_bridge_command_text(extract_text(update))
     if not text.startswith("/"):
@@ -724,6 +708,13 @@ def handle_history_command(token: str, config: dict[str, Any], update: dict[str,
 
     if text == "/help":
         send_text_message(token, chat_id, command_help_text())
+        return
+    if text == "/agent-stats":
+        summary = fetch_digest_usage_summary(config, row_limit=resolve_agent_stats_row_limit(config))
+        if summary is None:
+            send_text_message(token, chat_id, "Digest stats are not available yet. Run at least one /digest request first.")
+            return
+        send_text_chunks(token, chat_id, format_digest_usage_summary(summary), chunk_size=resolve_text_chunk_size(config))
         return
 
     try:
@@ -803,13 +794,7 @@ def cmd_send(args: argparse.Namespace) -> int:
 
 
 def fetch_updates(token: str, offset: int | None, timeout: int) -> list[dict[str, Any]]:
-    payload: dict[str, Any] = {"timeout": timeout, "allowed_updates": ["message", "edited_message"]}
-    if offset is not None:
-        payload["offset"] = offset
-    result = api_call(token, "getUpdates", payload)
-    if not isinstance(result, list):
-        raise SystemExit(f"Unexpected getUpdates payload: {result}")
-    return result
+    return shared_fetch_updates(token, offset, timeout, api_call_func=api_call)
 
 
 def print_update(update: dict[str, Any]) -> None:

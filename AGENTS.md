@@ -10,23 +10,39 @@ Use it as an entry guide. For repository-wide engineering policy, safety rules, 
 - [README.md](./README.md): top-level project index
 - [RULEBOOK.md](./RULEBOOK.md): global engineering and safety rules
 - [telegram_connector](./telegram_connector): Telegram ingestion, OCR, digest, and bot bridge project
+- [telegram_agent_bot](./telegram_agent_bot): standalone Telegram task agent project
+- [telegram_shared](./telegram_shared): shared infrastructure primitives for Telegram projects
 - [skills](./skills): local skills and related documentation
 
 ## Main Working Area
 
 Most active code currently lives in:
 - [telegram_connector/README.md](./telegram_connector/README.md)
+- [telegram_connector/AGENTS.md](./telegram_connector/AGENTS.md)
 - [telegram_connector/telegram_connector.py](./telegram_connector/telegram_connector.py)
 - [telegram_connector/telegram_history_client.py](./telegram_connector/telegram_history_client.py)
 - [telegram_connector/telegram_digest.py](./telegram_connector/telegram_digest.py)
 - [telegram_connector/tests](./telegram_connector/tests)
+- [telegram_agent_bot/README.md](./telegram_agent_bot/README.md)
+- [telegram_agent_bot/AGENTS.md](./telegram_agent_bot/AGENTS.md)
+- [telegram_agent_bot/telegram_agent_bridge.py](./telegram_agent_bot/telegram_agent_bridge.py)
+- [telegram_agent_bot/telegram_agent_worker.py](./telegram_agent_bot/telegram_agent_worker.py)
+- [telegram_agent_bot/tests](./telegram_agent_bot/tests)
+- [telegram_shared](./telegram_shared)
 
 ## Source Of Truth
 
 When working in `telegram_connector`, prefer these sources in this order:
 - [telegram_connector/README.md](./telegram_connector/README.md) for current user-facing behavior and command surface
+- [telegram_connector/AGENTS.md](./telegram_connector/AGENTS.md) for project-specific coding boundaries
 - [RULEBOOK.md](./RULEBOOK.md) for cross-project rules
 - tests in [telegram_connector/tests](./telegram_connector/tests) for executable expectations
+
+When working in `telegram_agent_bot`, prefer these sources in this order:
+- [telegram_agent_bot/README.md](./telegram_agent_bot/README.md) for user-facing behavior and command surface
+- [telegram_agent_bot/AGENTS.md](./telegram_agent_bot/AGENTS.md) for project-specific coding boundaries
+- [RULEBOOK.md](./RULEBOOK.md) for cross-project rules
+- tests in [telegram_agent_bot/tests](./telegram_agent_bot/tests) for executable expectations
 
 If README, code, and tests disagree, update them together rather than fixing only one layer.
 

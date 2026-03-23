@@ -8,12 +8,20 @@ import shutil
 import sqlite3
 import subprocess
 import sys
-import tomllib
 from dataclasses import dataclass
 from dataclasses import field
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
+
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from telegram_shared import secrets as shared_secrets
+from telegram_shared.config import get_config_value as shared_get_config_value
+from telegram_shared.config import load_runtime_config as shared_load_runtime_config
 
 
 APP_DIR = Path(__file__).resolve().parent
@@ -26,8 +34,8 @@ DB_FILE = DATA_DIR / "telegram_history.sqlite3"
 MEDIA_DIR = DATA_DIR / "media"
 SESSION_DIR = DATA_DIR / "sessions"
 EXPORT_DIR = DATA_DIR / "exports"
-OP_REFERENCE_PREFIX = "op://"
-_SECRET_CACHE: dict[str, str] = {}
+OP_REFERENCE_PREFIX = shared_secrets.OP_REFERENCE_PREFIX
+_SECRET_CACHE = shared_secrets._SECRET_CACHE
 
 
 SCHEMA_SQL = """
@@ -198,19 +206,11 @@ class RuntimeConfig:
 
 
 def load_runtime_config() -> dict[str, Any]:
-    if not RUNTIME_LOCAL_FILE.exists():
-        return {}
-    with RUNTIME_LOCAL_FILE.open("rb") as fh:
-        data = tomllib.load(fh)
-    return data if isinstance(data, dict) else {}
+    return shared_load_runtime_config(RUNTIME_LOCAL_FILE)
 
 
 def get_config_value(config: dict[str, Any], section: str, key: str) -> str:
-    section_data = config.get(section, {})
-    if not isinstance(section_data, dict):
-        return ""
-    value = section_data.get(key, "")
-    return str(value).strip()
+    return shared_get_config_value(config, section, key)
 
 
 def require_int_config_value(config: dict[str, Any], section: str, key: str, *, min_value: int = 0) -> int:
@@ -250,39 +250,11 @@ def get_default_channels(config: dict[str, Any]) -> list[str]:
 
 
 def resolve_onepassword_secret(reference: str, label: str) -> str:
-    cached = _SECRET_CACHE.get(reference)
-    if cached is not None:
-        return cached
-    try:
-        completed = subprocess.run(
-            ["op", "read", reference],
-            capture_output=True,
-            text=True,
-            timeout=30,
-            check=False,
-        )
-    except FileNotFoundError as exc:
-        raise SystemExit(
-            f"1Password CLI 'op' is required to resolve {label}. Install 1Password CLI and sign in first."
-        ) from exc
-    except subprocess.TimeoutExpired as exc:
-        raise SystemExit(f"Timed out while resolving {label} from 1Password.") from exc
-    if completed.returncode != 0:
-        raise SystemExit(
-            f"Failed to resolve {label} from 1Password. Make sure 'op' is signed in and the secret reference is valid."
-        )
-    value = completed.stdout.strip()
-    _SECRET_CACHE[reference] = value
-    return value
+    return shared_secrets.resolve_onepassword_secret(reference, label)
 
 
 def resolve_secret_value(raw_value: str, label: str) -> str:
-    value = raw_value.strip()
-    if not value:
-        return ""
-    if value.startswith(OP_REFERENCE_PREFIX):
-        return resolve_onepassword_secret(value, label)
-    return value
+    return shared_secrets.resolve_secret_value(raw_value, label)
 
 
 def resolve_runtime() -> RuntimeConfig:
