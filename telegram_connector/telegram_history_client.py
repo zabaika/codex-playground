@@ -3,6 +3,7 @@ import argparse
 import csv
 import json
 import os
+import re
 import shutil
 import sqlite3
 import subprocess
@@ -10,7 +11,7 @@ import sys
 import tomllib
 from dataclasses import dataclass
 from dataclasses import field
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -102,8 +103,15 @@ CREATE TABLE IF NOT EXISTS ai_usage_log (
     since TEXT,
     until TEXT,
     model TEXT NOT NULL,
+    response_id TEXT,
+    prompt_cache_key TEXT,
+    prompt_cache_retention TEXT,
     request_index INTEGER,
     message_count INTEGER,
+    system_chars INTEGER,
+    prompt_chars INTEGER,
+    shared_prefix_chars INTEGER,
+    shared_prefix_hash TEXT,
     input_tokens INTEGER,
     cached_input_tokens INTEGER,
     output_tokens INTEGER,
@@ -390,6 +398,19 @@ def migrate_sqlite_schema(conn: sqlite3.Connection) -> None:
         conn.execute("UPDATE channels SET access_hash = NULL WHERE access_hash = ''")
         conn.execute("UPDATE messages SET grouped_id = NULL WHERE grouped_id = ''")
         conn.execute("UPDATE messages SET sender_id = NULL WHERE sender_id = ''")
+        ai_usage_columns = set(table_columns(conn, "ai_usage_log"))
+        ai_usage_additions = {
+            "response_id": "TEXT",
+            "prompt_cache_key": "TEXT",
+            "prompt_cache_retention": "TEXT",
+            "system_chars": "INTEGER",
+            "prompt_chars": "INTEGER",
+            "shared_prefix_chars": "INTEGER",
+            "shared_prefix_hash": "TEXT",
+        }
+        for column_name, column_type in ai_usage_additions.items():
+            if ai_usage_columns and column_name not in ai_usage_columns:
+                conn.execute(f"ALTER TABLE ai_usage_log ADD COLUMN {column_name} {column_type}")
         return
 
     conn.execute("PRAGMA foreign_keys = OFF")
@@ -1030,6 +1051,18 @@ async def sync_messages(runtime: RuntimeConfig, args: argparse.Namespace, mode: 
     plans = allocate_sync_limits(channels, runtime.sync_total_limit, per_channel_limit)
     for channel, limit in plans:
         if limit == 0:
+            results.append(
+                {
+                    "channel": channel,
+                    "mode": mode,
+                    "auth_mode": getattr(args, "auth_mode", None) or runtime.default_auth_mode,
+                    "status": "skipped",
+                    "error": "shared sync_limit budget exhausted before this channel",
+                    "limit": limit,
+                    "since": getattr(args, "since", None),
+                    "until": getattr(args, "until", None),
+                }
+            )
             continue
         channel_args = argparse.Namespace(**vars(args))
         channel_args.limit = None if limit < 0 else limit
@@ -1154,8 +1187,26 @@ def resolve_channel_filter(conn: sqlite3.Connection, channel: str) -> sqlite3.Ro
     return rows[0] if rows else None
 
 
+def resolve_relative_date_token(value: str, today: date) -> str:
+    raw = value.strip().lower()
+    if not raw:
+        return ""
+    if raw == "today":
+        return today.isoformat()
+    if raw == "yesterday":
+        return (today - timedelta(days=1)).isoformat()
+    if raw == "week":
+        return (today - timedelta(days=7)).isoformat()
+    if raw == "month":
+        return (today - timedelta(days=30)).isoformat()
+    match = re.fullmatch(r"-?(\d+)d", raw)
+    if match:
+        return (today - timedelta(days=int(match.group(1)))).isoformat()
+    return value.strip()
+
+
 def parse_filter_datetime(value: str) -> str:
-    value = value.strip()
+    value = resolve_relative_date_token(value, datetime.now(timezone.utc).date()).strip()
     if len(value) == 10:
         return f"{value}T00:00:00+00:00"
     if value.endswith("Z"):
@@ -1168,7 +1219,7 @@ def parse_since_datetime(value: str) -> str:
 
 
 def parse_until_datetime(value: str) -> str:
-    value = value.strip()
+    value = resolve_relative_date_token(value, datetime.now(timezone.utc).date()).strip()
     if len(value) == 10:
         return f"{value}T23:59:59+00:00"
     if value.endswith("Z"):
@@ -1231,6 +1282,7 @@ def export_channel_csv(
             c.username,
             c.title,
             m.message_id,
+            m.grouped_id,
             m.date_utc,
             m.edit_date_utc,
             m.sender_id,
@@ -1242,6 +1294,8 @@ def export_channel_csv(
             m.replies,
             m.has_media,
             m.media_kind,
+            m.content_hash,
+            m.imported_at,
             CASE WHEN ma.local_path IS NOT NULL THEN 1 ELSE 0 END AS has_local_media,
             ma.ocr_status,
             ma.ocr_text
@@ -1272,6 +1326,7 @@ def export_channel_csv(
                 "username",
                 "title",
                 "message_id",
+                "grouped_id",
                 "date_utc",
                 "edit_date_utc",
                 "sender_id",
@@ -1283,6 +1338,8 @@ def export_channel_csv(
                 "replies",
                 "has_media",
                 "media_kind",
+                "content_hash",
+                "imported_at",
                 "has_local_media",
                 "ocr_status",
                 "ocr_text",

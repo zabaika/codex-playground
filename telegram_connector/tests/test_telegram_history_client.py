@@ -1,11 +1,13 @@
 import importlib.util
 import csv
+import io
 import json
 import os
 import sqlite3
 import subprocess
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from datetime import datetime, timezone
 from pathlib import Path
 import asyncio
@@ -415,6 +417,9 @@ user_password = "pw_x"
             header_line = out_path.read_text(encoding="utf-8").splitlines()[0]
         self.assertEqual(row_count, 1)
         self.assertEqual(rows[0]["message_id"], "2")
+        self.assertEqual(rows[0]["grouped_id"], "")
+        self.assertEqual(rows[0]["content_hash"], "h2")
+        self.assertEqual(rows[0]["imported_at"], now)
         self.assertEqual(rows[0]["ocr_text"], "detected text")
         self.assertEqual(rows[0]["has_local_media"], "1")
         self.assertEqual(rows[0]["sender_username"], "vcnews")
@@ -507,6 +512,81 @@ user_password = "pw_x"
             telegram_history_client.parse_until_datetime("2026-03-16"),
             "2026-03-16T23:59:59+00:00",
         )
+
+    def test_parse_filter_datetime_supports_relative_aliases_and_minus_nd(self) -> None:
+        original_datetime = telegram_history_client.datetime
+
+        class FrozenDateTime(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return cls(2026, 3, 18, 12, 0, tzinfo=timezone.utc)
+
+        telegram_history_client.datetime = FrozenDateTime
+        try:
+            self.assertEqual(telegram_history_client.parse_since_datetime("today"), "2026-03-18T00:00:00+00:00")
+            self.assertEqual(telegram_history_client.parse_since_datetime("yesterday"), "2026-03-17T00:00:00+00:00")
+            self.assertEqual(telegram_history_client.parse_since_datetime("week"), "2026-03-11T00:00:00+00:00")
+            self.assertEqual(telegram_history_client.parse_since_datetime("month"), "2026-02-16T00:00:00+00:00")
+            self.assertEqual(telegram_history_client.parse_since_datetime("-3d"), "2026-03-15T00:00:00+00:00")
+            self.assertEqual(telegram_history_client.parse_until_datetime("-3d"), "2026-03-15T23:59:59+00:00")
+        finally:
+            telegram_history_client.datetime = original_datetime
+
+    def test_sync_messages_reports_shared_limit_exhaustion(self) -> None:
+        runtime = telegram_history_client.RuntimeConfig(
+            db_path=Path("/tmp/db.sqlite3"),
+            media_root=Path("/tmp/media"),
+            user_session_name="user",
+            bot_session_name="bot",
+            api_id="1",
+            api_hash="hash",
+            phone="+1",
+            bot_token="token",
+            user_password="pw",
+            tesseract_binary="tesseract",
+            vision_prompt="prompt",
+            sync_batch_size=500,
+            sync_total_limit=1,
+            sync_mode_limits={"backfill": 100, "tail": 100, "update": 100},
+            default_auth_mode="user",
+            public_auth_mode="bot",
+            private_auth_mode="user",
+            default_channels=[],
+        )
+        args = types.SimpleNamespace(
+            channel="@a,@b",
+            limit=1,
+            auth_mode="user",
+            download_media=False,
+            ocr=False,
+            mark_read=False,
+            since=None,
+            until=None,
+            batch_size=0,
+        )
+        original_connect_db = telegram_history_client.connect_db
+        original_init_db = telegram_history_client.init_db
+        original_sync_one_channel = telegram_history_client.sync_one_channel
+        try:
+            telegram_history_client.connect_db = lambda runtime: sqlite3.connect(":memory:")
+            telegram_history_client.init_db = lambda conn: None
+
+            async def fake_sync_one_channel(conn, runtime_arg, args_arg, mode_arg, channel_arg):
+                return {"channel": channel_arg, "processed_messages": 1}
+
+            telegram_history_client.sync_one_channel = fake_sync_one_channel
+            buffer = io.StringIO()
+            with redirect_stdout(buffer):
+                exit_code = asyncio.run(telegram_history_client.sync_messages(runtime, args, "update"))
+        finally:
+            telegram_history_client.connect_db = original_connect_db
+            telegram_history_client.init_db = original_init_db
+            telegram_history_client.sync_one_channel = original_sync_one_channel
+
+        self.assertEqual(exit_code, 0)
+        output = json.loads(buffer.getvalue())
+        self.assertEqual(output[1]["status"], "skipped")
+        self.assertIn("shared sync_limit budget exhausted", output[1]["error"])
 
     def test_media_needs_download_detects_missing_local_file(self) -> None:
         conn = sqlite3.connect(":memory:")

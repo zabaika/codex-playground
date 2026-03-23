@@ -119,6 +119,27 @@ class TelegramConnectorTests(unittest.TestCase):
             ],
         )
 
+    def test_build_history_command_for_digest_with_single_date_token_shortcut(self) -> None:
+        command = telegram_connector.build_history_command("/digest -3d")
+        self.assertEqual(
+            command[1:],
+            [
+                str(telegram_connector.DIGEST_FILE),
+                "run",
+                "--since=-3d",
+                "--until=-3d",
+                "--auth-mode",
+                "user",
+            ],
+        )
+
+    def test_build_history_command_for_exportcsv_supports_negative_day_token(self) -> None:
+        command = telegram_connector.build_history_command("/exportcsv @vcnews since=-4d until=-4d")
+        self.assertEqual(
+            command[2:],
+            ["export-csv", "--channel", "@vcnews", "--since=-4d", "--until=-4d", "--auth-mode", "user"],
+        )
+
     def test_resolve_text_chunk_size_reads_bridge_config(self) -> None:
         self.assertEqual(
             telegram_connector.resolve_text_chunk_size({"bridge": {"text_chunk_size": "3900"}}),
@@ -416,6 +437,17 @@ class TelegramConnectorTests(unittest.TestCase):
         self.assertIn("channel=@another, processed_messages=5", text)
         self.assertIsInstance(payload, list)
 
+    def test_build_safe_command_response_any_includes_limit_exhaustion_reason(self) -> None:
+        completed = subprocess.CompletedProcess(
+            args=["python3"],
+            returncode=0,
+            stdout='[{"channel":"@a","processed_messages":1},{"channel":"@b","status":"skipped","error":"shared sync_limit budget exhausted before this channel","limit":0}]',
+            stderr="",
+        )
+        text, payload = telegram_connector.build_safe_command_response_any("update", completed)
+        self.assertIn("channel=@b, status=skipped, limit=0, error=shared sync_limit budget exhausted before this channel", text)
+        self.assertIsInstance(payload, list)
+
     def test_build_safe_command_response_any_preserves_multi_export_payload(self) -> None:
         completed = subprocess.CompletedProcess(
             args=["python3"],
@@ -485,6 +517,39 @@ class TelegramConnectorTests(unittest.TestCase):
         self.assertEqual(env["TELEGRAM_API_HASH"], "hash")
         self.assertEqual(env["TELEGRAM_BOT_TOKEN"], "token")
         self.assertNotIn("UNUSED", env)
+
+    def test_handle_history_command_suppresses_success_echo_for_digest(self) -> None:
+        update = {
+            "update_id": 1,
+            "message": {
+                "date": 123,
+                "text": "/digest -4d",
+                "chat": {"id": 42, "type": "private"},
+                "from": {"id": 7, "username": "alice"},
+            },
+        }
+        config = {"bridge": {"allowed_chat_ids": "42"}}
+        original_run = telegram_connector.subprocess.run
+        original_send = telegram_connector.send_text_chunks
+        sent_messages: list[str] = []
+
+        def fake_run(*args, **kwargs):
+            return subprocess.CompletedProcess(
+                args=args[0],
+                returncode=0,
+                stdout='{"status":"sent","auth_mode":"user","sync_mode":"backfill","limit_profile":"day","channels":2,"sync_limit":6000,"since":"2026-03-19","until":"2026-03-19"}',
+                stderr="",
+            )
+
+        telegram_connector.subprocess.run = fake_run
+        telegram_connector.send_text_chunks = lambda token, chat_id, text, chunk_size=None: sent_messages.append(text)
+        try:
+            telegram_connector.handle_history_command("bot-token", config, update, secret_env={})
+        finally:
+            telegram_connector.subprocess.run = original_run
+            telegram_connector.send_text_chunks = original_send
+
+        self.assertEqual(sent_messages, [])
 
 
 if __name__ == "__main__":

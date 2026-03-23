@@ -61,6 +61,7 @@ time = "<HH:MM>"
 since = "<today|yesterday|week|month|-Nd|YYYY-MM-DD>"
 until = "<today|yesterday|week|month|-Nd|YYYY-MM-DD>"
 sync_mode = "<backfill|update|tail>"
+mark_read = "<true|false>"
 
 [digest_limits.day]
 sync_limit = "<messages per digest run for a 1-day window>"
@@ -126,6 +127,9 @@ For the history client:
 - `digest.since` and `digest.until` define the default analysis window; `yesterday` is the recommended morning default
 - `digest.until` uses the same aliases as `since`, but date-only values are expanded to the end of that UTC day
 - supported date aliases for `since` / `until`: `today`, `yesterday`, `week`, `month`, `-Nd`
+- `-Nd` means “N days back from the current UTC date”, so with current UTC date `2026-03-23`, `-3d` resolves to `2026-03-20`
+- the same alias logic now applies consistently to `sync`, `export-csv`, `ocr-pending`, and `digest`
+- `digest.mark_read` enables the existing mark-as-read mechanism for digest prep-sync; it only has effect in `user` auth mode
 - `[digest_prompts]` stores the AI system instructions and the per-channel prompt template
 - `digest_limits.day`, `digest_limits.week`, and `digest_limits.month` override digest limits automatically based on the chosen date window
 - `digest_limits.day` applies to any one-day window, including `today`, `yesterday`, or an explicit single date like `since=2026-03-18 until=2026-03-18`
@@ -151,7 +155,8 @@ For the history client:
 - digest delivery is also per channel: as soon as one channel summary is ready, it is sent to Telegram as a separate message
 - a final digest status message is sent only if one or more channels failed during sync or analysis
 - digest prompts are structured so that the stable instruction/rubric prefix comes before the variable batch payload, which helps OpenAI input caching hit more often across repeated calls
-- every OpenAI digest call logs usage into SQLite table `ai_usage_log`, including input tokens, cached input tokens, output tokens, total tokens, latency, stage, and status
+- `digest_prompts.shared_prompt_prefix` is prepended to both intermediate and final prompts so the cache-friendly prefix stays aligned across the whole digest pipeline
+- every OpenAI digest call logs usage into SQLite table `ai_usage_log`, including input tokens, cached input tokens, output tokens, total tokens, latency, stage, status, `response_id`, `prompt_cache_key`, and shared-prefix diagnostics
 
 ### 1Password CLI
 
@@ -221,7 +226,7 @@ Bot command quick reference:
   only messages newer than saved history
 - `/ocrhistory [channel] [limit] [since=...] [until=...] [bot|user|auto]`
   tail + media download + OCR
-- `/digest [channel] [since=...] [until=...] [bot|user|auto]`
+- `/digest [channel] [since=...] [until=...] [today|yesterday|week|month|-Nd] [bot|user|auto]`
   sync + AI digest + Telegram delivery using config defaults
 - `/exportcsv [channel] [limit|since=... until=...] [bot|user|auto]`
   export saved history to CSV
@@ -236,6 +241,7 @@ Bot command notes:
 - `since` means start of UTC day, `until` means end of UTC day for date-only values
 - supported date aliases: `today`, `yesterday`, `week`, `month`, `-Nd`
 - `/digest` keeps processing defaults, sync behavior, batch size, prompts, and schedule in config; bot parameters only override `channel`, `since`, `until`, and auth mode
+- `/digest -3d` is a shorthand for a one-day digest window with `since=-3d` and `until=-3d`
 
 Start the bridge manually:
 
@@ -511,6 +517,7 @@ Additional notes:
 - `until` is optional
 - when omitted, export goes through the newest saved message
 - multi-channel export creates one CSV per channel
+- CSV now also includes additional normalized message-analysis fields from `messages`, including `grouped_id`, `content_hash`, and `imported_at`
 
 #### `ocrhistory`
 

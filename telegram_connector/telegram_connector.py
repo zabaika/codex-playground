@@ -259,6 +259,13 @@ def resolve_history_client_path(config: dict[str, Any]) -> Path:
     return Path(raw) if raw else HISTORY_CLIENT_FILE
 
 
+def append_option(argv: list[str], name: str, value: str) -> None:
+    if value.startswith("-"):
+        argv.append(f"{name}={value}")
+    else:
+        argv.extend([name, value])
+
+
 def api_call(token: str, method: str, payload: dict[str, Any] | None = None) -> Any:
     url = f"https://api.telegram.org/bot{token}/{method}"
     data = None
@@ -481,6 +488,11 @@ def build_safe_command_response(command_text: str, completed: subprocess.Complet
         for key in safe_keys:
             if key in json_output and json_output[key] not in {None, ""}:
                 lines.append(f"{key}: {json_output[key]}")
+        if "error" in json_output and json_output["error"] not in {None, ""}:
+            lines.append(f"error: {redact_sensitive_text(str(json_output['error']))}")
+        if "errors" in json_output and json_output["errors"]:
+            for item in json_output["errors"]:
+                lines.append(f"error: {redact_sensitive_text(str(item))}")
     elif error_output:
         lines.append(f"error: {error_output}")
     elif output:
@@ -498,13 +510,15 @@ def build_safe_command_response_any(command_text: str, completed: subprocess.Com
                 return build_safe_command_response(command_text, completed)
             if isinstance(parsed, list) and all(isinstance(item, dict) for item in parsed):
                 lines = [f"Command: {command_text}", f"Status: {'ok' if completed.returncode == 0 else f'failed ({completed.returncode})'}"]
-                safe_keys = ["channel", "channel_id", "mode", "auth_mode", "processed_messages", "skipped_existing", "row_count", "output_file"]
+                safe_keys = ["channel", "channel_id", "mode", "auth_mode", "status", "processed_messages", "skipped_existing", "row_count", "output_file", "limit", "since", "until"]
                 safe_keys += ["current_read_max_id", "marked_read", "marked_read_from", "marked_read_until"]
                 for item in parsed:
                     summary = []
                     for key in safe_keys:
                         if key in item and item[key] not in {None, ""}:
                             summary.append(f"{key}={item[key]}")
+                    if item.get("error"):
+                        summary.append(f"error={redact_sensitive_text(str(item['error']))}")
                     lines.append(", ".join(summary))
                 return "\n".join(lines), parsed
         except json.JSONDecodeError:
@@ -524,7 +538,7 @@ def command_help_text() -> str:
         "  only messages newer than saved history\n"
         "/ocrhistory [channel] [limit] [since=YYYY-MM-DD] [until=YYYY-MM-DD] [bot|user|auto]\n"
         "  tail + media download + OCR\n"
-        "/digest [channel] [since=YYYY-MM-DD] [until=YYYY-MM-DD] [bot|user|auto]\n"
+        "/digest [channel] [since=YYYY-MM-DD] [until=YYYY-MM-DD] [today|yesterday|week|month|-Nd] [bot|user|auto]\n"
         "  config-driven morning AI digest and Telegram delivery\n"
         "/exportcsv [channel] [limit|since=... until=...] [bot|user|auto]\n"
         "  export saved history to CSV\n"
@@ -544,6 +558,7 @@ def command_help_text() -> str:
         "/tail @vcnews 100 ocr\n"
         "/update @vcnews 100 read\n"
         "/digest\n"
+        "/digest -3d\n"
         "/digest since=week\n"
         "/digest @vcnews since=2026-03-15 until=2026-03-16\n"
         "/exportcsv @vcnews since=2026-03-15\n"
@@ -566,6 +581,7 @@ def build_history_command(text: str) -> list[str] | None:
     if command == "/digest":
         argv = digest_base + ["run"]
         auth_mode = "user"
+        single_window_token = None
         extra_parts = parts[1:]
         channel_arg, extra_parts = consume_channel_argument(extra_parts)
         if channel_arg:
@@ -573,13 +589,20 @@ def build_history_command(text: str) -> list[str] | None:
         for part in extra_parts:
             lowered = part.lower()
             if lowered.startswith("since="):
-                argv += ["--since", part.split("=", 1)[1]]
+                append_option(argv, "--since", part.split("=", 1)[1])
             elif lowered.startswith("until="):
-                argv += ["--until", part.split("=", 1)[1]]
+                append_option(argv, "--until", part.split("=", 1)[1])
             elif lowered in {"auto", "bot", "user"}:
                 auth_mode = lowered
+            elif re.fullmatch(r"(today|yesterday|week|month|-?\d+d|\d{4}-\d{2}-\d{2})", lowered):
+                if single_window_token is not None:
+                    raise ValueError(f"Unsupported digest argument: {part}")
+                single_window_token = part
             else:
                 raise ValueError(f"Unsupported digest argument: {part}")
+        if single_window_token is not None:
+            append_option(argv, "--since", single_window_token)
+            append_option(argv, "--until", single_window_token)
         return argv + ["--auth-mode", auth_mode]
     if command == "/ocr":
         limit = "100"
@@ -594,9 +617,9 @@ def build_history_command(text: str) -> list[str] | None:
         for part in extra_parts:
             lowered = part.lower()
             if lowered.startswith("since="):
-                argv += ["--since", part.split("=", 1)[1]]
+                append_option(argv, "--since", part.split("=", 1)[1])
             elif lowered.startswith("until="):
-                argv += ["--until", part.split("=", 1)[1]]
+                append_option(argv, "--until", part.split("=", 1)[1])
         return argv
     if command == "/exportcsv":
         argv = base + ["export-csv"]
@@ -612,10 +635,10 @@ def build_history_command(text: str) -> list[str] | None:
                 argv += ["--limit", part]
                 has_filter = True
             elif lowered.startswith("since="):
-                argv += ["--since", part.split("=", 1)[1]]
+                append_option(argv, "--since", part.split("=", 1)[1])
                 has_filter = True
             elif lowered.startswith("until="):
-                argv += ["--until", part.split("=", 1)[1]]
+                append_option(argv, "--until", part.split("=", 1)[1])
                 has_filter = True
             elif lowered in {"auto", "bot", "user"}:
                 auth_mode = lowered
@@ -636,9 +659,9 @@ def build_history_command(text: str) -> list[str] | None:
         for part in extra_parts:
             lowered = part.lower()
             if lowered.startswith("since="):
-                argv += ["--since", part.split("=", 1)[1]]
+                append_option(argv, "--since", part.split("=", 1)[1])
             elif lowered.startswith("until="):
-                argv += ["--until", part.split("=", 1)[1]]
+                append_option(argv, "--until", part.split("=", 1)[1])
             if lowered in {"auto", "bot", "user"}:
                 auth_mode = lowered
         return argv + ["--auth-mode", auth_mode]
@@ -662,9 +685,9 @@ def build_history_command(text: str) -> list[str] | None:
         for part in extra_parts:
             lowered = part.lower()
             if lowered.startswith("since="):
-                argv += ["--since", part.split("=", 1)[1]]
+                append_option(argv, "--since", part.split("=", 1)[1])
             if lowered.startswith("until="):
-                argv += ["--until", part.split("=", 1)[1]]
+                append_option(argv, "--until", part.split("=", 1)[1])
             if lowered == "media":
                 argv.append("--download-media")
             if lowered == "ocr":
@@ -728,7 +751,9 @@ def handle_history_command(token: str, config: dict[str, Any], update: dict[str,
         return
 
     safe_response, json_output = build_safe_command_response_any(" ".join(argv[2:]), completed)
-    send_text_chunks(token, chat_id, safe_response)
+    is_digest_command = text.split(maxsplit=1)[0] == "/digest"
+    if not (is_digest_command and completed.returncode == 0):
+        send_text_chunks(token, chat_id, safe_response)
     if completed.returncode == 0:
         outputs: list[str] = []
         if isinstance(json_output, dict) and json_output.get("output_file"):

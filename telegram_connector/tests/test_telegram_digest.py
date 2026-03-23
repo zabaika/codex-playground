@@ -31,6 +31,7 @@ class TelegramDigestTests(unittest.TestCase):
             },
             "digest_prompts": {
                 "system_instructions": "system prompt",
+                "shared_prompt_prefix": "Shared {channel_name} {since} {until}",
                 "batch_digest_template": "Batch={batch_index}; Count={message_count}; Prev={previous_batch_summary}; {message_block}",
                 "final_digest_template": "Final={channel_name}; Total={message_count}; Batches={batch_count}; {batch_summary_block}",
             },
@@ -45,8 +46,10 @@ class TelegramDigestTests(unittest.TestCase):
         self.assertEqual(result.model, "test-model")
         self.assertEqual(result.sync_mode, "tail")
         self.assertEqual(result.ai_batch_size, 0)
+        self.assertTrue(result.mark_read)
         self.assertFalse(result.use_ocr)
         self.assertEqual(result.system_instructions, "system prompt")
+        self.assertEqual(result.shared_prompt_prefix, "Shared {channel_name} {since} {until}")
         self.assertEqual(result.batch_prompt_template, "Batch={batch_index}; Count={message_count}; Prev={previous_batch_summary}; {message_block}")
         self.assertEqual(result.final_prompt_template, "Final={channel_name}; Total={message_count}; Batches={batch_count}; {batch_summary_block}")
         self.assertEqual(result.openai_api_key, "op://Personal/item/openai_api_key")
@@ -59,8 +62,10 @@ class TelegramDigestTests(unittest.TestCase):
             model="gpt-5-mini",
             sync_mode="update",
             ai_batch_size=100,
+            mark_read=False,
             use_ocr=True,
             system_instructions="system",
+            shared_prompt_prefix="shared {channel_name} {since} {until}",
             batch_prompt_template="{channel_name} {message_block}",
             final_prompt_template="{channel_name} {batch_summary_block}",
             openai_api_key="k",
@@ -78,6 +83,7 @@ class TelegramDigestTests(unittest.TestCase):
         today = datetime(2026, 3, 18, 8, 0, tzinfo=timezone.utc).date()
         self.assertEqual(telegram_digest.resolve_relative_date_token("week", today), "2026-03-11")
         self.assertEqual(telegram_digest.resolve_relative_date_token("month", today), "2026-02-16")
+        self.assertEqual(telegram_digest.resolve_relative_date_token("-3d", today), "2026-03-15")
 
     def test_normalize_digest_window_values_resolves_cli_aliases(self) -> None:
         since, until = telegram_digest.normalize_digest_window_values(
@@ -122,6 +128,7 @@ class TelegramDigestTests(unittest.TestCase):
 
     def test_build_batch_digest_prompt_uses_template(self) -> None:
         prompt = telegram_digest.build_batch_digest_prompt(
+            "Shared {channel_name} {since} {until}",
             "Digest {channel_name} {since} {until} {batch_index} {message_count} {previous_batch_summary}\n{message_block}",
             "vc.ru",
             "2026-03-17",
@@ -132,8 +139,28 @@ class TelegramDigestTests(unittest.TestCase):
             "prev summary",
         )
 
+        self.assertTrue(prompt.startswith("Shared vc.ru 2026-03-17 2026-03-17"))
         self.assertIn("Digest vc.ru 2026-03-17 2026-03-17 2 1 prev summary", prompt)
         self.assertIn("sender=Alice (@alice)", prompt)
+
+    def test_build_prompt_cache_info_uses_shared_prefix_hash_and_common_key(self) -> None:
+        info = telegram_digest.build_prompt_cache_info(
+            model="gpt-5.4-mini",
+            channel="vc.ru",
+            since="2026-03-17",
+            until="2026-03-17",
+            system_instructions="system",
+            shared_prompt_prefix="Shared {channel_name} {since} {until}",
+            prompt="Shared vc.ru 2026-03-17 2026-03-17\n\nbody",
+        )
+
+        self.assertTrue(info.cache_key.startswith("digest:"))
+        self.assertLessEqual(len(info.cache_key), 64)
+        self.assertEqual(info.cache_retention, "in_memory")
+        self.assertEqual(info.system_chars, len("system"))
+        self.assertEqual(info.prompt_chars, len("Shared vc.ru 2026-03-17 2026-03-17\n\nbody"))
+        self.assertEqual(info.shared_prefix_chars, len("Shared vc.ru 2026-03-17 2026-03-17"))
+        self.assertTrue(info.shared_prefix_hash)
 
     def test_extract_usage_reads_cached_tokens(self) -> None:
         usage = telegram_digest.extract_usage(
@@ -245,8 +272,15 @@ class TelegramDigestTests(unittest.TestCase):
                     since TEXT,
                     until TEXT,
                     model TEXT NOT NULL,
+                    response_id TEXT,
+                    prompt_cache_key TEXT,
+                    prompt_cache_retention TEXT,
                     request_index INTEGER,
                     message_count INTEGER,
+                    system_chars INTEGER,
+                    prompt_chars INTEGER,
+                    shared_prefix_chars INTEGER,
+                    shared_prefix_hash TEXT,
                     input_tokens INTEGER,
                     cached_input_tokens INTEGER,
                     output_tokens INTEGER,

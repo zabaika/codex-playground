@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -22,50 +23,50 @@ PROJECT_ROOT = Path(os.environ.get("TELEGRAM_CONNECTOR_PROJECT_ROOT", "")).expan
 DEFAULT_SYSTEM_INSTRUCTIONS = (
     "You are a concise Telegram channel analyst. Return compact, high-signal Russian summaries."
 )
-DEFAULT_BATCH_DIGEST_TEMPLATE = """Канал: {channel_name}
-Сделай краткую промежуточную сводку части сообщений на русском языке.
+DEFAULT_SHARED_PROMPT_PREFIX = """Ты готовишь читаемый Telegram-дайджест на русском языке.
 Используй только факты из входных данных.
+Не выдумывай детали, оценки или причины без опоры на текст.
+Не используй markdown-таблицы.
+Не упоминай слова 'батч', 'часть сообщений', 'чанк' или внутреннюю механику обработки.
+Ссылки на сообщения оставляй в формате '<ссылка> - короткий заголовок'.
+При выборе самого важного и популярного учитывай replies и forwards как сигналы приоритета.
+Блок 'Связки вопрос-ответ/развитие темы' добавляй только если он реально объясняет развитие обсуждения и не дублирует основные темы.
+
+Общие метаданные анализа:
+- Канал: {channel_name}
+- Период UTC: {since} .. {until}
+"""
+DEFAULT_BATCH_DIGEST_TEMPLATE = """Тип шага: промежуточная сводка по части сообщений.
+
 Формат ответа:
 1. Одна короткая строка с главным выводом.
 2. 3-4 коротких пункта с темами и событиями.
 3. Блок 'Наиболее популярное' с 1-5 пунктами в формате '<ссылка> - короткий заголовок'.
-Учитывай replies и forwards как сигналы популярности и приоритета.
 4. Блок 'Незакрытые вопросы/продолжения', если они есть.
-Не упоминай слова 'батч' или 'часть сообщений' в самом тексте ответа.
-Не используй markdown-таблицы.
 
-Метаданные части сообщений:
-- Канал: {channel_name}
-- Период UTC: {since} .. {until}
+Метаданные текущей части:
 - Порядковый номер части: {batch_index}
-- Сообщений в батче: {message_count}
+- Сообщений в части: {message_count}
 
-Короткий контекст предыдущего батча:
+Короткий контекст предыдущей промежуточной сводки:
 {previous_batch_summary}
 
 Сырые сообщения:
 {message_block}
 """
-DEFAULT_FINAL_DIGEST_TEMPLATE = """Канал: {channel_name}
-Собери финальный дайджест на русском языке для Telegram.
-Используй только факты из промежуточных сводок.
+DEFAULT_FINAL_DIGEST_TEMPLATE = """Тип шага: финальный дайджест канала по промежуточным сводкам.
+
 Формат ответа:
 1. Одна короткая строка с главным выводом.
 2. 3-5 коротких пунктов с основными темами и событиями.
 3. Блок 'Наиболее популярное' с 1-10 пунктами в формате '<ссылка> - короткий заголовок'.
-Выбирай в него самые заметные сообщения периода с учётом replies и forwards. Если активность низкая, можно меньше 10 пунктов.
 4. Блок 'Связки вопрос-ответ/развитие темы' только если он добавляет важный контекст сверх тем и блока популярного.
-Если блок нужен, для каждой связки указывай ссылку на самое популярное сообщение этой темы в формате '<ссылка> - короткое пояснение связи'.
-Не упоминай слово 'батч' в самом тексте ответа.
-Не используй markdown-таблицы.
 
-Метаданные канала:
-- Канал: {channel_name}
-- Период UTC: {since} .. {until}
+Метаданные итоговой сборки:
 - Всего сообщений в анализе: {message_count}
-- Число батчей: {batch_count}
+- Число промежуточных сводок: {batch_count}
 
-Промежуточные сводки по батчам:
+Промежуточные сводки:
 {batch_summary_block}
 """
 
@@ -78,8 +79,10 @@ class DigestConfig:
     model: str
     sync_mode: str
     ai_batch_size: int
+    mark_read: bool
     use_ocr: bool
     system_instructions: str
+    shared_prompt_prefix: str
     batch_prompt_template: str
     final_prompt_template: str
     openai_api_key: str
@@ -115,7 +118,18 @@ class OpenAIUsage:
 
 
 @dataclass
+class PromptCacheInfo:
+    cache_key: str
+    cache_retention: str
+    system_chars: int
+    prompt_chars: int
+    shared_prefix_chars: int
+    shared_prefix_hash: str
+
+
+@dataclass
 class OpenAIResult:
+    response_id: str | None
     text: str
     usage: OpenAIUsage
 
@@ -144,11 +158,16 @@ def resolve_digest_config(config: dict[str, Any]) -> DigestConfig:
         model=model,
         sync_mode=history_client.get_config_value(config, "digest", "sync_mode") or "update",
         ai_batch_size=0,
+        mark_read=parse_bool(
+            history_client.get_config_value(config, "digest", "mark_read"),
+            default=True,
+        ),
         use_ocr=parse_bool(
             history_client.get_config_value(config, "processing", "ocr"),
             default=True,
         ),
         system_instructions=history_client.get_config_value(config, "digest_prompts", "system_instructions") or DEFAULT_SYSTEM_INSTRUCTIONS,
+        shared_prompt_prefix=history_client.get_config_value(config, "digest_prompts", "shared_prompt_prefix") or DEFAULT_SHARED_PROMPT_PREFIX,
         batch_prompt_template=history_client.get_config_value(config, "digest_prompts", "batch_digest_template")
         or DEFAULT_BATCH_DIGEST_TEMPLATE,
         final_prompt_template=history_client.get_config_value(config, "digest_prompts", "final_digest_template") or DEFAULT_FINAL_DIGEST_TEMPLATE,
@@ -269,6 +288,7 @@ async def run_sync(
     until: str,
     total_limit: int,
     use_ocr: bool,
+    mark_read: bool,
     mode: str,
     auth_mode: str,
 ) -> list[dict[str, Any]]:
@@ -288,7 +308,7 @@ async def run_sync(
                 until=until,
                 download_media=use_ocr,
                 ocr=use_ocr,
-                mark_read=False,
+                mark_read=mark_read,
                 auth_mode=auth_mode,
             )
             try:
@@ -441,6 +461,7 @@ def render_message_block(messages: Any, *, max_chars: int) -> ChannelDigestInput
 
 
 def build_batch_digest_prompt(
+    shared_prefix: str,
     template: str,
     channel_name: str,
     since: str,
@@ -450,7 +471,12 @@ def build_batch_digest_prompt(
     message_block: str,
     previous_batch_summary: str,
 ) -> str:
-    return template.format(
+    prefix = shared_prefix.format(
+        channel_name=channel_name,
+        since=since,
+        until=until,
+    ).strip()
+    body = template.format(
         channel_name=channel_name,
         since=since,
         until=until,
@@ -458,10 +484,12 @@ def build_batch_digest_prompt(
         message_count=message_count,
         message_block=message_block,
         previous_batch_summary=previous_batch_summary or "<no previous batch>",
-    )
+    ).strip()
+    return f"{prefix}\n\n{body}"
 
 
 def build_final_digest_prompt(
+    shared_prefix: str,
     template: str,
     channel_name: str,
     since: str,
@@ -470,14 +498,20 @@ def build_final_digest_prompt(
     batch_count: int,
     batch_summary_block: str,
 ) -> str:
-    return template.format(
+    prefix = shared_prefix.format(
+        channel_name=channel_name,
+        since=since,
+        until=until,
+    ).strip()
+    body = template.format(
         channel_name=channel_name,
         since=since,
         until=until,
         message_count=message_count,
         batch_count=batch_count,
         batch_summary_block=batch_summary_block,
-    )
+    ).strip()
+    return f"{prefix}\n\n{body}"
 
 
 def iter_message_batches(messages: Any, batch_size: int) -> Any:
@@ -519,6 +553,44 @@ def extract_usage(response: dict[str, Any], latency_ms: int) -> OpenAIUsage:
     )
 
 
+def build_prompt_cache_key(*, model: str, channel: str, since: str, until: str) -> str:
+    raw = "|".join(
+        [
+            model.strip().lower() or "unknown-model",
+            channel.strip().lstrip("@").lower() or "unknown-channel",
+            since.strip(),
+            until.strip(),
+        ]
+    )
+    digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:24]
+    return f"digest:{digest}"
+
+
+def build_prompt_cache_info(
+    *,
+    model: str,
+    channel: str,
+    since: str,
+    until: str,
+    system_instructions: str,
+    shared_prompt_prefix: str,
+    prompt: str,
+) -> PromptCacheInfo:
+    prefix_text = shared_prompt_prefix.format(
+        channel_name=channel,
+        since=since,
+        until=until,
+    ).strip()
+    return PromptCacheInfo(
+        cache_key=build_prompt_cache_key(model=model, channel=channel, since=since, until=until),
+        cache_retention="in_memory",
+        system_chars=len(system_instructions),
+        prompt_chars=len(prompt),
+        shared_prefix_chars=len(prefix_text),
+        shared_prefix_hash=hashlib.sha256(prefix_text.encode("utf-8")).hexdigest()[:16],
+    )
+
+
 def log_openai_usage(
     conn: Any,
     *,
@@ -530,17 +602,21 @@ def log_openai_usage(
     request_index: int,
     message_count: int,
     status: str,
+    cache_info: PromptCacheInfo,
     usage: OpenAIUsage | None = None,
+    response_id: str | None = None,
     error: str | None = None,
 ) -> None:
     conn.execute(
         """
         INSERT INTO ai_usage_log (
-            created_at, feature, stage, channel, since, until, model, request_index,
-            message_count, input_tokens, cached_input_tokens, output_tokens, total_tokens,
+            created_at, feature, stage, channel, since, until, model, response_id,
+            prompt_cache_key, prompt_cache_retention, request_index, message_count,
+            system_chars, prompt_chars, shared_prefix_chars, shared_prefix_hash,
+            input_tokens, cached_input_tokens, output_tokens, total_tokens,
             latency_ms, status, error
         )
-        VALUES (?, 'digest', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, 'digest', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             history_client.now_utc(),
@@ -549,8 +625,15 @@ def log_openai_usage(
             since,
             until,
             model,
+            response_id,
+            cache_info.cache_key,
+            cache_info.cache_retention,
             request_index,
             message_count,
+            cache_info.system_chars,
+            cache_info.prompt_chars,
+            cache_info.shared_prefix_chars,
+            cache_info.shared_prefix_hash,
             usage.input_tokens if usage else None,
             usage.cached_input_tokens if usage else None,
             usage.output_tokens if usage else None,
@@ -563,11 +646,19 @@ def log_openai_usage(
     conn.commit()
 
 
-def run_openai_digest(api_key: str, model: str, system_instructions: str, prompt: str) -> OpenAIResult:
+def run_openai_digest(
+    api_key: str,
+    model: str,
+    system_instructions: str,
+    prompt: str,
+    *,
+    prompt_cache_key: str,
+) -> OpenAIResult:
     payload = {
         "model": model,
         "instructions": system_instructions,
         "input": prompt,
+        "prompt_cache_key": prompt_cache_key,
         "max_output_tokens": 1200,
     }
     req = request.Request(
@@ -591,7 +682,11 @@ def run_openai_digest(api_key: str, model: str, system_instructions: str, prompt
     text = extract_response_text(response)
     if not text:
         raise SystemExit("OpenAI API returned an empty digest response.")
-    return OpenAIResult(text=text, usage=extract_usage(response, latency_ms))
+    return OpenAIResult(
+        response_id=history_client.optional_text(response.get("id")),
+        text=text,
+        usage=extract_usage(response, latency_ms),
+    )
 
 
 def build_digest_message(
@@ -646,6 +741,7 @@ def summarize_channel_batches(
         batch_input = render_message_block(batch, max_chars=max(6000, min(50000, batch_size * 450)))
         unique_message_ids.update(int(item["message_id"]) for item in batch if item.get("message_id") is not None)
         prompt = build_batch_digest_prompt(
+            config.shared_prompt_prefix,
             config.batch_prompt_template,
             channel_name or channel,
             since,
@@ -655,8 +751,23 @@ def summarize_channel_batches(
             batch_input.message_block,
             previous_batch_summary,
         )
+        cache_info = build_prompt_cache_info(
+            model=config.model,
+            channel=channel_name or channel,
+            since=since,
+            until=until,
+            system_instructions=config.system_instructions,
+            shared_prompt_prefix=config.shared_prompt_prefix,
+            prompt=prompt,
+        )
         try:
-            batch_result = run_openai_digest(api_key, config.model, config.system_instructions, prompt)
+            batch_result = run_openai_digest(
+                api_key,
+                config.model,
+                config.system_instructions,
+                prompt,
+                prompt_cache_key=cache_info.cache_key,
+            )
         except Exception as exc:
             log_openai_usage(
                 log_conn,
@@ -668,6 +779,7 @@ def summarize_channel_batches(
                 request_index=batch_index,
                 message_count=batch_input.message_count,
                 status="error",
+                cache_info=cache_info,
                 error=str(exc) or exc.__class__.__name__,
             )
             raise
@@ -681,7 +793,9 @@ def summarize_channel_batches(
             request_index=batch_index,
             message_count=batch_input.message_count,
             status="ok",
+            cache_info=cache_info,
             usage=batch_result.usage,
+            response_id=batch_result.response_id,
         )
         batch_summaries.append(f"Батч {batch_index}\n{batch_result.text}")
         previous_batch_summary = batch_result.text[:2000]
@@ -692,6 +806,7 @@ def summarize_channel_batches(
         return len(unique_message_ids), batch_summaries[0].split("\n", 1)[1] if "\n" in batch_summaries[0] else batch_summaries[0]
 
     final_prompt = build_final_digest_prompt(
+        config.shared_prompt_prefix,
         config.final_prompt_template,
         channel_name or channel,
         since,
@@ -700,8 +815,23 @@ def summarize_channel_batches(
         len(batch_summaries),
         "\n\n".join(batch_summaries),
     )
+    final_cache_info = build_prompt_cache_info(
+        model=config.model,
+        channel=channel_name or channel,
+        since=since,
+        until=until,
+        system_instructions=config.system_instructions,
+        shared_prompt_prefix=config.shared_prompt_prefix,
+        prompt=final_prompt,
+    )
     try:
-        final_result = run_openai_digest(api_key, config.model, config.system_instructions, final_prompt)
+        final_result = run_openai_digest(
+            api_key,
+            config.model,
+            config.system_instructions,
+            final_prompt,
+            prompt_cache_key=final_cache_info.cache_key,
+        )
     except Exception as exc:
         log_openai_usage(
             log_conn,
@@ -713,6 +843,7 @@ def summarize_channel_batches(
             request_index=len(batch_summaries) + 1,
             message_count=len(unique_message_ids),
             status="error",
+            cache_info=final_cache_info,
             error=str(exc) or exc.__class__.__name__,
         )
         raise
@@ -726,7 +857,9 @@ def summarize_channel_batches(
         request_index=len(batch_summaries) + 1,
         message_count=len(unique_message_ids),
         status="ok",
+        cache_info=final_cache_info,
         usage=final_result.usage,
+        response_id=final_result.response_id,
     )
     return len(unique_message_ids), final_result.text
 
@@ -755,6 +888,7 @@ def cmd_run(args: argparse.Namespace) -> int:
             until=until,
             total_limit=limits.sync_limit,
             use_ocr=digest_config.use_ocr,
+            mark_read=digest_config.mark_read,
             mode=digest_config.sync_mode,
             auth_mode=auth_mode,
         )
@@ -822,8 +956,10 @@ def cmd_run(args: argparse.Namespace) -> int:
                         model=digest_config.model,
                         sync_mode=digest_config.sync_mode,
                         ai_batch_size=limits.ai_batch_size,
+                        mark_read=digest_config.mark_read,
                         use_ocr=digest_config.use_ocr,
                         system_instructions=digest_config.system_instructions,
+                        shared_prompt_prefix=digest_config.shared_prompt_prefix,
                         batch_prompt_template=digest_config.batch_prompt_template,
                         final_prompt_template=digest_config.final_prompt_template,
                         openai_api_key=digest_config.openai_api_key,
