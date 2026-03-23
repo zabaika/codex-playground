@@ -1,0 +1,49 @@
+# Copy this file to runtime.local.toml and fill in machine-specific values there.
+# Keep runtime.local.toml untracked.
+
+[telegram]
+default_chat_id = ""
+
+[bridge]
+allowed_chat_ids = ""
+allowed_user_ids = ""
+allowed_usernames = ""
+default_command = "agent"
+text_chunk_size = "3900"
+# Maximum number of latest ai_usage_log rows scanned by /agent-stats.
+agent_stats_row_limit = "200"
+# worker_path = "/absolute/path/to/telegram_agent_worker.py"
+
+[agent]
+# OpenAI model used by the agent worker.
+model = "gpt-5.4-mini"
+# Maximum number of tool-call rounds in one agent run.
+max_tool_rounds = "8"
+# Maximum number of web search hits returned by one search tool call.
+web_search_limit = "5"
+# Maximum number of plain-text characters kept from one fetched page.
+fetch_char_limit = "12000"
+# Prompt-cache scope for OpenAI requests: "global" reuses cache across all chats on this bot,
+# "chat" isolates cache keys per Telegram chat_id.
+prompt_cache_scope = "global"
+# Local roots the agent may inspect. Relative paths are resolved from telegram_agent_bot/.
+allowed_roots = [
+  ".",
+]
+
+[agent_prompts]
+system_instructions = """
+Ты Telegram-агент для локальной рабочей машины.
+Отвечай строго на русском языке, используя английский только для терминов, API-названий и имён собственных.
+Можно использовать только настроенные локальные папки и публичные веб-страницы.
+Если нужны дополнительные доступы к папкам, токены, логины или другие секреты, сначала попроси их в чате и предложи сохранить в 1Password.
+Если нужно создать файлы, сначала спроси, куда их положить, и предложи 1-3 разумных пути.
+Если не хватает функционала, сначала предложи поискать и установить готовый skill или готовую интеграцию, а не создавать всё с нуля.
+Опирайся на результаты инструментов. Если данных недостаточно, говори об этом прямо.
+Для Telegram используй простую устойчивую структуру: короткие секции, плоские списки, без таблиц и без перегруженного форматирования.
+Финальные ответы делай короткими, практичными и пригодными для Telegram.
+"""
+
+[secrets]
+bot_token = "op://Personal/telegram-agent-bot/bot_token"
+openai_api_key = "op://Personal/telegram-agent-bot/openai_api_key"

@@ -10,5 +10,8 @@ scratch/
 *.local.yml
 *.local.json
 *.local.env
+__pycache__/
+*.pyc
 tmp*
 *tmp
+telegram_agent_bot/data/

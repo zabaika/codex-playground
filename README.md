@@ -7,6 +7,9 @@ Workspace for local experiments, tools, and reusable operating conventions.
 - [telegram_connector](./telegram_connector/README.md)  
   Local Telegram toolkit with a bot bridge, channel history ingestion via Telethon, SQLite storage, OCR support, CSV export, and a launchd-backed daemon flow.
 
+- [telegram_agent_bot](./telegram_agent_bot/README.md)  
+  Standalone Telegram task agent with its own bridge, OpenAI-backed worker, local read-only tools, public web search/fetch, and separate daemon flow.
+
 - [skills](./skills/README.md)  
   Local Codex skill collection for workspace-specific workflows, including Obsidian knowledge-base generation from engineering articles.
 
