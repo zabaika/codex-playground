@@ -126,6 +126,7 @@ For the history client:
 - `[digest]` stores default daily-digest behavior
 - `digest.since` and `digest.until` define the default analysis window; `yesterday` is the recommended morning default
 - `digest.until` uses the same aliases as `since`, but date-only values are expanded to the end of that UTC day
+- `digest.min_messages_for_ai` sets the per-channel minimum required for OpenAI analysis; below that threshold digest still syncs messages but sends only a short Telegram note without AI processing
 - supported date aliases for `since` / `until`: `today`, `yesterday`, `week`, `month`, `-Nd`
 - `-Nd` means “N days back from the current UTC date”, so with current UTC date `2026-03-23`, `-3d` resolves to `2026-03-20`
 - the same alias logic now applies consistently to `sync`, `export-csv`, `ocr-pending`, and `digest`
@@ -429,6 +430,7 @@ Additional notes:
 - `digest` takes model and OCR defaults from `[processing]`, schedule and window defaults from `[digest]`, profile-based fetch and AI chunk limits from `[digest_limits.*]`, and prompt templates from `[digest_prompts]`
 - explicit `--channel`, `--since`, `--until`, and `--auth-mode` override config defaults for a single run
 - bot command `digest` supports the same override set: `/digest @vcnews since=2026-03-17 until=2026-03-17`
+- if a selected channel has fewer messages than `digest.min_messages_for_ai`, digest skips OpenAI for that channel and sends a short “loaded without analysis” note instead
 - sender display names and usernames are included in the AI input to preserve question/answer context in user discussions
 - batches keep chronological order and use a small automatic overlap between neighboring batches to reduce context loss at boundaries
 - final quality is usually better than a single huge prompt on long periods because the model sees ordered local context first and only then performs a second-pass synthesis

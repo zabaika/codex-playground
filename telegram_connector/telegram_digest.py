@@ -79,6 +79,7 @@ class DigestConfig:
     model: str
     sync_mode: str
     ai_batch_size: int
+    min_messages_for_ai: int
     mark_read: bool
     use_ocr: bool
     system_instructions: str
@@ -152,6 +153,11 @@ def resolve_digest_config(config: dict[str, Any]) -> DigestConfig:
         raise SystemExit(
             "Missing processing.model in runtime config. Put the default AI model into [processing].model."
         )
+    raw_min_messages_for_ai = history_client.get_config_value(config, "digest", "min_messages_for_ai") or "1"
+    try:
+        min_messages_for_ai = max(0, int(raw_min_messages_for_ai))
+    except ValueError as exc:
+        raise SystemExit("Invalid digest.min_messages_for_ai in runtime config. Expected a non-negative integer.") from exc
     return DigestConfig(
         time=history_client.get_config_value(config, "digest", "time") or "08:00",
         since=history_client.get_config_value(config, "digest", "since") or "yesterday",
@@ -159,6 +165,7 @@ def resolve_digest_config(config: dict[str, Any]) -> DigestConfig:
         model=model,
         sync_mode=history_client.get_config_value(config, "digest", "sync_mode") or "update",
         ai_batch_size=0,
+        min_messages_for_ai=min_messages_for_ai,
         mark_read=parse_bool(
             history_client.get_config_value(config, "digest", "mark_read"),
             default=True,
@@ -396,6 +403,35 @@ def iter_channel_messages(
     else:
         sql = base_sql + " ORDER BY m.date_utc ASC, m.message_id ASC"
     return (dict(row) for row in conn.execute(sql, tuple(params)))
+
+
+def count_channel_messages(
+    conn: Any,
+    *,
+    channel: str,
+    since: str,
+    until: str,
+) -> int:
+    channel_row = history_client.resolve_channel_filter(conn, channel)
+    if channel_row is None:
+        return 0
+    row = conn.execute(
+        """
+        SELECT COUNT(*) AS message_count
+        FROM messages
+        WHERE channel_id = ?
+          AND date_utc >= ?
+          AND date_utc <= ?
+        """,
+        (
+            channel_row["channel_id"],
+            history_client.parse_since_datetime(since),
+            history_client.parse_until_datetime(until),
+        ),
+    ).fetchone()
+    if row is None:
+        return 0
+    return int(row["message_count"] or 0)
 
 
 def render_sender_label(message: dict[str, Any]) -> str:
@@ -749,6 +785,26 @@ def build_channel_digest_message(channel_name: str, *, since: str, until: str, m
     )
 
 
+def build_channel_digest_skip_message(
+    channel_name: str,
+    *,
+    since: str,
+    until: str,
+    message_count: int,
+    min_messages_for_ai: int,
+) -> str:
+    return build_channel_digest_message(
+        channel_name,
+        since=since,
+        until=until,
+        message_count=message_count,
+        summary=(
+            f"Сообщений меньше порога для AI-обработки ({min_messages_for_ai}). "
+            "Сообщения загружены, но digest отправлен без анализа."
+        ),
+    )
+
+
 def build_digest_error_message(*, since: str, until: str, errors: list[str]) -> str:
     header = f"Digest completed with errors\nПериод UTC: {since} .. {until}"
     return "\n\n".join([header, *errors])
@@ -908,7 +964,6 @@ def cmd_run(args: argparse.Namespace) -> int:
     runtime = history_client.resolve_runtime()
     config = history_client.load_runtime_config()
     digest_config = resolve_digest_config(config)
-    api_key = require_openai_api_key(digest_config)
     if digest_config.sync_mode not in {"backfill", "tail", "update"}:
         raise SystemExit("digest.sync_mode must be one of 'backfill', 'tail', or 'update'.")
     default_since, default_until = resolve_digest_window(digest_config)
@@ -945,6 +1000,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         sync_result_by_channel = {item.get("channel"): item for item in sync_results}
         sent_channel_messages = 0
         errors: list[str] = []
+        api_key: str | None = None
         for channel in channels:
             sync_result = sync_result_by_channel.get(channel)
             if sync_result is None:
@@ -970,7 +1026,13 @@ def cmd_run(args: argparse.Namespace) -> int:
                 ),
                 max_chars=1000,
             )
-            if not preview.message_count:
+            total_message_count = count_channel_messages(
+                conn,
+                channel=channel,
+                since=since,
+                until=until,
+            )
+            if not total_message_count:
                 bridge.send_text_chunks(
                     token,
                     chat_id,
@@ -985,6 +1047,22 @@ def cmd_run(args: argparse.Namespace) -> int:
                 sent_channel_messages += 1
                 continue
             channel_name = preview.channel_name or channel
+            if total_message_count < digest_config.min_messages_for_ai:
+                bridge.send_text_chunks(
+                    token,
+                    chat_id,
+                    build_channel_digest_skip_message(
+                        channel_name,
+                        since=since,
+                        until=until,
+                        message_count=total_message_count,
+                        min_messages_for_ai=digest_config.min_messages_for_ai,
+                    ),
+                )
+                sent_channel_messages += 1
+                continue
+            if api_key is None:
+                api_key = require_openai_api_key(digest_config)
             try:
                 message_count, summary = summarize_channel_batches(
                     log_conn,
@@ -996,6 +1074,7 @@ def cmd_run(args: argparse.Namespace) -> int:
                         model=digest_config.model,
                         sync_mode=digest_config.sync_mode,
                         ai_batch_size=limits.ai_batch_size,
+                        min_messages_for_ai=digest_config.min_messages_for_ai,
                         mark_read=digest_config.mark_read,
                         use_ocr=digest_config.use_ocr,
                         system_instructions=digest_config.system_instructions,

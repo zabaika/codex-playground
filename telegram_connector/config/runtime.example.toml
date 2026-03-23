@@ -41,6 +41,9 @@ since = "yesterday"
 until = "yesterday"
 # History sync mode before analysis: backfill = historical range, tail = latest window, update = only new messages.
 sync_mode = "update"
+# Minimum number of messages in one channel for AI analysis.
+# If fewer messages are found, digest only syncs them and sends a short Telegram note without calling OpenAI.
+min_messages_for_ai = "1"
 # Whether digest prep-sync should mark the already-processed range as read using the existing read mechanism.
 mark_read = "true"
 

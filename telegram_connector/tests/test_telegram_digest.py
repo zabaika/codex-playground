@@ -28,6 +28,7 @@ class TelegramDigestTests(unittest.TestCase):
                 "since": "yesterday",
                 "until": "today",
                 "sync_mode": "tail",
+                "min_messages_for_ai": "7",
             },
             "digest_prompts": {
                 "system_instructions": "system prompt",
@@ -46,6 +47,7 @@ class TelegramDigestTests(unittest.TestCase):
         self.assertEqual(result.model, "test-model")
         self.assertEqual(result.sync_mode, "tail")
         self.assertEqual(result.ai_batch_size, 0)
+        self.assertEqual(result.min_messages_for_ai, 7)
         self.assertTrue(result.mark_read)
         self.assertFalse(result.use_ocr)
         self.assertEqual(result.system_instructions, "system prompt")
@@ -62,6 +64,7 @@ class TelegramDigestTests(unittest.TestCase):
             model="gpt-5-mini",
             sync_mode="update",
             ai_batch_size=100,
+            min_messages_for_ai=1,
             mark_read=False,
             use_ocr=True,
             system_instructions="system",
@@ -255,6 +258,7 @@ class TelegramDigestTests(unittest.TestCase):
         original_require_openai_api_key = telegram_digest.require_openai_api_key
         original_run_sync = telegram_digest.run_sync
         original_iter_channel_messages = telegram_digest.iter_channel_messages
+        original_count_channel_messages = telegram_digest.count_channel_messages
         original_render_message_block = telegram_digest.render_message_block
         original_summarize_channel_batches = telegram_digest.summarize_channel_batches
         original_require_token = telegram_digest.bridge.require_token
@@ -315,6 +319,7 @@ class TelegramDigestTests(unittest.TestCase):
             telegram_digest.iter_channel_messages = lambda conn, channel, since, until, max_messages=None: iter(
                 [{"title": channel, "username": channel.lstrip("@"), "message_id": 1, "date_utc": since, "sender_username": "u", "sender_display_name": "User", "forwards": 0, "replies": 0, "text": "x", "ocr_text": None}]
             )
+            telegram_digest.count_channel_messages = lambda conn, channel, since, until: 1
 
             def fake_render_message_block(messages, max_chars):
                 return telegram_digest.ChannelDigestInput(
@@ -346,6 +351,7 @@ class TelegramDigestTests(unittest.TestCase):
             telegram_digest.require_openai_api_key = original_require_openai_api_key
             telegram_digest.run_sync = original_run_sync
             telegram_digest.iter_channel_messages = original_iter_channel_messages
+            telegram_digest.count_channel_messages = original_count_channel_messages
             telegram_digest.render_message_block = original_render_message_block
             telegram_digest.summarize_channel_batches = original_summarize_channel_batches
             telegram_digest.bridge.require_token = original_require_token
@@ -357,6 +363,121 @@ class TelegramDigestTests(unittest.TestCase):
         self.assertIn("summary ok", sent[0])
         self.assertIn("Digest completed with errors", sent[1])
         self.assertIn("analysis failed: boom", sent[1])
+
+    def test_cmd_run_skips_ai_when_channel_has_too_few_messages(self) -> None:
+        original_resolve_runtime = telegram_digest.history_client.resolve_runtime
+        original_load_runtime_config = telegram_digest.history_client.load_runtime_config
+        original_connect_db = telegram_digest.history_client.connect_db
+        original_resolve_channels_argument = telegram_digest.history_client.resolve_channels_argument
+        original_require_openai_api_key = telegram_digest.require_openai_api_key
+        original_run_sync = telegram_digest.run_sync
+        original_iter_channel_messages = telegram_digest.iter_channel_messages
+        original_count_channel_messages = telegram_digest.count_channel_messages
+        original_render_message_block = telegram_digest.render_message_block
+        original_summarize_channel_batches = telegram_digest.summarize_channel_batches
+        original_require_token = telegram_digest.bridge.require_token
+        original_send_text_chunks = telegram_digest.bridge.send_text_chunks
+        try:
+            telegram_digest.history_client.resolve_runtime = lambda: type("Runtime", (), {"default_auth_mode": "user"})()
+            telegram_digest.history_client.load_runtime_config = lambda: {
+                "telegram": {"default_chat_id": "1"},
+                "processing": {"model": "test-model"},
+                "digest": {"min_messages_for_ai": "5"},
+                "digest_limits": {
+                    "day": {"sync_limit": "6100", "ai_batch_size": "111"},
+                },
+            }
+            telegram_digest.history_client.connect_db = lambda runtime: sqlite3.connect(":memory:")
+            original_init_db = telegram_digest.history_client.init_db
+            telegram_digest.history_client.init_db = lambda conn: conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS ai_usage_log (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    created_at TEXT NOT NULL,
+                    feature TEXT NOT NULL,
+                    stage TEXT NOT NULL,
+                    channel TEXT,
+                    since TEXT,
+                    until TEXT,
+                    model TEXT NOT NULL,
+                    response_id TEXT,
+                    prompt_cache_key TEXT,
+                    prompt_cache_retention TEXT,
+                    request_index INTEGER,
+                    message_count INTEGER,
+                    system_chars INTEGER,
+                    prompt_chars INTEGER,
+                    shared_prefix_chars INTEGER,
+                    shared_prefix_hash TEXT,
+                    prompt_hash TEXT,
+                    previous_prompt_hash TEXT,
+                    previous_response_id TEXT,
+                    prefix_match_chars_with_previous INTEGER,
+                    prompt_text TEXT,
+                    input_tokens INTEGER,
+                    cached_input_tokens INTEGER,
+                    output_tokens INTEGER,
+                    total_tokens INTEGER,
+                    latency_ms INTEGER,
+                    status TEXT NOT NULL,
+                    error TEXT
+                )
+                """
+            )
+            telegram_digest.history_client.resolve_channels_argument = lambda runtime, channel: ["@a"]
+
+            async def fake_run_sync(runtime, **kwargs):
+                return [{"channel": "@a"}]
+
+            telegram_digest.run_sync = fake_run_sync
+            telegram_digest.iter_channel_messages = lambda conn, channel, since, until, max_messages=None: iter(
+                [{"title": "Channel A", "username": "a", "message_id": 1, "date_utc": since, "sender_username": "u", "sender_display_name": "User", "forwards": 0, "replies": 0, "text": "x", "ocr_text": None}] * (1 if max_messages == 1 else 3)
+            )
+            telegram_digest.count_channel_messages = lambda conn, channel, since, until: 3
+
+            def fake_render_message_block(messages, max_chars):
+                return telegram_digest.ChannelDigestInput(
+                    channel_name="Channel A",
+                    message_count=1,
+                    message_block="block",
+                )
+
+            telegram_digest.render_message_block = fake_render_message_block
+
+            def fail_require_openai_api_key(config):
+                raise AssertionError("OpenAI key should not be required when skipping AI")
+
+            def fail_summarize_channel_batches(*args, **kwargs):
+                raise AssertionError("summarize_channel_batches should not be called when below min_messages_for_ai")
+
+            telegram_digest.require_openai_api_key = fail_require_openai_api_key
+            telegram_digest.summarize_channel_batches = fail_summarize_channel_batches
+            telegram_digest.bridge.require_token = lambda: "token"
+            sent: list[str] = []
+            telegram_digest.bridge.send_text_chunks = lambda token, chat_id, message: sent.append(message)
+
+            args = type("Args", (), {"channel": None, "since": None, "until": None, "auth_mode": None})()
+            exit_code = telegram_digest.cmd_run(args)
+        finally:
+            telegram_digest.history_client.resolve_runtime = original_resolve_runtime
+            telegram_digest.history_client.load_runtime_config = original_load_runtime_config
+            telegram_digest.history_client.connect_db = original_connect_db
+            telegram_digest.history_client.init_db = original_init_db
+            telegram_digest.history_client.resolve_channels_argument = original_resolve_channels_argument
+            telegram_digest.require_openai_api_key = original_require_openai_api_key
+            telegram_digest.run_sync = original_run_sync
+            telegram_digest.iter_channel_messages = original_iter_channel_messages
+            telegram_digest.count_channel_messages = original_count_channel_messages
+            telegram_digest.render_message_block = original_render_message_block
+            telegram_digest.summarize_channel_batches = original_summarize_channel_batches
+            telegram_digest.bridge.require_token = original_require_token
+            telegram_digest.bridge.send_text_chunks = original_send_text_chunks
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(len(sent), 1)
+        self.assertIn("Channel A", sent[0])
+        self.assertIn("Сообщений меньше порога для AI-обработки (5)", sent[0])
+        self.assertIn("Сообщений в анализе: 3", sent[0])
 
     def test_extract_response_text_reads_output_text(self) -> None:
         self.assertEqual(
