@@ -147,10 +147,36 @@ class TelegramDigestTests(unittest.TestCase):
 
         formatted = telegram_digest.format_digest_summary_for_telegram(summary)
 
-        self.assertIn("<b>Главный вывод</b>\nЗаметны три главные темы.\n\n<b>Главные темы дня</b>\nтема 1 и тема 2.", formatted)
+        self.assertIn("<b>Главные темы дня</b>\nЗаметны три главные темы.\n\n<b>Главные темы дня</b>\nтема 1 и тема 2.", formatted)
         self.assertIn("<b>Главные темы дня</b>\nтема 1 и тема 2.\n\n- Первый пункт\n\n- Второй пункт", formatted)
         self.assertIn("<b>Наиболее популярное</b>\nhttps://t.me/refugecard/1 - Пункт 1\nhttps://t.me/refugecard/2 - Пункт 2", formatted)
         self.assertIn("<b>Незакрытые вопросы/продолжения</b>\n- Вопрос 1\n\n- Вопрос 2", formatted)
+
+    def test_format_digest_summary_for_telegram_normalizes_lead_line_named_as_main_topics(self) -> None:
+        formatted = telegram_digest.format_digest_summary_for_telegram(
+            "\n".join(
+                [
+                    "Главные темы дня — eSIM, переводы и налоговые уведомления.",
+                    "- Первый пункт",
+                ]
+            )
+        )
+
+        self.assertIn("<b>Главные темы дня</b>\neSIM, переводы и налоговые уведомления.", formatted)
+        self.assertNotIn("<b>Главные темы дня — eSIM", formatted)
+
+    def test_format_digest_summary_for_telegram_normalizes_singular_main_topic_lead_line(self) -> None:
+        formatted = telegram_digest.format_digest_summary_for_telegram(
+            "\n".join(
+                [
+                    "Главная тема дня — рабочие схемы переводов и доступность карт.",
+                    "- Первый пункт",
+                ]
+            )
+        )
+
+        self.assertIn("<b>Главная тема дня</b>\nрабочие схемы переводов и доступность карт.", formatted)
+        self.assertNotIn("Главная тема дня —", formatted)
 
     def test_build_channel_digest_message_keeps_header_compact(self) -> None:
         message = telegram_digest.build_channel_digest_message(

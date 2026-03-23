@@ -148,6 +148,7 @@ For the history client:
 - `final_digest_template` supports `{channel_name}`, `{since}`, `{until}`, `{message_count}`, `{batch_count}`, and `{batch_summary_block}`
 - `digest` overrides for `channel`, `since`, `until`, and auth mode win over config defaults when you pass them explicitly
 - `message_block` already includes a direct Telegram message link, `message_id`, UTC date, sender display name, sender username, `forwards`, `replies`, text, and OCR text when available
+- both batch and final digest prompts should require the same first-line convention, currently `Главные темы дня: ...`, to reduce model drift between intermediate and final summaries
 - the digest prompts are expected to output `Наиболее популярное` as direct Telegram message links with short human-readable titles, using `forwards` and `replies` as popularity hints
 - `Связки вопрос-ответ/развитие темы` stays optional and should only appear when it adds structure beyond the main topics and popularity block; when used, each item should also reference a direct message link
 - prompt templates should avoid leaking internal processing words like `батч` into the user-facing digest text

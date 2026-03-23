@@ -799,13 +799,31 @@ def format_digest_summary_for_telegram(summary: str) -> str:
         escaped = escaped.replace("&gt;", "")
         return escaped
 
+    def normalize_lead_line(value: str) -> str:
+        normalized = re.sub(r"^Главн(ая тема|ые темы) дня\s*[:\-—]\s*", "", value, flags=re.IGNORECASE).strip()
+        return normalized or value.strip()
+
+    def extract_lead_heading(value: str) -> str:
+        match = re.match(r"^(Главн(?:ая тема|ые темы) дня)\s*[:\-—]\s*(.*)$", value, flags=re.IGNORECASE)
+        if not match:
+            return "Главные темы дня"
+        heading = match.group(1).strip()
+        if heading.lower().startswith("главная"):
+            return "Главная тема дня"
+        return "Главные темы дня"
+
     first_line = compact_lines[0]
     if (
         len(compact_lines) > 1
-        and not any(first_line.startswith(prefix) for prefix in heading_prefixes)
         and not (first_line.startswith("- ") or first_line.startswith("• ") or first_line.startswith("<http"))
     ):
-        formatted.extend(["<b>Главный вывод</b>", escape_line(first_line), ""])
+        formatted.extend(
+            [
+                f"<b>{escape_line(extract_lead_heading(first_line))}</b>",
+                escape_line(normalize_lead_line(first_line)),
+                "",
+            ]
+        )
         compact_lines = compact_lines[1:]
         previous_line_kind = "text"
 
