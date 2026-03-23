@@ -51,6 +51,14 @@ These are strict product rules for the bot and must stay aligned with code, conf
 - Keep runtime data inside `data/`.
 - Store only redacted update summaries in `data/inbox.jsonl`.
 
+Daemon checklist before finishing changes:
+
+- `cmd_listen` or the main daemon entrypoint must build one startup runtime bundle before entering the update loop.
+- Secret resolution must not happen inside per-update handlers once the daemon is running.
+- Worker subprocesses must receive only an allowlisted secret env subset, not the full parent environment.
+- Tests should cover startup secret resolution and should fail if `op read` is triggered again for every handled command.
+- Any standalone worker secret resolution must stay separate from the long-running bridge path and must not be used as an excuse to skip daemon startup caching.
+
 ## Telegram Formatting Rules
 
 - Use one Telegram formatting mode consistently: HTML.

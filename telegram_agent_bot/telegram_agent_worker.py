@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 import argparse
 import hashlib
+import ipaddress
 import json
 import os
 import re
 import sqlite3
+import socket
 import subprocess
 import sys
 import time
@@ -451,10 +453,38 @@ def web_search(query: str, limit: int) -> dict[str, Any]:
     return {"query": query, "results": extract_search_results(html, limit)}
 
 
-def fetch_url_text(url: str, *, max_chars: int) -> dict[str, Any]:
+def validate_public_http_url(url: str) -> parse.ParseResult:
     parsed_url = parse.urlparse(url)
     if parsed_url.scheme not in {"http", "https"}:
         raise ValueError("Only http and https URLs are supported.")
+    hostname = (parsed_url.hostname or "").strip().strip(".")
+    if not hostname:
+        raise ValueError("URL host is required.")
+    lowered_hostname = hostname.lower()
+    if lowered_hostname == "localhost" or lowered_hostname.endswith(".local"):
+        raise ValueError("Only public internet URLs are supported.")
+    resolved_ips: list[ipaddress.IPv4Address | ipaddress.IPv6Address] = []
+    try:
+        resolved_ips.append(ipaddress.ip_address(lowered_hostname))
+    except ValueError:
+        try:
+            addr_infos = socket.getaddrinfo(hostname, parsed_url.port or 80, proto=socket.IPPROTO_TCP)
+        except socket.gaierror as exc:
+            raise ValueError("Could not resolve URL host.") from exc
+        for family, _, _, _, sockaddr in addr_infos:
+            if family == socket.AF_INET:
+                resolved_ips.append(ipaddress.ip_address(sockaddr[0]))
+            elif family == socket.AF_INET6:
+                resolved_ips.append(ipaddress.ip_address(sockaddr[0]))
+    if not resolved_ips:
+        raise ValueError("Could not resolve URL host.")
+    if any(not ip.is_global for ip in resolved_ips):
+        raise ValueError("Only public internet URLs are supported.")
+    return parsed_url
+
+
+def fetch_url_text(url: str, *, max_chars: int) -> dict[str, Any]:
+    parsed_url = validate_public_http_url(url)
     req = request.Request(url, headers={"User-Agent": "telegram-agent-bot/1.0"})
     try:
         with request.urlopen(req, timeout=30) as resp:
@@ -592,6 +622,10 @@ def common_prefix_length(left: str, right: str) -> int:
     return idx
 
 
+def short_hash(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
+
+
 def build_prompt_cache_key(*, model: str, scope: str, chat_id: str, allowed_roots: list[Path]) -> str:
     if scope not in {"chat", "global"}:
         scope = "global"
@@ -613,6 +647,42 @@ def build_agent_prompt_prefix(username: str, allowed_roots: list[Path]) -> str:
 
 def build_agent_prompt_text(prompt: str, username: str, allowed_roots: list[Path]) -> str:
     return f"{build_agent_prompt_prefix(username, allowed_roots)}\n\nUser task:\n{prompt.strip()}"
+
+
+def build_round_log_text(
+    *,
+    round_index: int,
+    prompt: str,
+    username: str,
+    allowed_roots: list[Path],
+    current_input: list[dict[str, Any]],
+) -> str:
+    if round_index == 1:
+        prompt_text = prompt.strip()
+        roots_value = "|".join(str(root) for root in allowed_roots)
+        return "\n".join(
+            [
+                "user_prompt",
+                f"username_hash={short_hash((username or 'unknown').strip().lower())}",
+                f"allowed_roots_count={len(allowed_roots)}",
+                f"allowed_roots_hash={short_hash(roots_value)}",
+                f"prompt_chars={len(prompt_text)}",
+                f"prompt_hash={short_hash(prompt_text)}",
+            ]
+        )
+    lines = [
+        "function_call_output",
+        f"items={len(current_input)}",
+    ]
+    for index, item in enumerate(current_input[:8], start=1):
+        output = str(item.get("output", "")) if isinstance(item, dict) else ""
+        item_type = str(item.get("type", "unknown")) if isinstance(item, dict) else "unknown"
+        lines.append(f"item_{index}_type={item_type}")
+        lines.append(f"item_{index}_output_chars={len(output)}")
+        lines.append(f"item_{index}_output_hash={short_hash(output)}")
+    if len(current_input) > 8:
+        lines.append(f"truncated_items={len(current_input) - 8}")
+    return "\n".join(lines)
 
 
 def build_round_prompt_text(
@@ -801,6 +871,13 @@ def run_agent(prompt: str, chat_id: str, username: str) -> dict[str, Any]:
                 allowed_roots=runtime["allowed_roots"],
                 current_input=current_input,
             )
+            prompt_log_text = build_round_log_text(
+                round_index=round_index,
+                prompt=prompt,
+                username=username,
+                allowed_roots=runtime["allowed_roots"],
+                current_input=current_input,
+            )
             cache_info = build_prompt_cache_info(
                 model=runtime["model"],
                 cache_key=cache_key,
@@ -830,7 +907,7 @@ def run_agent(prompt: str, chat_id: str, username: str) -> dict[str, Any]:
                     message_count=message_count,
                     status="error",
                     cache_info=cache_info,
-                    prompt_text=prompt_text,
+                    prompt_text=prompt_log_text,
                     error=str(exc),
                 )
                 raise
@@ -845,7 +922,7 @@ def run_agent(prompt: str, chat_id: str, username: str) -> dict[str, Any]:
                 message_count=message_count,
                 status="ok",
                 cache_info=cache_info,
-                prompt_text=prompt_text,
+                prompt_text=prompt_log_text,
                 usage=usage,
                 response_id=optional_text(response.get("id")),
             )

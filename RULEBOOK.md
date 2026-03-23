@@ -119,6 +119,14 @@ Recommended daemon pattern:
 4. reuse the cached bot token for Telegram polling and replies
 5. pass only the minimum secret subset to child workers through an allowlisted env
 
+Implementation checklist for daemon code review:
+
+- the daemon entrypoint should construct a startup runtime bundle before the main loop starts
+- per-update handlers should accept the resolved runtime bundle instead of raw config whenever possible
+- `op read` or equivalent secret-backend calls should not appear on the hot path for each handled message
+- tests should exercise the listener path and verify that multiple handled commands do not trigger repeated secret resolution
+- standalone one-shot worker CLIs may resolve their own secrets, but that must remain separate from the long-running daemon path
+
 Tradeoff guidance:
 
 - resolving secrets once in the daemon and keeping them in memory is usually a better balance than calling `op read` on every request

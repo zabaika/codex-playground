@@ -119,7 +119,7 @@ Bridge commands are accepted in these forms:
 - `/agent найди обработку OCR`
 - `найди обработку OCR`
 - `agent найди обработку OCR`
-- `/agent@vasiliy_the_best_bot найди обработку OCR`
+- `/agent@your_bot_username найди обработку OCR`
 - `/reset`
 - `reset`
 

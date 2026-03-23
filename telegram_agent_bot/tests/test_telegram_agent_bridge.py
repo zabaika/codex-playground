@@ -62,7 +62,7 @@ class TelegramAgentBridgeTests(unittest.TestCase):
 
     def test_normalize_bridge_command_text_strips_bot_suffix(self) -> None:
         self.assertEqual(
-            telegram_agent_bridge.normalize_bridge_command_text("/agent@vasiliy_the_best_bot test"),
+            telegram_agent_bridge.normalize_bridge_command_text("/agent@example_bot test"),
             "/agent test",
         )
 
@@ -83,7 +83,7 @@ class TelegramAgentBridgeTests(unittest.TestCase):
 
         telegram_agent_bridge.subprocess.run = fake_run
         try:
-            config = {"bridge": {"allowed_usernames": "op://Personal/telegram-connector/allowed_users"}}
+            config = {"bridge": {"allowed_usernames": "op://Personal/test-bot/allowed_users"}}
             result = telegram_agent_bridge.parse_allowed_usernames(config)
         finally:
             telegram_agent_bridge.subprocess.run = original_run
@@ -97,9 +97,9 @@ class TelegramAgentBridgeTests(unittest.TestCase):
         def fake_run(*args, **kwargs):
             reference = args[0][-1]
             values = {
-                "op://Personal/telegram-connector/bot_token_vasiliy": "bot-token",
-                "op://Personal/telegram-connector/allowed_users": "@zabaev",
-                "op://Personal/OPENAI API key/credential": "openai-key",
+                "op://Personal/test-bot/bot_token": "bot-token",
+                "op://Personal/test-bot/allowed_users": "@zabaev",
+                "op://Personal/test-openai/api_key": "openai-key",
             }
             return subprocess.CompletedProcess(args=args[0], returncode=0, stdout=f"{values[reference]}\n", stderr="")
 
@@ -108,12 +108,12 @@ class TelegramAgentBridgeTests(unittest.TestCase):
             runtime = telegram_agent_bridge.resolve_bridge_runtime(
                 {
                     "secrets": {
-                        "bot_token": "op://Personal/telegram-connector/bot_token_vasiliy",
-                        "openai_api_key": "op://Personal/OPENAI API key/credential",
+                        "bot_token": "op://Personal/test-bot/bot_token",
+                        "openai_api_key": "op://Personal/test-openai/api_key",
                     },
                     "bridge": {
                         "allowed_chat_ids": "133126275",
-                        "allowed_usernames": "op://Personal/telegram-connector/allowed_users",
+                        "allowed_usernames": "op://Personal/test-bot/allowed_users",
                         "default_command": "agent",
                         "text_chunk_size": "3900",
                     },
@@ -166,6 +166,22 @@ class TelegramAgentBridgeTests(unittest.TestCase):
             telegram_agent_bridge.format_inline_telegram_html("use `rg` and **README**"),
             "use <code>rg</code> and <b>README</b>",
         )
+
+    def test_redact_sensitive_text_masks_secret_refs_and_tokens(self) -> None:
+        text = (
+            "op://Personal/test/item Authorization: Bearer abcdefghijklmnop "
+            "OPENAI_API_KEY=sk-123456789012 /Users/alice/file bot123456:ABCDEF"
+        )
+        redacted = telegram_agent_bridge.redact_sensitive_text(text)
+        self.assertNotIn("op://Personal/test/item", redacted)
+        self.assertNotIn("abcdefghijklmnop", redacted)
+        self.assertNotIn("sk-123456789012", redacted)
+        self.assertNotIn("/Users/alice/file", redacted)
+        self.assertNotIn("bot123456:ABCDEF", redacted)
+        self.assertIn("<secret_ref>", redacted)
+        self.assertIn("OPENAI_API_KEY=<redacted>", redacted)
+        self.assertIn("<path>", redacted)
+        self.assertIn("<bot_token>", redacted)
 
     def test_redact_update_for_storage_recognizes_agent_command(self) -> None:
         update = {
@@ -246,6 +262,119 @@ class TelegramAgentBridgeTests(unittest.TestCase):
         self.assertIn("--username", argv)
         self.assertIn("alice", argv)
         self.assertEqual(captured["reply"], "done")
+
+    def test_cmd_listen_resolves_op_secrets_once_for_multiple_commands(self) -> None:
+        original_load_runtime_config = telegram_agent_bridge.load_runtime_config
+        original_fetch_updates = telegram_agent_bridge.fetch_updates
+        original_append_inbox = telegram_agent_bridge.append_inbox
+        original_print_update = telegram_agent_bridge.print_update
+        original_save_offset = telegram_agent_bridge.save_offset
+        original_send_text_chunks = telegram_agent_bridge.send_text_chunks
+        original_send_text_message = telegram_agent_bridge.send_text_message
+        original_run = telegram_agent_bridge.subprocess.run
+        telegram_agent_bridge._SECRET_CACHE.clear()
+
+        op_reads: list[str] = []
+        worker_runs = 0
+
+        def fake_load_runtime_config() -> dict[str, object]:
+            return {
+                "secrets": {
+                    "bot_token": "op://Personal/test-bot/bot_token",
+                    "openai_api_key": "op://Personal/test-openai/api_key",
+                },
+                "bridge": {
+                    "allowed_chat_ids": "42",
+                    "allowed_user_ids": "7",
+                    "allowed_usernames": "op://Personal/test-bot/allowed_users",
+                    "default_command": "agent",
+                    "text_chunk_size": "3900",
+                },
+            }
+
+        def fake_fetch_updates(token: str, offset: int | None, timeout: int) -> list[dict[str, object]]:
+            return [
+                {
+                    "update_id": 1,
+                    "message": {
+                        "date": 123,
+                        "text": "/agent первая команда",
+                        "chat": {"id": 42, "type": "private"},
+                        "from": {"id": 7, "username": "alice"},
+                    },
+                },
+                {
+                    "update_id": 2,
+                    "message": {
+                        "date": 124,
+                        "text": "/agent вторая команда",
+                        "chat": {"id": 42, "type": "private"},
+                        "from": {"id": 7, "username": "alice"},
+                    },
+                },
+            ]
+
+        def fake_run(*args, **kwargs):
+            nonlocal worker_runs
+            argv = args[0]
+            if argv[:2] == ["op", "read"]:
+                reference = argv[-1]
+                op_reads.append(reference)
+                values = {
+                    "op://Personal/test-bot/bot_token": "bot-token",
+                    "op://Personal/test-bot/allowed_users": "@alice",
+                    "op://Personal/test-openai/api_key": "openai-key",
+                }
+                return subprocess.CompletedProcess(args=argv, returncode=0, stdout=f"{values[reference]}\n", stderr="")
+            worker_runs += 1
+            return subprocess.CompletedProcess(
+                args=argv,
+                returncode=0,
+                stdout='{"status":"ok","reply_text":"done"}',
+                stderr="",
+            )
+
+        telegram_agent_bridge.load_runtime_config = fake_load_runtime_config
+        telegram_agent_bridge.fetch_updates = fake_fetch_updates
+        telegram_agent_bridge.append_inbox = lambda update: None
+        telegram_agent_bridge.print_update = lambda update, runtime: None
+        telegram_agent_bridge.save_offset = lambda offset: None
+        telegram_agent_bridge.send_text_chunks = lambda token, chat_id, text, chunk_size=3500: None
+        telegram_agent_bridge.send_text_message = lambda token, chat_id, text: None
+        telegram_agent_bridge.subprocess.run = fake_run
+        try:
+            args = type(
+                "Args",
+                (),
+                {
+                    "timeout": 1,
+                    "once": True,
+                    "echo": False,
+                    "run_commands": True,
+                    "from_scratch": True,
+                },
+            )()
+            result = telegram_agent_bridge.cmd_listen(args)
+        finally:
+            telegram_agent_bridge.load_runtime_config = original_load_runtime_config
+            telegram_agent_bridge.fetch_updates = original_fetch_updates
+            telegram_agent_bridge.append_inbox = original_append_inbox
+            telegram_agent_bridge.print_update = original_print_update
+            telegram_agent_bridge.save_offset = original_save_offset
+            telegram_agent_bridge.send_text_chunks = original_send_text_chunks
+            telegram_agent_bridge.send_text_message = original_send_text_message
+            telegram_agent_bridge.subprocess.run = original_run
+
+        self.assertEqual(result, 0)
+        self.assertEqual(worker_runs, 2)
+        self.assertEqual(
+            op_reads,
+            [
+                "op://Personal/test-bot/bot_token",
+                "op://Personal/test-openai/api_key",
+                "op://Personal/test-bot/allowed_users",
+            ],
+        )
 
     def test_send_text_message_uses_html_parse_mode(self) -> None:
         captured: dict[str, object] = {}

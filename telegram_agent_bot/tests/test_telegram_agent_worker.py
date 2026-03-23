@@ -141,6 +141,26 @@ class TelegramAgentWorkerTests(unittest.TestCase):
             '[{"call_id": "1", "output": "{\\"b\\":1,\\"a\\":2}", "type": "function_call_output"}]',
         )
 
+    def test_build_round_log_text_does_not_store_raw_prompt_or_output(self) -> None:
+        prompt_log_text = telegram_agent_worker.build_round_log_text(
+            round_index=1,
+            prompt="secret prompt contents",
+            username="alice",
+            allowed_roots=[Path("/tmp/a"), Path("/tmp/b")],
+            current_input=[],
+        )
+        self.assertNotIn("secret prompt contents", prompt_log_text)
+        self.assertIn("prompt_hash=", prompt_log_text)
+        tool_log_text = telegram_agent_worker.build_round_log_text(
+            round_index=2,
+            prompt="ignored",
+            username="alice",
+            allowed_roots=[Path("/tmp")],
+            current_input=[{"type": "function_call_output", "output": "{\"secret\":\"value\"}"}],
+        )
+        self.assertNotIn("\"secret\":\"value\"", tool_log_text)
+        self.assertIn("item_1_output_hash=", tool_log_text)
+
     def test_extract_usage_reads_cached_tokens(self) -> None:
         usage = telegram_agent_worker.extract_usage(
             {
@@ -224,6 +244,14 @@ class TelegramAgentWorkerTests(unittest.TestCase):
         self.assertEqual(row["cached_input_tokens"], 8)
         self.assertEqual(row["prompt_cache_key"], "agent:test-cache")
         self.assertEqual(row["feature"], "agent")
+
+    def test_validate_public_http_url_rejects_localhost(self) -> None:
+        with self.assertRaises(ValueError):
+            telegram_agent_worker.validate_public_http_url("http://127.0.0.1:8000/test")
+
+    def test_validate_public_http_url_accepts_public_ip(self) -> None:
+        parsed = telegram_agent_worker.validate_public_http_url("https://1.1.1.1/test")
+        self.assertEqual(parsed.hostname, "1.1.1.1")
 
 
 if __name__ == "__main__":
