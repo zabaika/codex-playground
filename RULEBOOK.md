@@ -325,6 +325,12 @@ Rules:
 - redact bot tokens and similar credentials in error output
 - sanitize OCR errors before storing or returning them
 - sanitize Telegram API errors before returning them to chat
+- when Telegram formatting matters, set `parse_mode` explicitly instead of relying on plain-text rendering
+- prefer one formatting mode per program path, usually HTML or MarkdownV2, and use it consistently
+- escape or sanitize user- and model-generated text before wrapping it in Telegram formatting markup
+- do not rely on prompts alone for Telegram readability; apply post-processing when message structure must be stable
+- keep Telegram-specific presentation rules in post-processing code when possible, and keep prompts focused on semantic structure
+- if a reply mixes generated prose and structured blocks, enforce spacing, headings, and list density in code rather than expecting the model to reproduce them exactly
 
 Database safety:
 

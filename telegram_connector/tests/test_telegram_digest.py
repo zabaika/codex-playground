@@ -129,6 +129,48 @@ class TelegramDigestTests(unittest.TestCase):
         link = telegram_digest.build_message_link({"channel_id": 2428609899, "message_id": 8, "username": None})
         self.assertEqual(link, "https://t.me/c/2428609899/8")
 
+    def test_format_digest_summary_for_telegram_adds_blank_lines_but_keeps_popular_dense(self) -> None:
+        summary = "\n".join(
+            [
+                "Заметны три главные темы.",
+                "Главные темы дня: тема 1 и тема 2.",
+                "- Первый пункт",
+                "- Второй пункт",
+                "Наиболее популярное",
+                "<https://t.me/refugecard/1> - Пункт 1",
+                "<https://t.me/refugecard/2> - Пункт 2",
+                "Незакрытые вопросы/продолжения",
+                "- Вопрос 1",
+                "- Вопрос 2",
+            ]
+        )
+
+        formatted = telegram_digest.format_digest_summary_for_telegram(summary)
+
+        self.assertIn("<b>Главный вывод</b>\nЗаметны три главные темы.\n\n<b>Главные темы дня</b>\nтема 1 и тема 2.", formatted)
+        self.assertIn("<b>Главные темы дня</b>\nтема 1 и тема 2.\n\n- Первый пункт\n\n- Второй пункт", formatted)
+        self.assertIn("<b>Наиболее популярное</b>\nhttps://t.me/refugecard/1 - Пункт 1\nhttps://t.me/refugecard/2 - Пункт 2", formatted)
+        self.assertIn("<b>Незакрытые вопросы/продолжения</b>\n- Вопрос 1\n\n- Вопрос 2", formatted)
+
+    def test_build_channel_digest_message_keeps_header_compact(self) -> None:
+        message = telegram_digest.build_channel_digest_message(
+            "Channel A",
+            since="2026-03-22",
+            until="2026-03-22",
+            message_count=3,
+            summary="Главные темы дня: тема.\n- Пункт 1\n- Пункт 2",
+        )
+
+        self.assertTrue(
+            message.startswith(
+                "<b>Channel A</b>\n\n"
+                "Период UTC: 2026-03-22 .. 2026-03-22\n"
+                "Сообщений в анализе: 3\n\n"
+                "<b>Главные темы дня</b>\n"
+                "тема."
+            )
+        )
+
     def test_build_batch_digest_prompt_uses_template(self) -> None:
         prompt = telegram_digest.build_batch_digest_prompt(
             "Shared {channel_name} {since} {until}",
@@ -338,7 +380,7 @@ class TelegramDigestTests(unittest.TestCase):
             telegram_digest.summarize_channel_batches = fake_summarize_channel_batches
             telegram_digest.bridge.require_token = lambda: "token"
             sent: list[str] = []
-            telegram_digest.bridge.send_text_chunks = lambda token, chat_id, message: sent.append(message)
+            telegram_digest.bridge.send_text_chunks = lambda token, chat_id, message, chunk_size=None, parse_mode=None: sent.append(message)
 
             args = type("Args", (), {"channel": None, "since": None, "until": None, "auth_mode": None})()
             exit_code = telegram_digest.cmd_run(args)
@@ -454,7 +496,7 @@ class TelegramDigestTests(unittest.TestCase):
             telegram_digest.summarize_channel_batches = fail_summarize_channel_batches
             telegram_digest.bridge.require_token = lambda: "token"
             sent: list[str] = []
-            telegram_digest.bridge.send_text_chunks = lambda token, chat_id, message: sent.append(message)
+            telegram_digest.bridge.send_text_chunks = lambda token, chat_id, message, chunk_size=None, parse_mode=None: sent.append(message)
 
             args = type("Args", (), {"channel": None, "since": None, "until": None, "auth_mode": None})()
             exit_code = telegram_digest.cmd_run(args)

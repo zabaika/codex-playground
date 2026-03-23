@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 import hashlib
+import html
 import json
 import os
 import re
@@ -774,15 +775,105 @@ def build_digest_message(
     return "\n\n".join(sections)
 
 
+def format_digest_summary_for_telegram(summary: str) -> str:
+    lines = [line.strip() for line in summary.replace("\r\n", "\n").replace("\r", "\n").split("\n")]
+    compact_lines = [line for line in lines if line]
+    if not compact_lines:
+        return ""
+
+    heading_prefixes = (
+        "Главные темы",
+        "Наиболее популярное",
+        "Незакрытые вопросы",
+        "Связки вопрос-ответ",
+    )
+
+    formatted: list[str] = []
+    current_section = ""
+    previous_item_was_list = False
+    previous_line_kind = ""
+
+    def escape_line(value: str) -> str:
+        escaped = html.escape(value, quote=False)
+        escaped = escaped.replace("&lt;https://", "https://").replace("&lt;http://", "http://")
+        escaped = escaped.replace("&gt;", "")
+        return escaped
+
+    first_line = compact_lines[0]
+    if (
+        len(compact_lines) > 1
+        and not any(first_line.startswith(prefix) for prefix in heading_prefixes)
+        and not (first_line.startswith("- ") or first_line.startswith("• ") or first_line.startswith("<http"))
+    ):
+        formatted.extend(["<b>Главный вывод</b>", escape_line(first_line), ""])
+        compact_lines = compact_lines[1:]
+        previous_line_kind = "text"
+
+    for line in compact_lines:
+        is_heading = any(line.startswith(prefix) for prefix in heading_prefixes)
+        is_list_item = line.startswith("- ") or line.startswith("• ") or line.startswith("<http")
+
+        if is_heading:
+            current_section = "popular" if line.startswith("Наиболее популярное") else "regular"
+            heading_line = line
+            body_line = ""
+            if ":" in line:
+                prefix, suffix = line.split(":", 1)
+                if any(prefix.startswith(item) for item in heading_prefixes):
+                    heading_line = prefix
+                    body_line = suffix.strip()
+            if formatted and formatted[-1] != "":
+                formatted.append("")
+            formatted.append(f"<b>{escape_line(heading_line)}</b>")
+            if body_line:
+                formatted.append(escape_line(body_line))
+                previous_line_kind = "text"
+            else:
+                previous_line_kind = "heading"
+            previous_item_was_list = False
+            continue
+
+        if is_list_item:
+            is_dense_section = current_section == "popular"
+            if (
+                formatted
+                and not is_dense_section
+                and formatted[-1] != ""
+                and previous_line_kind in {"text", "list"}
+            ):
+                formatted.append("")
+            formatted.append(escape_line(line))
+            previous_item_was_list = True
+            previous_line_kind = "list"
+            continue
+
+        if formatted and formatted[-1] != "":
+            formatted.append("")
+        formatted.append(escape_line(line))
+        previous_item_was_list = False
+        previous_line_kind = "text"
+
+    while formatted and formatted[-1] == "":
+        formatted.pop()
+    return "\n".join(formatted)
+
+
 def build_channel_digest_message(channel_name: str, *, since: str, until: str, message_count: int, summary: str) -> str:
-    return "\n\n".join(
+    formatted_summary = format_digest_summary_for_telegram(summary)
+    header = "\n\n".join(
         [
-            channel_name,
-            f"Период UTC: {since} .. {until}",
-            f"Сообщений в анализе: {message_count}",
-            summary,
+            f"<b>{html.escape(channel_name, quote=False)}</b>",
+            "\n".join(
+                [
+                    f"Период UTC: {html.escape(since, quote=False)} .. {html.escape(until, quote=False)}",
+                    f"Сообщений в анализе: {message_count}",
+                ]
+            ),
         ]
     )
+    if not formatted_summary:
+        return header
+    return f"{header}\n\n{formatted_summary}"
 
 
 def build_channel_digest_skip_message(
@@ -1043,6 +1134,7 @@ def cmd_run(args: argparse.Namespace) -> int:
                         message_count=0,
                         summary="Новых сообщений в выбранном периоде нет.",
                     ),
+                    parse_mode="HTML",
                 )
                 sent_channel_messages += 1
                 continue
@@ -1058,6 +1150,7 @@ def cmd_run(args: argparse.Namespace) -> int:
                         message_count=total_message_count,
                         min_messages_for_ai=digest_config.min_messages_for_ai,
                     ),
+                    parse_mode="HTML",
                 )
                 sent_channel_messages += 1
                 continue
@@ -1102,6 +1195,7 @@ def cmd_run(args: argparse.Namespace) -> int:
                     message_count=message_count,
                     summary=summary,
                 ),
+                parse_mode="HTML",
             )
             sent_channel_messages += 1
     finally:
@@ -1109,7 +1203,12 @@ def cmd_run(args: argparse.Namespace) -> int:
         log_conn.close()
 
     if errors:
-        bridge.send_text_chunks(token, chat_id, build_digest_error_message(since=since, until=until, errors=errors))
+        bridge.send_text_chunks(
+            token,
+            chat_id,
+            build_digest_error_message(since=since, until=until, errors=errors),
+            parse_mode="HTML",
+        )
     print(
         json.dumps(
             {

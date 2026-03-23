@@ -151,6 +151,7 @@ For the history client:
 - the digest prompts are expected to output `Наиболее популярное` as direct Telegram message links with short human-readable titles, using `forwards` and `replies` as popularity hints
 - `Связки вопрос-ответ/развитие темы` stays optional and should only appear when it adds structure beyond the main topics and popularity block; when used, each item should also reference a direct message link
 - prompt templates should avoid leaking internal processing words like `батч` into the user-facing digest text
+- Telegram-specific spacing and block formatting are enforced by digest post-processing, so prompt templates only need to describe the semantic structure of the answer
 - `tail`, `update`, and `backfill` already stream messages from Telegram incrementally through Telethon; `[sync].batch_size` affects local DB commit batching, not the underlying Telegram API paging
 - AI batching in `digest` is done per channel, not across channels: each selected channel gets its own batch chain, intermediate summaries, and final channel summary
 - digest delivery is also per channel: as soon as one channel summary is ready, it is sent to Telegram as a separate message

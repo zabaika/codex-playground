@@ -260,7 +260,7 @@ class TelegramConnectorTests(unittest.TestCase):
     def test_send_text_chunks_splits_long_messages(self) -> None:
         sent_messages: list[str] = []
 
-        def fake_send(token: str, chat_id: str | int, text: str) -> None:
+        def fake_send(token: str, chat_id: str | int, text: str, parse_mode: str | None = None) -> None:
             self.assertEqual(token, "token")
             self.assertEqual(chat_id, 42)
             sent_messages.append(text)
@@ -499,7 +499,7 @@ class TelegramConnectorTests(unittest.TestCase):
             return subprocess.CompletedProcess(args=args[0], returncode=0, stdout='{"status":"ok"}', stderr="")
 
         telegram_connector.subprocess.run = fake_run
-        telegram_connector.send_text_chunks = lambda token, chat_id, text, chunk_size=3500: None
+        telegram_connector.send_text_chunks = lambda token, chat_id, text, chunk_size=3500, parse_mode=None: None
         try:
             telegram_connector.handle_history_command(
                 "bot-token",
@@ -542,7 +542,7 @@ class TelegramConnectorTests(unittest.TestCase):
             )
 
         telegram_connector.subprocess.run = fake_run
-        telegram_connector.send_text_chunks = lambda token, chat_id, text, chunk_size=None: sent_messages.append(text)
+        telegram_connector.send_text_chunks = lambda token, chat_id, text, chunk_size=None, parse_mode=None: sent_messages.append(text)
         try:
             telegram_connector.handle_history_command("bot-token", config, update, secret_env={})
         finally:

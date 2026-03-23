@@ -366,29 +366,34 @@ def extract_date(update: dict[str, Any]) -> str:
     return datetime.fromtimestamp(unix_ts, tz=timezone.utc).isoformat()
 
 
-def send_text_message(token: str, chat_id: str | int, text: str) -> None:
-    api_call(
-        token,
-        "sendMessage",
-        {
-            "chat_id": str(chat_id),
-            "text": text,
-        },
-    )
+def send_text_message(token: str, chat_id: str | int, text: str, parse_mode: str | None = None) -> None:
+    payload = {
+        "chat_id": str(chat_id),
+        "text": text,
+    }
+    if parse_mode:
+        payload["parse_mode"] = parse_mode
+    api_call(token, "sendMessage", payload)
 
 
-def send_text_chunks(token: str, chat_id: str | int, text: str, chunk_size: int | None = None) -> None:
+def send_text_chunks(
+    token: str,
+    chat_id: str | int,
+    text: str,
+    chunk_size: int | None = None,
+    parse_mode: str | None = None,
+) -> None:
     active_chunk_size = resolve_text_chunk_size() if chunk_size is None else chunk_size
     remaining = text.strip() or "<empty response>"
     if len(remaining) <= min(4096, active_chunk_size):
-        send_text_message(token, chat_id, remaining)
+        send_text_message(token, chat_id, remaining, parse_mode=parse_mode)
         return
     while remaining:
         chunk = remaining[:active_chunk_size]
         split_at = chunk.rfind("\n")
         if split_at > 100:
             chunk = chunk[:split_at]
-        send_text_message(token, chat_id, chunk)
+        send_text_message(token, chat_id, chunk, parse_mode=parse_mode)
         remaining = remaining[len(chunk):].lstrip()
 
 
