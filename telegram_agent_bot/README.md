@@ -70,7 +70,7 @@ Notes:
 
 - `bridge.allowed_chat_ids` limits who may run `/agent` and `/reset`
 - `bridge.allowed_user_ids` and `bridge.allowed_usernames` add per-user protection on top of the chat allowlist
-- `bridge.allowed_usernames` may be a comma-separated value or an `op://...` 1Password reference that resolves to a comma-separated list
+- `bridge.allowed_usernames` may be a comma-separated value or a `keychain://...` reference that resolves to a comma-separated list
 - `bridge.default_command = "agent"` means plain text is treated as `/agent ...`; set it empty to require explicit commands
 - `bridge.text_chunk_size` controls Telegram reply chunking
 - `bridge.agent_stats_row_limit` limits `/agent-stats` to the latest N rows from `ai_usage_log`, so the command stays fast as the database grows
@@ -80,33 +80,35 @@ Notes:
 - the bridge resolves bot/OpenAI secrets once at startup and passes only the minimum required env vars to the worker, matching the neighbor project's secret-handling pattern
 - the worker resolves secrets in this order:
   1. environment variable
-  2. `op://...` reference
-  3. plain local value from `runtime.local.toml`
+  2. `keychain://...` reference
+  3. `op://...` reference
+  4. plain local value from `runtime.local.toml`
 - the worker logs each OpenAI request round into `data/telegram_agent.sqlite3` inside `ai_usage_log`, including `prompt_cache_key`, prompt hashes, cached input tokens, and prefix overlap with the previous request for the same cache key
 
-### 1Password CLI
+### macOS Keychain
 
-Suggested item layout in 1Password:
+Suggested generic-password layout in Keychain:
 
-- vault: `Personal`
-- item: `telegram-agent-bot`
-- fields:
+- service: `telegram-agent-bot`
+- accounts:
   - `bot_token`
   - `openai_api_key`
-  - later, add extra fields only when the bot explicitly asks for a new secret
+  - later, add extra accounts only when the bot explicitly asks for a new secret
 
 Then set these refs in `runtime.local.toml`:
 
 ```toml
 [secrets]
-bot_token = "op://Personal/telegram-agent-bot/bot_token"
-openai_api_key = "op://Personal/telegram-agent-bot/openai_api_key"
+bot_token = "keychain://telegram-agent-bot/bot_token"
+openai_api_key = "keychain://telegram-agent-bot/openai_api_key"
 ```
 
 Before running the scripts:
 
-- install 1Password CLI and authenticate `op`
-- verify a ref manually: `op read op://Personal/telegram-agent-bot/bot_token`
+- store a secret once:
+  `security add-generic-password -U -s telegram-agent-bot -a bot_token -w '<token>'`
+- verify a ref manually:
+  `security find-generic-password -s telegram-agent-bot -a bot_token -w`
 
 ## Usage
 

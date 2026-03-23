@@ -115,8 +115,8 @@ openai_api_key = "<secret reference or local secret>"
 For the history client:
 
 - `telethon.api_id` and `secrets.api_hash` come from [my.telegram.org](https://my.telegram.org)
-- `telethon.api_id`, `telethon.phone` and `secrets.*` can be plain local values, but the preferred mode is a 1Password CLI reference like `op://Personal/telegram-connector/bot_token`
-- `telethon.phone` is the phone number of the Telegram user account that will read channel history; it can also be a 1Password reference
+- `telethon.api_id`, `telethon.phone` and `secrets.*` can be plain local values, but the preferred mode is a Keychain reference like `keychain://telegram-connector/bot_token`
+- `telethon.phone` is the phone number of the Telegram user account that will read channel history; it can also be a Keychain reference
 - `secrets.user_password` is optional and only needed when Telegram account 2FA is enabled
 - for private channels, that user account must already be a member of the channel
 - `telethon.user_session_name` and `telethon.bot_session_name` keep separate Telethon sessions
@@ -168,45 +168,48 @@ For the history client:
 - `digest_prompts.shared_prompt_prefix` is prepended to both intermediate and final prompts so the cache-friendly prefix stays aligned across the whole digest pipeline
 - every OpenAI digest call logs usage into SQLite table `ai_usage_log`, including input tokens, cached input tokens, output tokens, total tokens, latency, stage, status, `response_id`, `prompt_cache_key`, and shared-prefix diagnostics
 
-### 1Password CLI
+### macOS Keychain
 
-The project can resolve secret references through 1Password CLI with `op read`.
+The project can resolve secret references through macOS Keychain with `security find-generic-password`.
 
-Suggested item layout in 1Password:
+Suggested generic-password layout in Keychain:
 
-- vault: `Personal`
-- item: `telegram-connector`
-- fields:
+- service: `telegram-connector`
+- accounts:
   - `api_id`
   - `bot_token`
   - `api_hash`
   - `phone`
   - `user_password`
   - `openai_api_key`
+  - `allowed_users`
 
 Then set these refs in `runtime.local.toml`:
 
 ```toml
 [telethon]
-api_id = "op://Personal/telegram-connector/api_id"
-phone = "op://Personal/telegram-connector/phone"
+api_id = "keychain://telegram-connector/api_id"
+phone = "keychain://telegram-connector/phone"
 
 [secrets]
-bot_token = "op://Personal/telegram-connector/bot_token"
-api_hash = "op://Personal/telegram-connector/api_hash"
-user_password = "op://Personal/telegram-connector/user_password"
-openai_api_key = "op://Personal/telegram-connector/openai_api_key"
+bot_token = "keychain://telegram-connector/bot_token"
+api_hash = "keychain://telegram-connector/api_hash"
+user_password = "keychain://telegram-connector/user_password"
+openai_api_key = "keychain://telegram-connector/openai_api_key"
 ```
 
 Before running the scripts:
 
-- install 1Password CLI and authenticate `op`
-- verify a ref manually: `op read op://Personal/telegram-connector/bot_token`
+- store a secret once:
+  `security add-generic-password -U -s telegram-connector -a bot_token -w '<token>'`
+- verify a ref manually:
+  `security find-generic-password -s telegram-connector -a bot_token -w`
 
 Secrets are resolved in this order:
 
 - environment variable, if set
-- `op://...` 1Password reference
+- `keychain://...` Keychain reference
+- `op://...` legacy 1Password reference
 - plain local value from `runtime.local.toml`
 
 ## Usage
@@ -378,7 +381,7 @@ python3 telegram_connector/telegram_history_client.py doctor
 
 Additional notes:
 
-- useful after changing config, 1Password refs, Telethon, or Tesseract setup
+- useful after changing config, Keychain refs, Telethon, or Tesseract setup
 
 #### `init-db`
 
@@ -449,7 +452,7 @@ Additional notes:
 - final quality is usually better than a single huge prompt on long periods because the model sees ordered local context first and only then performs a second-pass synthesis
 - output is delivered to `telegram.default_chat_id`, not to an arbitrary invoking chat
 - `install_digest_crontab.sh` uses `digest.time` and writes output to `telegram_connector/data/launchd/digest.cron.log`
-- if scheduled `crontab` runs cannot resolve `op://...` secrets non-interactively, move those secrets for the scheduled job to a backend like Keychain that works without GUI prompts
+- scheduled `crontab` runs are expected to use Keychain-backed secrets so they can resolve non-interactively without GUI prompts
 
 #### `sync`
 

@@ -1222,20 +1222,23 @@ user_password = "pw_x"
         )
         self.assertEqual([(row["channel_id"], row["message_id"]) for row in rows], [(1, 1), (1, 2)])
 
-    def test_resolve_runtime_reads_onepassword_references(self) -> None:
+    def test_resolve_runtime_reads_keychain_references(self) -> None:
         original_file = telegram_history_client.RUNTIME_LOCAL_FILE
         original_run = telegram_history_client.subprocess.run
         telegram_history_client._SECRET_CACHE.clear()
         values = {
-            "op://Personal/telegram-connector/api_id": "12345",
-            "op://Personal/telegram-connector/api_hash": "api_hash_from_op",
-            "op://Personal/telegram-connector/bot_token": "bot_token_from_op",
-            "op://Personal/telegram-connector/user_password": "user_password_from_op",
-            "op://Personal/telegram-connector/phone": "+34111111111",
+            "telegram-connector/api_id": "12345",
+            "telegram-connector/api_hash": "api_hash_from_keychain",
+            "telegram-connector/bot_token": "bot_token_from_keychain",
+            "telegram-connector/user_password": "user_password_from_keychain",
+            "telegram-connector/phone": "+34111111111",
         }
 
         def fake_run(*args, **kwargs):
-            reference = args[0][-1]
+            argv = args[0]
+            service = argv[argv.index("-s") + 1]
+            account = argv[argv.index("-a") + 1]
+            reference = f"{service}/{account}"
             return subprocess.CompletedProcess(args=args[0], returncode=0, stdout=f"{values[reference]}\n", stderr="")
 
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -1245,8 +1248,8 @@ user_password = "pw_x"
 [telethon]
 user_session_name = "session_user_x"
 bot_session_name = "session_bot_x"
-api_id = "op://Personal/telegram-connector/api_id"
-phone = "op://Personal/telegram-connector/phone"
+api_id = "keychain://telegram-connector/api_id"
+phone = "keychain://telegram-connector/phone"
 
 [auth]
 default_mode = "user"
@@ -1269,9 +1272,9 @@ batch_size = "500"
 image_prompt = "OCR this"
 
 [secrets]
-api_hash = "op://Personal/telegram-connector/api_hash"
-bot_token = "op://Personal/telegram-connector/bot_token"
-user_password = "op://Personal/telegram-connector/user_password"
+api_hash = "keychain://telegram-connector/api_hash"
+bot_token = "keychain://telegram-connector/bot_token"
+user_password = "keychain://telegram-connector/user_password"
 """.strip(),
                 encoding="utf-8",
             )
@@ -1284,9 +1287,9 @@ user_password = "op://Personal/telegram-connector/user_password"
                 telegram_history_client.subprocess.run = original_run
 
         self.assertEqual(runtime.api_id, "12345")
-        self.assertEqual(runtime.api_hash, "api_hash_from_op")
-        self.assertEqual(runtime.bot_token, "bot_token_from_op")
-        self.assertEqual(runtime.user_password, "user_password_from_op")
+        self.assertEqual(runtime.api_hash, "api_hash_from_keychain")
+        self.assertEqual(runtime.bot_token, "bot_token_from_keychain")
+        self.assertEqual(runtime.user_password, "user_password_from_keychain")
         self.assertEqual(runtime.phone, "+34111111111")
 
 

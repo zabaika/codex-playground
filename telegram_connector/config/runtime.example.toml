@@ -8,8 +8,8 @@ default_chat_id = ""
 [telethon]
 user_session_name = "telegram_history_user"
 bot_session_name = "telegram_history_bot"
-api_id = "op://Personal/telegram-connector/api_id"
-phone = "op://Personal/telegram-connector/phone"
+api_id = "keychain://telegram-connector/api_id"
+phone = "keychain://telegram-connector/phone"
 
 [auth]
 default_mode = "user"
@@ -159,8 +159,8 @@ final_digest_template = """
 image_prompt = "Extract all readable text from the image."
 
 [secrets]
-# 1Password secret references via `op read`
-bot_token = "op://Personal/telegram-connector/bot_token"
-api_hash = "op://Personal/telegram-connector/api_hash"
-user_password = "op://Personal/telegram-connector/user_password"
-openai_api_key = "op://Personal/OPENAI API key/credential"
+# macOS Keychain generic-password references via `security find-generic-password`
+bot_token = "keychain://telegram-connector/bot_token"
+api_hash = "keychain://telegram-connector/api_hash"
+user_password = "keychain://telegram-connector/user_password"
+openai_api_key = "keychain://telegram-connector/openai_api_key"

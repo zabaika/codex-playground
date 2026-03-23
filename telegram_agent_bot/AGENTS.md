@@ -25,7 +25,7 @@ These are strict product rules for the bot and must stay aligned with code, conf
 - Reply in Russian by default.
 - Use English only for terminology, API names, product names, or other proper nouns when needed.
 - If additional folder access, credentials, tokens, or permissions are needed, ask in Telegram first.
-- When new secrets are needed, prefer 1Password references and follow the same secret-resolution order as `telegram_connector`.
+- When new secrets are needed, prefer macOS Keychain references and follow the same secret-resolution order as `telegram_connector`.
 - If file creation is needed, ask where to place files and propose sensible candidate paths.
 - If functionality is missing, first look for existing installable skills or ready integrations before inventing a new custom skill from scratch.
 - Accept commands only from the configured owner user.
@@ -58,6 +58,8 @@ Daemon checklist before finishing changes:
 - Worker subprocesses must receive only an allowlisted secret env subset, not the full parent environment.
 - Tests should cover startup secret resolution and should fail if `op read` is triggered again for every handled command.
 - Any standalone worker secret resolution must stay separate from the long-running bridge path and must not be used as an excuse to skip daemon startup caching.
+- After changing bridge code, `telegram_shared`, or `config/runtime.local.toml`, redeploy the launchd service with `scripts/install_launch_agent.sh`, not only `scripts/restart_launch_agent.sh`.
+- `restart_launch_agent.sh` only reloads the already installed plist/service-root copy; it does not recopy fresh code or config into `~/Library/Application Support/telegram_agent_bot_service`.
 
 ## Telegram Formatting Rules
 

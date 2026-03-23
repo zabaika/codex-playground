@@ -271,7 +271,7 @@ class TelegramConnectorTests(unittest.TestCase):
         config = {"bridge": {"allowed_usernames": "@Andrej, codex_user"}}
         self.assertEqual(telegram_connector.parse_allowed_usernames(config), {"andrej", "codex_user"})
 
-    def test_parse_allowed_usernames_supports_onepassword_reference(self) -> None:
+    def test_parse_allowed_usernames_supports_keychain_reference(self) -> None:
         original_run = telegram_connector.subprocess.run
         telegram_connector._SECRET_CACHE.clear()
 
@@ -280,7 +280,7 @@ class TelegramConnectorTests(unittest.TestCase):
 
         telegram_connector.subprocess.run = fake_run
         try:
-            config = {"bridge": {"allowed_usernames": "op://Personal/test-bot/allowed_users"}}
+            config = {"bridge": {"allowed_usernames": "keychain://telegram-connector/allowed_users"}}
             result = telegram_connector.parse_allowed_usernames(config)
         finally:
             telegram_connector.subprocess.run = original_run
@@ -403,11 +403,11 @@ class TelegramConnectorTests(unittest.TestCase):
 
     def test_redact_sensitive_text_masks_secret_refs_and_keys(self) -> None:
         text = (
-            "op://Personal/test/item Authorization: Bearer abcdefghijklmnop "
+            "keychain://telegram-connector/bot_token Authorization: Bearer abcdefghijklmnop "
             "OPENAI_API_KEY=sk-123456789012 /Users/alice/file bot123456:ABCDEF"
         )
         redacted = telegram_connector.redact_sensitive_text(text)
-        self.assertNotIn("op://Personal/test/item", redacted)
+        self.assertNotIn("keychain://telegram-connector/bot_token", redacted)
         self.assertNotIn("abcdefghijklmnop", redacted)
         self.assertNotIn("sk-123456789012", redacted)
         self.assertNotIn("/Users/alice/file", redacted)
@@ -417,45 +417,52 @@ class TelegramConnectorTests(unittest.TestCase):
         self.assertIn("<path>", redacted)
         self.assertIn("<bot_token>", redacted)
 
-    def test_resolve_secret_value_reads_onepassword_reference(self) -> None:
+    def test_resolve_secret_value_reads_keychain_reference(self) -> None:
         original_run = telegram_connector.subprocess.run
         telegram_connector._SECRET_CACHE.clear()
 
         def fake_run(*args, **kwargs):
-            return subprocess.CompletedProcess(args=args[0], returncode=0, stdout="secret-from-op\n", stderr="")
+            self.assertEqual(
+                args[0],
+                ["security", "find-generic-password", "-s", "telegram-connector", "-a", "bot_token", "-w"],
+            )
+            return subprocess.CompletedProcess(args=args[0], returncode=0, stdout="secret-from-keychain\n", stderr="")
 
         telegram_connector.subprocess.run = fake_run
         try:
-            value = telegram_connector.resolve_secret_value("op://Private/item/field", "Bot token")
+            value = telegram_connector.resolve_secret_value("keychain://telegram-connector/bot_token", "Bot token")
         finally:
             telegram_connector.subprocess.run = original_run
 
-        self.assertEqual(value, "secret-from-op")
+        self.assertEqual(value, "secret-from-keychain")
 
     def test_resolve_bridge_secrets_reads_expected_env_bundle(self) -> None:
         original_run = telegram_connector.subprocess.run
         telegram_connector._SECRET_CACHE.clear()
         config = {
             "telethon": {
-                "api_id": "op://Personal/item/api_id",
-                "phone": "op://Personal/item/phone",
+                "api_id": "keychain://telegram-connector/api_id",
+                "phone": "keychain://telegram-connector/phone",
             },
             "secrets": {
-                "api_hash": "op://Personal/item/api_hash",
-                "bot_token": "op://Personal/item/bot_token",
-                "user_password": "op://Personal/item/user_password",
+                "api_hash": "keychain://telegram-connector/api_hash",
+                "bot_token": "keychain://telegram-connector/bot_token",
+                "user_password": "keychain://telegram-connector/user_password",
             },
         }
         values = {
-            "op://Personal/item/api_id": "1",
-            "op://Personal/item/phone": "+34111111111",
-            "op://Personal/item/api_hash": "hash",
-            "op://Personal/item/bot_token": "token",
-            "op://Personal/item/user_password": "pw",
+            "telegram-connector/api_id": "1",
+            "telegram-connector/phone": "+34111111111",
+            "telegram-connector/api_hash": "hash",
+            "telegram-connector/bot_token": "token",
+            "telegram-connector/user_password": "pw",
         }
 
         def fake_run(*args, **kwargs):
-            reference = args[0][-1]
+            argv = args[0]
+            service = argv[argv.index("-s") + 1]
+            account = argv[argv.index("-a") + 1]
+            reference = f"{service}/{account}"
             return subprocess.CompletedProcess(args=args[0], returncode=0, stdout=f"{values[reference]}\n", stderr="")
 
         telegram_connector.subprocess.run = fake_run
@@ -474,6 +481,22 @@ class TelegramConnectorTests(unittest.TestCase):
                 "TELEGRAM_USER_PASSWORD": "pw",
             },
         )
+
+    def test_resolve_secret_value_still_supports_legacy_onepassword_reference(self) -> None:
+        original_run = telegram_connector.subprocess.run
+        telegram_connector._SECRET_CACHE.clear()
+
+        def fake_run(*args, **kwargs):
+            self.assertEqual(args[0], ["op", "read", "op://Private/item/field"])
+            return subprocess.CompletedProcess(args=args[0], returncode=0, stdout="secret-from-op\n", stderr="")
+
+        telegram_connector.subprocess.run = fake_run
+        try:
+            value = telegram_connector.resolve_secret_value("op://Private/item/field", "Bot token")
+        finally:
+            telegram_connector.subprocess.run = original_run
+
+        self.assertEqual(value, "secret-from-op")
 
     def test_build_history_client_subprocess_env_whitelists_parent_env(self) -> None:
         original_project_root = os.environ.get("TELEGRAM_CONNECTOR_PROJECT_ROOT")

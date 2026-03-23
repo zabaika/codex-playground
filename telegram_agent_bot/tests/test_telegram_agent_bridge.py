@@ -74,7 +74,7 @@ class TelegramAgentBridgeTests(unittest.TestCase):
         config = {"bridge": {"allowed_usernames": "@Andrej, codex_user"}}
         self.assertEqual(telegram_agent_bridge.parse_allowed_usernames(config), {"andrej", "codex_user"})
 
-    def test_parse_allowed_usernames_supports_onepassword_reference(self) -> None:
+    def test_parse_allowed_usernames_supports_keychain_reference(self) -> None:
         original_run = telegram_agent_bridge.subprocess.run
         telegram_agent_bridge._SECRET_CACHE.clear()
 
@@ -83,7 +83,7 @@ class TelegramAgentBridgeTests(unittest.TestCase):
 
         telegram_agent_bridge.subprocess.run = fake_run
         try:
-            config = {"bridge": {"allowed_usernames": "op://Personal/test-bot/allowed_users"}}
+            config = {"bridge": {"allowed_usernames": "keychain://telegram-connector/allowed_users"}}
             result = telegram_agent_bridge.parse_allowed_usernames(config)
         finally:
             telegram_agent_bridge.subprocess.run = original_run
@@ -95,11 +95,14 @@ class TelegramAgentBridgeTests(unittest.TestCase):
         telegram_agent_bridge._SECRET_CACHE.clear()
 
         def fake_run(*args, **kwargs):
-            reference = args[0][-1]
+            argv = args[0]
+            service = argv[argv.index("-s") + 1]
+            account = argv[argv.index("-a") + 1]
+            reference = f"{service}/{account}"
             values = {
-                "op://Personal/test-bot/bot_token": "bot-token",
-                "op://Personal/test-bot/allowed_users": "@zabaev",
-                "op://Personal/test-openai/api_key": "openai-key",
+                "telegram-agent-bot/bot_token": "bot-token",
+                "telegram-connector/allowed_users": "@zabaev",
+                "telegram-agent-bot/openai_api_key": "openai-key",
             }
             return subprocess.CompletedProcess(args=args[0], returncode=0, stdout=f"{values[reference]}\n", stderr="")
 
@@ -108,12 +111,12 @@ class TelegramAgentBridgeTests(unittest.TestCase):
             runtime = telegram_agent_bridge.resolve_bridge_runtime(
                 {
                     "secrets": {
-                        "bot_token": "op://Personal/test-bot/bot_token",
-                        "openai_api_key": "op://Personal/test-openai/api_key",
+                        "bot_token": "keychain://telegram-agent-bot/bot_token",
+                        "openai_api_key": "keychain://telegram-agent-bot/openai_api_key",
                     },
                     "bridge": {
                         "allowed_chat_ids": "133126275",
-                        "allowed_usernames": "op://Personal/test-bot/allowed_users",
+                        "allowed_usernames": "keychain://telegram-connector/allowed_users",
                         "default_command": "agent",
                         "text_chunk_size": "3900",
                     },
@@ -169,11 +172,11 @@ class TelegramAgentBridgeTests(unittest.TestCase):
 
     def test_redact_sensitive_text_masks_secret_refs_and_tokens(self) -> None:
         text = (
-            "op://Personal/test/item Authorization: Bearer abcdefghijklmnop "
+            "keychain://telegram-agent-bot/bot_token Authorization: Bearer abcdefghijklmnop "
             "OPENAI_API_KEY=sk-123456789012 /Users/alice/file bot123456:ABCDEF"
         )
         redacted = telegram_agent_bridge.redact_sensitive_text(text)
-        self.assertNotIn("op://Personal/test/item", redacted)
+        self.assertNotIn("keychain://telegram-agent-bot/bot_token", redacted)
         self.assertNotIn("abcdefghijklmnop", redacted)
         self.assertNotIn("sk-123456789012", redacted)
         self.assertNotIn("/Users/alice/file", redacted)
@@ -274,19 +277,19 @@ class TelegramAgentBridgeTests(unittest.TestCase):
         original_run = telegram_agent_bridge.subprocess.run
         telegram_agent_bridge._SECRET_CACHE.clear()
 
-        op_reads: list[str] = []
+        keychain_reads: list[str] = []
         worker_runs = 0
 
         def fake_load_runtime_config() -> dict[str, object]:
             return {
                 "secrets": {
-                    "bot_token": "op://Personal/test-bot/bot_token",
-                    "openai_api_key": "op://Personal/test-openai/api_key",
+                    "bot_token": "keychain://telegram-agent-bot/bot_token",
+                    "openai_api_key": "keychain://telegram-agent-bot/openai_api_key",
                 },
                 "bridge": {
                     "allowed_chat_ids": "42",
                     "allowed_user_ids": "7",
-                    "allowed_usernames": "op://Personal/test-bot/allowed_users",
+                    "allowed_usernames": "keychain://telegram-connector/allowed_users",
                     "default_command": "agent",
                     "text_chunk_size": "3900",
                 },
@@ -317,13 +320,15 @@ class TelegramAgentBridgeTests(unittest.TestCase):
         def fake_run(*args, **kwargs):
             nonlocal worker_runs
             argv = args[0]
-            if argv[:2] == ["op", "read"]:
-                reference = argv[-1]
-                op_reads.append(reference)
+            if argv[:2] == ["security", "find-generic-password"]:
+                service = argv[argv.index("-s") + 1]
+                account = argv[argv.index("-a") + 1]
+                reference = f"{service}/{account}"
+                keychain_reads.append(reference)
                 values = {
-                    "op://Personal/test-bot/bot_token": "bot-token",
-                    "op://Personal/test-bot/allowed_users": "@alice",
-                    "op://Personal/test-openai/api_key": "openai-key",
+                    "telegram-agent-bot/bot_token": "bot-token",
+                    "telegram-connector/allowed_users": "@alice",
+                    "telegram-agent-bot/openai_api_key": "openai-key",
                 }
                 return subprocess.CompletedProcess(args=argv, returncode=0, stdout=f"{values[reference]}\n", stderr="")
             worker_runs += 1
@@ -368,11 +373,11 @@ class TelegramAgentBridgeTests(unittest.TestCase):
         self.assertEqual(result, 0)
         self.assertEqual(worker_runs, 2)
         self.assertEqual(
-            op_reads,
+            keychain_reads,
             [
-                "op://Personal/test-bot/bot_token",
-                "op://Personal/test-openai/api_key",
-                "op://Personal/test-bot/allowed_users",
+                "telegram-agent-bot/bot_token",
+                "telegram-agent-bot/openai_api_key",
+                "telegram-connector/allowed_users",
             ],
         )
 

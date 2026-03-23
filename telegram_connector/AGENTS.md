@@ -49,6 +49,8 @@ If README, code, and tests disagree, update them together.
 - Bridge and digest logs must not leak secrets or full raw updates.
 - Bridge secret resolution should happen at daemon startup, not on every handled update.
 - Child subprocesses must receive only the allowlisted env subset they need.
+- After changing bridge code, `telegram_shared`, or `config/runtime.local.toml`, redeploy the launchd service with `scripts/install_launch_agent.sh`, not only `scripts/restart_launch_agent.sh`.
+- `restart_launch_agent.sh` only reloads the already installed plist/service-root copy; it does not recopy fresh code or config into `~/Library/Application Support/telegram_connector_service`.
 
 ## Testing
 

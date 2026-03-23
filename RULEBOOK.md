@@ -89,10 +89,10 @@ Do not commit secrets in tracked files.
 
 Preferred storage:
 
-- 1Password CLI references via `op://...`
-- macOS Keychain is an acceptable local-runtime alternative when prompt frequency from 1Password becomes a material operational problem
+- macOS Keychain generic-password references via `keychain://<service>/<account>`
+- `op://...` remains acceptable as a legacy fallback, but not as the primary backend for unattended local daemons or cron jobs
 
-Recommended fields in 1Password:
+Suggested Keychain accounts:
 
 - `api_id`
 - `api_hash`
@@ -103,8 +103,9 @@ Recommended fields in 1Password:
 Preferred resolution order:
 
 1. environment variable
-2. `op://...` reference
-3. local plaintext fallback in `runtime.local.toml`
+2. `keychain://...` reference
+3. `op://...` reference
+4. local plaintext fallback in `runtime.local.toml`
 
 Rules:
 
@@ -140,14 +141,16 @@ Implementation checklist for daemon code review:
 - `op read` or equivalent secret-backend calls should not appear on the hot path for each handled message
 - tests should exercise the listener path and verify that multiple handled commands do not trigger repeated secret resolution
 - standalone one-shot worker CLIs may resolve their own secrets, but that must remain separate from the long-running daemon path
+- if launchd runs from a copied service root, changes to code, shared modules, or `runtime.local.toml` must be applied with the install/redeploy script, not only with a restart script
+- a restart script may only reload the already installed plist and running copy; it should not be assumed to sync fresh code into the service root
 
 Tradeoff guidance:
 
-- resolving secrets once in the daemon and keeping them in memory is usually a better balance than calling `op read` on every request
+- resolving secrets once in the daemon and keeping them in memory is usually a better balance than calling the secret backend on every request
 - this is still safer than storing plaintext secrets in tracked or local runtime files
-- if prompt frequency becomes the main usability issue on a single Mac, Keychain-backed runtime resolution may be preferable to repeated 1Password CLI prompts
+- for local macOS daemons and cron jobs, Keychain-backed runtime resolution is the preferred default because it avoids GUI re-authorization prompts
 - jobs started from `crontab` or another non-interactive scheduler should use a secret backend that can resolve without GUI prompts
-- if 1Password CLI prompts make scheduled jobs unreliable, prefer Keychain or another non-interactive local secret source for that specific scheduled job
+- if 1Password CLI prompts make scheduled jobs unreliable, migrate that runtime path to Keychain or another non-interactive local secret source
 
 ## 4. Path and Filesystem Rules
 
@@ -485,7 +488,7 @@ When creating a new Telegram-based program, verify:
 If you bootstrap a new Telegram project from this one, copy these ideas first:
 
 - local `runtime.example.toml` + ignored `runtime.local.toml`
-- 1Password secret resolution
+- Keychain-backed secret resolution
 - project-root env override
 - sanitized bridge responses
 - redacted inbox logging
