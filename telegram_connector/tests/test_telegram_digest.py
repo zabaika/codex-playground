@@ -146,7 +146,8 @@ class TelegramDigestTests(unittest.TestCase):
     def test_build_prompt_cache_info_uses_shared_prefix_hash_and_common_key(self) -> None:
         info = telegram_digest.build_prompt_cache_info(
             model="gpt-5.4-mini",
-            channel="vc.ru",
+            cache_channel="@vcnews",
+            display_channel="vc.ru",
             since="2026-03-17",
             until="2026-03-17",
             system_instructions="system",
@@ -156,6 +157,14 @@ class TelegramDigestTests(unittest.TestCase):
 
         self.assertTrue(info.cache_key.startswith("digest:"))
         self.assertLessEqual(len(info.cache_key), 64)
+        self.assertEqual(
+            info.cache_key,
+            telegram_digest.build_prompt_cache_key(
+                model="gpt-5.4-mini",
+                channel="@vcnews",
+                profile="day",
+            ),
+        )
         self.assertEqual(info.cache_retention, "in_memory")
         self.assertEqual(info.system_chars, len("system"))
         self.assertEqual(info.prompt_chars, len("Shared vc.ru 2026-03-17 2026-03-17\n\nbody"))
@@ -281,6 +290,11 @@ class TelegramDigestTests(unittest.TestCase):
                     prompt_chars INTEGER,
                     shared_prefix_chars INTEGER,
                     shared_prefix_hash TEXT,
+                    prompt_hash TEXT,
+                    previous_prompt_hash TEXT,
+                    previous_response_id TEXT,
+                    prefix_match_chars_with_previous INTEGER,
+                    prompt_text TEXT,
                     input_tokens INTEGER,
                     cached_input_tokens INTEGER,
                     output_tokens INTEGER,

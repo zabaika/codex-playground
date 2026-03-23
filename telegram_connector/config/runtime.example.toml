@@ -112,11 +112,11 @@ batch_digest_template = """
 - Порядковый номер части: {batch_index}
 - Сообщений в части: {message_count}
 
-Короткий контекст предыдущей промежуточной сводки:
-{previous_batch_summary}
-
 Сырые сообщения:
 {message_block}
+
+Короткий контекст предыдущей промежуточной сводки:
+{previous_batch_summary}
 """
 # Prompt template for the final per-channel digest built from batch summaries.
 # Available placeholders: {channel_name}, {since}, {until}, {message_count}, {batch_count}, {batch_summary_block}

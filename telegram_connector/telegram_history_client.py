@@ -112,6 +112,11 @@ CREATE TABLE IF NOT EXISTS ai_usage_log (
     prompt_chars INTEGER,
     shared_prefix_chars INTEGER,
     shared_prefix_hash TEXT,
+    prompt_hash TEXT,
+    previous_prompt_hash TEXT,
+    previous_response_id TEXT,
+    prefix_match_chars_with_previous INTEGER,
+    prompt_text TEXT,
     input_tokens INTEGER,
     cached_input_tokens INTEGER,
     output_tokens INTEGER,
@@ -407,6 +412,11 @@ def migrate_sqlite_schema(conn: sqlite3.Connection) -> None:
             "prompt_chars": "INTEGER",
             "shared_prefix_chars": "INTEGER",
             "shared_prefix_hash": "TEXT",
+            "prompt_hash": "TEXT",
+            "previous_prompt_hash": "TEXT",
+            "previous_response_id": "TEXT",
+            "prefix_match_chars_with_previous": "INTEGER",
+            "prompt_text": "TEXT",
         }
         for column_name, column_type in ai_usage_additions.items():
             if ai_usage_columns and column_name not in ai_usage_columns:

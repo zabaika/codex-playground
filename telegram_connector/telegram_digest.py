@@ -48,11 +48,11 @@ DEFAULT_BATCH_DIGEST_TEMPLATE = """Тип шага: промежуточная �
 - Порядковый номер части: {batch_index}
 - Сообщений в части: {message_count}
 
-Короткий контекст предыдущей промежуточной сводки:
-{previous_batch_summary}
-
 Сырые сообщения:
 {message_block}
+
+Короткий контекст предыдущей промежуточной сводки:
+{previous_batch_summary}
 """
 DEFAULT_FINAL_DIGEST_TEMPLATE = """Тип шага: финальный дайджест канала по промежуточным сводкам.
 
@@ -125,6 +125,7 @@ class PromptCacheInfo:
     prompt_chars: int
     shared_prefix_chars: int
     shared_prefix_hash: str
+    prompt_hash: str
 
 
 @dataclass
@@ -553,13 +554,12 @@ def extract_usage(response: dict[str, Any], latency_ms: int) -> OpenAIUsage:
     )
 
 
-def build_prompt_cache_key(*, model: str, channel: str, since: str, until: str) -> str:
+def build_prompt_cache_key(*, model: str, channel: str, profile: str) -> str:
     raw = "|".join(
         [
             model.strip().lower() or "unknown-model",
             channel.strip().lstrip("@").lower() or "unknown-channel",
-            since.strip(),
-            until.strip(),
+            profile.strip().lower() or "day",
         ]
     )
     digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:24]
@@ -569,26 +569,37 @@ def build_prompt_cache_key(*, model: str, channel: str, since: str, until: str) 
 def build_prompt_cache_info(
     *,
     model: str,
-    channel: str,
+    cache_channel: str,
+    display_channel: str,
     since: str,
     until: str,
     system_instructions: str,
     shared_prompt_prefix: str,
     prompt: str,
 ) -> PromptCacheInfo:
+    profile = digest_profile_name(since, until)
     prefix_text = shared_prompt_prefix.format(
-        channel_name=channel,
+        channel_name=display_channel,
         since=since,
         until=until,
     ).strip()
     return PromptCacheInfo(
-        cache_key=build_prompt_cache_key(model=model, channel=channel, since=since, until=until),
+        cache_key=build_prompt_cache_key(model=model, channel=cache_channel, profile=profile),
         cache_retention="in_memory",
         system_chars=len(system_instructions),
         prompt_chars=len(prompt),
         shared_prefix_chars=len(prefix_text),
         shared_prefix_hash=hashlib.sha256(prefix_text.encode("utf-8")).hexdigest()[:16],
+        prompt_hash=hashlib.sha256(prompt.encode("utf-8")).hexdigest()[:16],
     )
+
+
+def common_prefix_length(left: str, right: str) -> int:
+    limit = min(len(left), len(right))
+    idx = 0
+    while idx < limit and left[idx] == right[idx]:
+        idx += 1
+    return idx
 
 
 def log_openai_usage(
@@ -603,20 +614,38 @@ def log_openai_usage(
     message_count: int,
     status: str,
     cache_info: PromptCacheInfo,
+    prompt_text: str,
     usage: OpenAIUsage | None = None,
     response_id: str | None = None,
     error: str | None = None,
 ) -> None:
+    previous = conn.execute(
+        """
+        SELECT response_id, prompt_hash, prompt_text
+        FROM ai_usage_log
+        WHERE feature = 'digest'
+          AND prompt_cache_key = ?
+        ORDER BY id DESC
+        LIMIT 1
+        """,
+        (cache_info.cache_key,),
+    ).fetchone()
+    previous_response_id = previous["response_id"] if previous else None
+    previous_prompt_hash = previous["prompt_hash"] if previous else None
+    prefix_match_chars_with_previous = 0
+    if previous and previous["prompt_text"]:
+        prefix_match_chars_with_previous = common_prefix_length(previous["prompt_text"], prompt_text)
     conn.execute(
         """
         INSERT INTO ai_usage_log (
             created_at, feature, stage, channel, since, until, model, response_id,
             prompt_cache_key, prompt_cache_retention, request_index, message_count,
             system_chars, prompt_chars, shared_prefix_chars, shared_prefix_hash,
+            prompt_hash, previous_prompt_hash, previous_response_id, prefix_match_chars_with_previous,
             input_tokens, cached_input_tokens, output_tokens, total_tokens,
-            latency_ms, status, error
+            latency_ms, status, error, prompt_text
         )
-        VALUES (?, 'digest', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, 'digest', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             history_client.now_utc(),
@@ -634,6 +663,10 @@ def log_openai_usage(
             cache_info.prompt_chars,
             cache_info.shared_prefix_chars,
             cache_info.shared_prefix_hash,
+            cache_info.prompt_hash,
+            previous_prompt_hash,
+            previous_response_id,
+            prefix_match_chars_with_previous,
             usage.input_tokens if usage else None,
             usage.cached_input_tokens if usage else None,
             usage.output_tokens if usage else None,
@@ -641,6 +674,7 @@ def log_openai_usage(
             usage.latency_ms if usage else None,
             status,
             history_client.optional_text(error),
+            prompt_text,
         ),
     )
     conn.commit()
@@ -753,7 +787,8 @@ def summarize_channel_batches(
         )
         cache_info = build_prompt_cache_info(
             model=config.model,
-            channel=channel_name or channel,
+            cache_channel=channel,
+            display_channel=channel_name or channel,
             since=since,
             until=until,
             system_instructions=config.system_instructions,
@@ -780,6 +815,7 @@ def summarize_channel_batches(
                 message_count=batch_input.message_count,
                 status="error",
                 cache_info=cache_info,
+                prompt_text=prompt,
                 error=str(exc) or exc.__class__.__name__,
             )
             raise
@@ -794,6 +830,7 @@ def summarize_channel_batches(
             message_count=batch_input.message_count,
             status="ok",
             cache_info=cache_info,
+            prompt_text=prompt,
             usage=batch_result.usage,
             response_id=batch_result.response_id,
         )
@@ -817,7 +854,8 @@ def summarize_channel_batches(
     )
     final_cache_info = build_prompt_cache_info(
         model=config.model,
-        channel=channel_name or channel,
+        cache_channel=channel,
+        display_channel=channel_name or channel,
         since=since,
         until=until,
         system_instructions=config.system_instructions,
@@ -844,6 +882,7 @@ def summarize_channel_batches(
             message_count=len(unique_message_ids),
             status="error",
             cache_info=final_cache_info,
+            prompt_text=final_prompt,
             error=str(exc) or exc.__class__.__name__,
         )
         raise
@@ -858,6 +897,7 @@ def summarize_channel_batches(
         message_count=len(unique_message_ids),
         status="ok",
         cache_info=final_cache_info,
+        prompt_text=final_prompt,
         usage=final_result.usage,
         response_id=final_result.response_id,
     )
