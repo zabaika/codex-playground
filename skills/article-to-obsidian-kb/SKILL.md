@@ -14,11 +14,12 @@ Turn a source article URL into compact, Russian-language Obsidian notes in a use
 1. Load [references/local-config.md](references/local-config.md) before touching the vault.
 2. Resolve the skill directory from the location of this `SKILL.md`.
 3. Read `<skill-dir>/config/runtime.local.toml` when it exists.
-4. Use `note_roots.article` and `note_roots.concept` from that file for all search and save operations.
-5. Do not look for the config relative to the current working directory unless the skill directory itself is the current working directory.
-6. If `<skill-dir>/config/runtime.local.toml` exists and contains both required note roots, do not ask the user for those paths again.
-7. Never commit machine-specific paths, local roots, passwords, or tokens into `SKILL.md`, references, or tracked config files.
-8. If the local config is missing and the roots are not already obvious from the current task, pause and ask the user instead of guessing.
+4. Treat that repo copy as the single editable local config. If an installed Codex copy exists under `~/.codex/skills`, it should point to the same file rather than keeping a second divergent copy.
+5. Use `note_roots.article` and `note_roots.concept` from that file for all search and save operations.
+6. Do not look for the config relative to the current working directory unless the skill directory itself is the current working directory.
+7. If `<skill-dir>/config/runtime.local.toml` exists and contains both required note roots, do not ask the user for those paths again.
+8. Never commit machine-specific paths, local roots, passwords, or tokens into `SKILL.md`, references, or tracked config files.
+9. If the local config is missing and the roots are not already obvious from the current task, pause and ask the user instead of guessing.
 
 ## Workflow
 

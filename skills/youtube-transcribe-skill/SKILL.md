@@ -107,7 +107,6 @@ Supporting files:
 - `config/runtime.example.toml`
 - `scripts/run_youtube_transcribe.py`
 - `scripts/verify_provider_setup.sh`
-- `scripts/README.md`
 
 ## Output
 

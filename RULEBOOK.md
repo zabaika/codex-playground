@@ -67,6 +67,8 @@ Rules:
 - command-line explicit values override config
 - if a command omits a channel, use configured defaults
 - if a command includes a channel or channel list, ignore config defaults
+- for local Codex skills, keep exactly one editable `config/runtime.local.toml` in the repository skill folder
+- if the skill is also installed under `~/.codex/skills`, the installed copy should point to that same repo file instead of keeping a second divergent local config
 
 Recommended default channels format:
 
