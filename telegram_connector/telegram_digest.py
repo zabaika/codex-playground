@@ -1177,23 +1177,6 @@ def cmd_run(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_cron_line(args: argparse.Namespace) -> int:
-    config = history_client.load_runtime_config()
-    digest_config = resolve_digest_config(config)
-    hour, minute = digest_config.time.split(":", 1)
-    python_bin = sys.executable
-    line = (
-        f"{int(minute)} {int(hour)} * * * "
-        f"cd {PROJECT_ROOT} && "
-        f"TELEGRAM_CONNECTOR_PROJECT_ROOT={PROJECT_ROOT} "
-        f"{python_bin} telegram_digest.py run "
-        f">> data/launchd/digest.cron.log 2>&1 "
-        f"# telegram_connector_daily_digest"
-    )
-    print(line)
-    return 0
-
-
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Morning Telegram digest runner.")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -1204,9 +1187,6 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--until", help="Optional override for digest until window.")
     run.add_argument("--auth-mode", choices=["auto", "bot", "user"], help="Optional auth mode override.")
     run.set_defaults(func=cmd_run)
-
-    cron_line = subparsers.add_parser("cron-line", help="Print the crontab line for the configured digest schedule.")
-    cron_line.set_defaults(func=cmd_cron_line)
 
     return parser
 

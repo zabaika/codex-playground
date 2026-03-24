@@ -1,9 +1,7 @@
 import importlib.util
-import io
 import sqlite3
 import sys
 import unittest
-from contextlib import redirect_stdout
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -296,27 +294,6 @@ class TelegramDigestTests(unittest.TestCase):
         self.assertEqual((day.profile, day.sync_limit, day.ai_batch_size), ("day", 6100, 111))
         self.assertEqual((week.profile, week.sync_limit, week.ai_batch_size), ("week", 43000, 181))
         self.assertEqual((month.profile, month.sync_limit, month.ai_batch_size), ("month", 181000, 241))
-
-    def test_cmd_cron_line_uses_configured_time(self) -> None:
-        original_load = telegram_digest.history_client.load_runtime_config
-        telegram_digest.history_client.load_runtime_config = lambda: {
-            "processing": {"model": "test-model"},
-            "digest": {"time": "07:45"},
-            "secrets": {"openai_api_key": "op://Personal/item/openai_api_key"},
-        }
-        try:
-            buffer = io.StringIO()
-            with redirect_stdout(buffer):
-                exit_code = telegram_digest.cmd_cron_line(object())
-        finally:
-            telegram_digest.history_client.load_runtime_config = original_load
-
-        output = buffer.getvalue().strip()
-        self.assertEqual(exit_code, 0)
-        self.assertIn("45 7 * * *", output)
-        self.assertIn("telegram_digest.py run", output)
-        self.assertIn(">> data/launchd/digest.cron.log 2>&1", output)
-        self.assertIn("# telegram_connector_daily_digest", output)
 
     def test_cmd_run_sends_per_channel_messages_and_final_error_only_when_needed(self) -> None:
         original_resolve_runtime = telegram_digest.history_client.resolve_runtime

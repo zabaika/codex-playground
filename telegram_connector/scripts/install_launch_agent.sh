@@ -5,17 +5,38 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SOURCE_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 SERVICE_ROOT="$HOME/Library/Application Support/telegram_connector_service"
 LAUNCH_AGENTS_DIR="$HOME/Library/LaunchAgents"
-PLIST_PATH="$LAUNCH_AGENTS_DIR/com.zabaika.telegram-connector-bridge.plist"
-PYTHON_BIN="/usr/local/bin/python3"
+BRIDGE_PLIST_PATH="$LAUNCH_AGENTS_DIR/com.zabaika.telegram-connector-bridge.plist"
+DIGEST_PLIST_PATH="$LAUNCH_AGENTS_DIR/com.zabaika.telegram-connector-digest.plist"
+PYTHON_BIN="${PYTHON_BIN:-/usr/local/bin/python3}"
 PROJECT_LOG_DIR="$SOURCE_ROOT/data/launchd"
 STARTUP_LOG="$PROJECT_LOG_DIR/bridge.startup.log"
 STDOUT_LOG="$PROJECT_LOG_DIR/bridge.stdout.log"
 STDERR_LOG="$PROJECT_LOG_DIR/bridge.stderr.log"
+DIGEST_STARTUP_LOG="$PROJECT_LOG_DIR/digest.startup.log"
+DIGEST_STDOUT_LOG="$PROJECT_LOG_DIR/digest.stdout.log"
+DIGEST_STDERR_LOG="$PROJECT_LOG_DIR/digest.stderr.log"
+
+read -r DIGEST_HOUR DIGEST_MINUTE < <(
+  "$PYTHON_BIN" - <<PY
+import tomllib
+from pathlib import Path
+
+config_path = Path(r"$SOURCE_ROOT/config/runtime.local.toml")
+with config_path.open("rb") as fh:
+    config = tomllib.load(fh)
+
+raw_time = str(((config.get("digest") or {}).get("time") or "08:00")).strip()
+hour_text, minute_text = raw_time.split(":", 1)
+print(int(hour_text), int(minute_text))
+PY
+)
 
 mkdir -p "$SERVICE_ROOT/config" "$SERVICE_ROOT/data/launchd" "$SERVICE_ROOT/scripts" "$LAUNCH_AGENTS_DIR" "$PROJECT_LOG_DIR"
 
 rm -f "$PROJECT_LOG_DIR"/bridge.startup.log "$PROJECT_LOG_DIR"/bridge.stdout.log "$PROJECT_LOG_DIR"/bridge.stderr.log
+rm -f "$PROJECT_LOG_DIR"/digest.startup.log "$PROJECT_LOG_DIR"/digest.stdout.log "$PROJECT_LOG_DIR"/digest.stderr.log
 rm -f "$SERVICE_ROOT"/data/launchd/bridge.stdout.log "$SERVICE_ROOT"/data/launchd/bridge.stderr.log
+rm -f "$SERVICE_ROOT"/data/launchd/digest.stdout.log "$SERVICE_ROOT"/data/launchd/digest.stderr.log
 
 cp "$SOURCE_ROOT/telegram_connector.py" "$SERVICE_ROOT/telegram_connector.py"
 cp "$SOURCE_ROOT/telegram_history_client.py" "$SERVICE_ROOT/telegram_history_client.py"
@@ -53,7 +74,23 @@ EOF
 
 chmod +x "$SERVICE_ROOT/scripts/run_telegram_bridge.sh"
 
-cat > "$PLIST_PATH" <<EOF
+cat > "$SERVICE_ROOT/scripts/run_telegram_digest.sh" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$HOME/Library/Application Support/telegram_connector_service"
+export PATH="/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+: "${TELEGRAM_CONNECTOR_PROJECT_ROOT:?TELEGRAM_CONNECTOR_PROJECT_ROOT is required}"
+STARTUP_LOG="$TELEGRAM_CONNECTOR_PROJECT_ROOT/data/launchd/digest.startup.log"
+
+cd "$ROOT"
+printf '[%s] starting telegram digest from %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$ROOT" >> "$STARTUP_LOG"
+exec /usr/local/bin/python3 "$ROOT/telegram_digest.py" run
+EOF
+
+chmod +x "$SERVICE_ROOT/scripts/run_telegram_digest.sh"
+
+cat > "$BRIDGE_PLIST_PATH" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -93,11 +130,60 @@ cat > "$PLIST_PATH" <<EOF
 </plist>
 EOF
 
-launchctl unload "$PLIST_PATH" >/dev/null 2>&1 || true
-launchctl load "$PLIST_PATH"
+cat > "$DIGEST_PLIST_PATH" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+  <dict>
+    <key>Label</key>
+    <string>com.zabaika.telegram-connector-digest</string>
 
-echo "Installed launch agent: $PLIST_PATH"
+    <key>ProgramArguments</key>
+    <array>
+      <string>$SERVICE_ROOT/scripts/run_telegram_digest.sh</string>
+    </array>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+      <key>TELEGRAM_CONNECTOR_PROJECT_ROOT</key>
+      <string>$SOURCE_ROOT</string>
+    </dict>
+
+    <key>StartCalendarInterval</key>
+    <dict>
+      <key>Hour</key>
+      <integer>$DIGEST_HOUR</integer>
+      <key>Minute</key>
+      <integer>$DIGEST_MINUTE</integer>
+    </dict>
+
+    <key>WorkingDirectory</key>
+    <string>$SERVICE_ROOT</string>
+
+    <key>StandardOutPath</key>
+    <string>$DIGEST_STDOUT_LOG</string>
+
+    <key>StandardErrorPath</key>
+    <string>$DIGEST_STDERR_LOG</string>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+  </dict>
+</plist>
+EOF
+
+launchctl unload "$BRIDGE_PLIST_PATH" >/dev/null 2>&1 || true
+launchctl unload "$DIGEST_PLIST_PATH" >/dev/null 2>&1 || true
+launchctl load "$BRIDGE_PLIST_PATH"
+launchctl load "$DIGEST_PLIST_PATH"
+
+echo "Installed launch agent: $BRIDGE_PLIST_PATH"
+echo "Installed launch agent: $DIGEST_PLIST_PATH"
 echo "Service root: $SERVICE_ROOT"
 echo "Startup log: $STARTUP_LOG"
 echo "Stdout log: $STDOUT_LOG"
 echo "Stderr log: $STDERR_LOG"
+echo "Digest startup log: $DIGEST_STARTUP_LOG"
+echo "Digest stdout log: $DIGEST_STDOUT_LOG"
+echo "Digest stderr log: $DIGEST_STDERR_LOG"
+echo "Digest schedule: $(printf '%02d:%02d' "$DIGEST_HOUR" "$DIGEST_MINUTE")"

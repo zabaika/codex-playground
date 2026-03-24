@@ -90,7 +90,7 @@ Do not commit secrets in tracked files.
 Preferred storage:
 
 - macOS Keychain generic-password references via `keychain://<service>/<account>`
-- `op://...` remains acceptable as a legacy fallback, but not as the primary backend for unattended local daemons or cron jobs
+- `op://...` remains acceptable as a legacy fallback, but not as the primary backend for unattended local daemons or scheduled jobs
 
 Suggested Keychain accounts:
 
@@ -148,8 +148,8 @@ Tradeoff guidance:
 
 - resolving secrets once in the daemon and keeping them in memory is usually a better balance than calling the secret backend on every request
 - this is still safer than storing plaintext secrets in tracked or local runtime files
-- for local macOS daemons and cron jobs, Keychain-backed runtime resolution is the preferred default because it avoids GUI re-authorization prompts
-- jobs started from `crontab` or another non-interactive scheduler should use a secret backend that can resolve without GUI prompts
+- for local macOS daemons and scheduled jobs, Keychain-backed runtime resolution is the preferred default because it avoids GUI re-authorization prompts
+- jobs started from `launchd` or another non-interactive scheduler should use a secret backend that can resolve without GUI prompts
 - if 1Password CLI prompts make scheduled jobs unreliable, migrate that runtime path to Keychain or another non-interactive local secret source
 
 ## 4. Path and Filesystem Rules
@@ -397,7 +397,7 @@ Rules:
 - installer may render runtime-specific paths locally
 - service bundle may live outside the repo
 - but config and data should still point back to the project
-- for once-per-day AI analysis, prefer a scheduler like `crontab` over introducing a second always-on AI daemon
+- for once-per-day AI analysis on macOS, prefer a scheduler like `launchd` over introducing a second always-on AI daemon
 - keep scheduler command lines thin and config-driven; do not duplicate business defaults in multiple shell scripts
 
 After code changes:

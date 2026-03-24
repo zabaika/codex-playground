@@ -41,7 +41,7 @@ model = "gpt-5.4-mini"
 ocr = "true"
 
 [digest]
-# Time in local machine time for the daily crontab entry.
+# Time in local machine time for the daily launchd digest schedule.
 time = "08:00"
 # Default analysis window start. Supports today, yesterday, week, month, and -Nd.
 since = "yesterday"

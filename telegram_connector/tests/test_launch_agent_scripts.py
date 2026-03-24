@@ -5,7 +5,6 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 INSTALLER = ROOT / "scripts" / "install_launch_agent.sh"
 RESTARTER = ROOT / "scripts" / "restart_launch_agent.sh"
-DIGEST_CRON_INSTALLER = ROOT / "scripts" / "install_digest_crontab.sh"
 
 
 class LaunchAgentScriptTests(unittest.TestCase):
@@ -41,12 +40,13 @@ class LaunchAgentScriptTests(unittest.TestCase):
         content = INSTALLER.read_text(encoding="utf-8")
         self.assertIn('cp "$SOURCE_ROOT/telegram_digest.py" "$SERVICE_ROOT/telegram_digest.py"', content)
 
-    def test_digest_cron_installer_replaces_tagged_entry(self) -> None:
-        content = DIGEST_CRON_INSTALLER.read_text(encoding="utf-8")
-        self.assertIn('CRON_TAG="telegram_connector_daily_digest"', content)
-        self.assertIn('"$PYTHON_BIN" "$SOURCE_ROOT/telegram_digest.py" cron-line', content)
-        self.assertIn('grep -v "$CRON_TAG"', content)
-        self.assertIn('| crontab -', content)
+    def test_installer_creates_digest_launch_agent_with_calendar_schedule(self) -> None:
+        content = INSTALLER.read_text(encoding="utf-8")
+        self.assertIn('DIGEST_PLIST_PATH="$LAUNCH_AGENTS_DIR/com.zabaika.telegram-connector-digest.plist"', content)
+        self.assertIn('<key>StartCalendarInterval</key>', content)
+        self.assertIn('<key>Hour</key>', content)
+        self.assertIn('<key>Minute</key>', content)
+        self.assertIn('run_telegram_digest.sh', content)
 
 
 if __name__ == "__main__":

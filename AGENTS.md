@@ -80,7 +80,7 @@ Use narrower test targets while iterating, then run the full suite before commit
 
 There are two operational paths to keep in mind:
 - launchd bridge service for Telegram bot command handling
-- crontab entry for scheduled digest runs
+- launchd digest service for scheduled digest runs
 
 If behavior changes in bridge or digest startup flow, update:
 - code

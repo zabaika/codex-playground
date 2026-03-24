@@ -272,16 +272,15 @@ Install the macOS background service:
 bash telegram_connector/scripts/install_launch_agent.sh
 ```
 
+This installs both LaunchAgents:
+
+- `com.zabaika.telegram-connector-bridge`
+- `com.zabaika.telegram-connector-digest`
+
 Restart the background service:
 
 ```bash
 bash telegram_connector/scripts/restart_launch_agent.sh
-```
-
-Install or update the daily digest crontab entry:
-
-```bash
-bash telegram_connector/scripts/install_digest_crontab.sh
 ```
 
 Daemon logs:
@@ -289,7 +288,9 @@ Daemon logs:
 - `telegram_connector/data/launchd/bridge.startup.log`
 - `telegram_connector/data/launchd/bridge.stdout.log`
 - `telegram_connector/data/launchd/bridge.stderr.log`
-- `telegram_connector/data/launchd/digest.cron.log`
+- `telegram_connector/data/launchd/digest.startup.log`
+- `telegram_connector/data/launchd/digest.stdout.log`
+- `telegram_connector/data/launchd/digest.stderr.log`
 
 ### Shared command rules
 
@@ -437,8 +438,6 @@ python3 telegram_connector/telegram_digest.py run --channel @vcnews
 python3 telegram_connector/telegram_digest.py run --since 2026-03-17 --until 2026-03-17
 python3 telegram_connector/telegram_digest.py run --since week
 python3 telegram_connector/telegram_digest.py run --channel @vcnews,@refugecard --auth-mode user
-python3 telegram_connector/telegram_digest.py cron-line
-bash telegram_connector/scripts/install_digest_crontab.sh
 ```
 
 Additional notes:
@@ -451,8 +450,8 @@ Additional notes:
 - batches keep chronological order and use a small automatic overlap between neighboring batches to reduce context loss at boundaries
 - final quality is usually better than a single huge prompt on long periods because the model sees ordered local context first and only then performs a second-pass synthesis
 - output is delivered to `telegram.default_chat_id`, not to an arbitrary invoking chat
-- `install_digest_crontab.sh` uses `digest.time` and writes output to `telegram_connector/data/launchd/digest.cron.log`
-- scheduled `crontab` runs are expected to use Keychain-backed secrets so they can resolve non-interactively without GUI prompts
+- the scheduled LaunchAgent uses `digest.time` from config and writes logs to `telegram_connector/data/launchd/digest.*.log`
+- if you change `digest.time` or other schedule-related config, rerun `install_launch_agent.sh` so the LaunchAgent plist is regenerated with the new time
 
 #### `sync`
 
