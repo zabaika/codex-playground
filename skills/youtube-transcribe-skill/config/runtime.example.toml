@@ -1,0 +1,57 @@
+# Copy to runtime.local.toml and keep that file untracked.
+
+[engine]
+order = ["youtube-transcript-api", "yt-dlp"]
+
+[paths]
+# Project-root-relative paths follow RULEBOOK.md.
+# Resolution order for the base directory:
+# 1. CODEX_PLAYGROUND_PROJECT_ROOT
+# 2. [paths].project_root
+# 3. current working directory
+project_root = ""
+output_dir = "scratch"
+log_file = "scratch/youtube-transcribe.log"
+
+[subtitles]
+# Priority order:
+# - "orig" matches any available subtitle language code containing "orig"
+# - the rest are exact language-code matches
+language_priority = ["orig", "ru", "en", "uk"]
+format_priority = "srt/vtt/best"
+output_template = "%(title).180B [%(id)s].%(ext)s"
+
+[network]
+# Official yt-dlp guidance suggests adding delay to reduce YouTube rate limiting.
+sleep_subtitles = 5.0
+sleep_requests = 0.75
+
+[auth]
+# Supported modes:
+# - "none"
+# - "browser-cookies"
+# - "provider-script"
+# - "provider-http"
+#
+# Recommended steady-state mode on this workstation:
+# - "provider-script"
+mode = "provider-script"
+
+# Used only for browser-cookies mode.
+browser = "chrome"
+
+[provider]
+# Used only for provider-script/provider-http modes.
+# Requires the external yt-dlp PO token provider plugin to be installed.
+kind = "bgutil"
+disable_innertube = true
+plugin_dir = "~/.codex/skills/youtube-transcribe-skill/vendor/bgutil-plugin"
+
+# provider-script mode:
+script_path = "~/.codex/skills/youtube-transcribe-skill/vendor/bgutil-provider/server/src/generate_once.ts"
+
+# provider-http mode:
+base_url = "http://127.0.0.1:4416"
+
+# Optional cache TTL for the script provider.
+token_ttl_hours = 6

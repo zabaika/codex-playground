@@ -163,6 +163,7 @@ Rules:
 - support a project-root override via environment variable
 - keep runtime data inside the project unless there is a strong reason not to
 - if a daemon deploys code elsewhere, still point config and data back to the project root
+- for local tools and skills, prefer project-root-relative config paths such as `scratch/` or `data/` instead of absolute home-directory paths
 
 Recommended env override:
 
@@ -198,6 +199,8 @@ Rules:
 - logs must not contain absolute private file paths when avoidable
 - logs must not contain raw Telegram updates in full
 - log command metadata, not full sensitive payloads
+- for local tools and skills, prefer one append-only log file per tool unless per-run log separation is operationally necessary
+- when a tool supports multiple execution engines or many available variants, log the chosen engine and selected result by default; emit the full variant list only on explicit request or in a dedicated diagnostic mode
 
 For inbox/update storage:
 

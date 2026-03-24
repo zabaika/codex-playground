@@ -6,6 +6,8 @@ Local Codex skills that extend workspace-specific workflows.
 
 - [article-to-obsidian-kb](./article-to-obsidian-kb/SKILL.md)  
   Converts an engineering article URL into compact Russian-language Obsidian knowledge-base notes, updates overlapping notes instead of creating duplicates, and maintains wikilink connections between article notes and concept notes.
+- [youtube-transcribe-skill](./youtube-transcribe-skill/SKILL.md)  
+  Local sanitized fork of a third-party YouTube transcript skill. Tries `youtube-transcript-api` first, falls back to a reviewed `yt-dlp` provider path, writes into project-local `scratch/`, removes browser automation, and requires explicit approval before any cookie-based retry.
 
 ## article-to-obsidian-kb
 
@@ -39,3 +41,4 @@ Supporting references:
 
 - Skills in this folder are workspace extensions rather than standalone applications.
 - Add new skill links here when new skill folders are added.
+- Third-party skills should be reviewed and, when needed, narrowed before installation into `~/.codex/skills`.
