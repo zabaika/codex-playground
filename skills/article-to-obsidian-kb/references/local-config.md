@@ -24,6 +24,8 @@ concept = "/absolute/path/to/concept-notes"
 
 ## Usage Rules
 
-- Resolve note roots from `runtime.local.toml` before searching the vault.
+- Resolve note roots from `<skill-dir>/config/runtime.local.toml`, where `<skill-dir>` is the directory that contains the active `SKILL.md`.
+- Do not resolve `runtime.local.toml` relative to the current working directory unless that is also the skill directory.
+- If the local config file exists next to the skill and contains both note roots, reuse it without asking the user to repeat those paths.
 - Keep tracked docs generic; reference config keys instead of hard-coded absolute paths.
 - If a needed path or secret is absent, ask the user instead of inventing one.
