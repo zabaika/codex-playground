@@ -2,16 +2,17 @@
 
 ## Scope
 
+- These conventions apply to every saved note regardless of whether the source was processed through the engineering analysis path or the general analysis path.
 - Resolve note roots from `config/runtime.local.toml` via [local-config.md](local-config.md).
-- Store article-derived notes in `note_roots.article`.
+- Store source-derived notes in `note_roots.article`.
 - Store concept notes in `note_roots.concept`.
 - Treat the filename as identical to the note `title`.
 
 ## Note Types
 
-- `lessons`: article-derived note with 6-10 reusable engineering lessons.
-- `operating-model`: article-derived note describing how a company or system actually works.
-- `concept`: reusable concept note that can connect multiple articles.
+- `lessons`: source-derived note with 6-10 reusable lessons, principles, or practical guidelines.
+- `operating-model`: source-derived note describing how a company or system actually works.
+- `concept`: reusable concept note that can connect multiple sources.
 
 ## Placement Rules
 
@@ -22,12 +23,12 @@
 
 ## Title And Filename Rules
 
-### Article-derived notes
+### Source-derived notes
 
 - Use inverted pyramid naming:
-  - `<engineering topic> - <context>`
-- Put the main engineering theme first, then the company or system context.
-- Make the title readable outside the article context and searchable in Obsidian.
+  - `<main topic> - <context>`
+- Put the main topic first, then the company, system, speaker, or source context.
+- Make the title readable outside the source context and searchable in Obsidian.
 - Avoid titles like `Lessons from X` or `Summary of X`.
 - For `type: lessons`, do not include the literal word `Lessons` in the title when the frontmatter already captures the note type.
 - Prefer a substantive topical title such as the main risk, model, method, or pattern described by the source.
@@ -110,11 +111,12 @@ tags:
 - Use only information supported by the source.
 - Keep the structure compact, but do not over-compress the content.
 - Preserve concrete mechanisms when the source states them explicitly, especially team scope, owned systems, partner teams, named metrics, prioritization logic, AI/platform details, and major constraints.
+- When the source came through a transcript-analysis reference, treat that extraction as a working scaffold only and rewrite the final note into a native Obsidian structure instead of preserving the extractor headings literally.
 - Use bold only for key terms, short labels, or the leading clause of a bullet.
 - Use enough bold emphasis that dense sections remain easy to scan, but do not bold entire list items.
 - Do not repeat `title` or `source` from frontmatter inside the body.
 - Do not rewrite several concrete observations into one abstract sentence if that would hide how the system actually operates.
-- For article-derived notes, prefer short sections with 2-4 bullets when the source provides multiple concrete points for the same topic.
+- For source-derived notes, prefer short sections with 2-4 bullets when the source provides multiple concrete points for the same topic.
 - Prefer Russian lesson headings and Russian section bullets unless the English wording is the canonical name of a framework, metric, tool, or code-level term.
 
 ## Spacing Rules
@@ -136,4 +138,4 @@ tags:
 
 - End every note with `# Связанные заметки`.
 - Add 5-10 wikilinks when that many relevant notes exist.
-- Prefer links to touched concept notes, article-derived notes, and the closest existing concepts in the vault.
+- Prefer links to touched concept notes, source-derived notes, and the closest existing concepts in the vault.

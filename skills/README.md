@@ -5,7 +5,7 @@ Local Codex skills that extend workspace-specific workflows.
 ## Available Skills
 
 - [article-to-obsidian-kb](./article-to-obsidian-kb/SKILL.md)  
-  Converts an engineering article URL into compact Russian-language Obsidian knowledge-base notes, updates overlapping notes instead of creating duplicates, and maintains wikilink connections between article notes and concept notes.
+  Converts an article URL, transcript, or other long-form source into compact Russian-language Obsidian knowledge-base notes, routes the source through an engineering or general analysis pass, updates overlapping notes instead of creating duplicates, and maintains wikilink connections between source-derived notes and concept notes.
 - [youtube-to-obsidian-kb](./youtube-to-obsidian-kb/SKILL.md)  
   Converts a YouTube URL into linked Obsidian knowledge-base notes by first extracting a local transcript through `youtube-transcribe-skill`, then applying the `article-to-obsidian-kb` vault workflow, and stopping honestly when transcript extraction fails.
 - [youtube-transcribe-skill](./youtube-transcribe-skill/SKILL.md)  
@@ -13,24 +13,27 @@ Local Codex skills that extend workspace-specific workflows.
 
 ## article-to-obsidian-kb
 
-The skill is designed for a vault-backed knowledge workflow rather than for generic note generation.
+The skill is designed for a vault-backed knowledge workflow rather than for generic note generation. It now separates source analysis from vault writing: one routing step chooses the right extraction prompt, while one shared Obsidian workflow applies the same note rules to every source.
 
 What it does:
 
-- reads a source article URL
-- builds an internal concept map with engineering concepts, non-obvious insights, operating-model details, and reusable lessons
+- reads a source URL or provided long-form text
+- routes the source through either an engineering analysis path or a general source-analysis path
+- builds an internal extraction with reusable concepts, non-obvious insights, lessons, and operating-model details when they are really present
 - searches existing Obsidian note roots before drafting anything
 - prefers updating matching notes over creating duplicates
-- writes article notes and concept notes in Russian
+- writes source-derived notes and concept notes in Russian
 - keeps technical terms in English only when they are the stable industry form
 - normalizes tags into canonical English forms
+- keeps one shared rule set for titles, tags, vault search, language cleanup, and update-vs-create regardless of the chosen analysis route
+- reports the chosen route in the final response with a short reason, without writing that trace into the saved Obsidian notes
 - preserves concrete operational detail instead of flattening everything into generic summaries
 
 Local runtime behavior:
 
 - loads local vault roots from [config/runtime.local.toml](./article-to-obsidian-kb/config/runtime.local.toml)
 - keeps the repo copy of `config/runtime.local.toml` as the single editable local config, with the installed Codex skill expected to point at the same file
-- uses separate note roots for article-derived notes and concept notes
+- uses separate note roots for source-derived notes and concept notes
 - depends on local-only paths and therefore must not commit machine-specific roots or secrets
 
 Supporting references:
@@ -39,6 +42,8 @@ Supporting references:
 - [vault-conventions.md](./article-to-obsidian-kb/references/vault-conventions.md)
 - [language-normalization.md](./article-to-obsidian-kb/references/language-normalization.md)
 - [update-patterns.md](./article-to-obsidian-kb/references/update-patterns.md)
+- [source-analysis-engineering.md](./article-to-obsidian-kb/references/source-analysis-engineering.md)
+- [source-analysis-general.md](./article-to-obsidian-kb/references/source-analysis-general.md)
 
 ## youtube-transcribe-skill
 

@@ -1,4 +1,4 @@
 interface:
   display_name: "Article to Obsidian KB"
-  short_description: "Turn article URLs into linked Obsidian notes"
-  default_prompt: "Use $article-to-obsidian-kb to convert an article URL into linked notes for my Obsidian knowledge base."
+  short_description: "Turn articles or transcripts into linked Obsidian notes"
+  default_prompt: "Use $article-to-obsidian-kb to convert an article URL, transcript, or long-form source into linked notes for my Obsidian knowledge base."

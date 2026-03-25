@@ -46,7 +46,7 @@ Bullet format:
 
 - Do not rewrite the concept definition unless the existing definition is clearly incomplete or inaccurate.
 - If the note has no insight log, add `## Additional insights`.
-- Append one dated bullet that references the article-derived note and nearby concepts.
+- Append one dated bullet that references the source-derived note and nearby concepts.
 
 Bullet format:
 
