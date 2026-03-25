@@ -1,0 +1,4 @@
+interface:
+  display_name: "YouTube to Obsidian KB"
+  short_description: "Turn YouTube videos into linked vault notes"
+  default_prompt: "Use $youtube-to-obsidian-kb to convert a YouTube URL into linked notes for my Obsidian knowledge base."

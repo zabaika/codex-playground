@@ -1,0 +1,17 @@
+# Copy to runtime.local.toml only if you need local overrides for this orchestration layer.
+# Keep runtime.local.toml untracked.
+
+[skills]
+# Reuse the sibling skill configs instead of duplicating their machine-specific values here.
+youtube_transcribe_config = "../youtube-transcribe-skill/config/runtime.local.toml"
+article_to_obsidian_config = "../article-to-obsidian-kb/config/runtime.local.toml"
+
+[paths]
+# Project-root-relative paths follow RULEBOOK.md.
+# Resolution order for the base directory:
+# 1. CODEX_PLAYGROUND_PROJECT_ROOT
+# 2. [paths].project_root
+# 3. current working directory
+project_root = ""
+prepared_transcripts_dir = "scratch/youtube-to-obsidian-kb"
+log_file = "scratch/youtube-to-obsidian-kb.log"
