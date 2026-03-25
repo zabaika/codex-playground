@@ -70,6 +70,8 @@ Turn a source article URL into compact, Russian-language Obsidian notes in a use
 - Keep 6-10 lessons maximum.
 - Each lesson must be a reusable engineering principle plus a short explanation.
 - Do not retell the article chronologically.
+- Title the note with the substantive topic and context, not with the literal word `Lessons`.
+- Treat `type: lessons` in frontmatter as the place that encodes the note class, so the title should not repeat it unless the source itself uses `Lessons` as a canonical name.
 
 ### Operating Model Note
 
@@ -111,6 +113,7 @@ Turn a source article URL into compact, Russian-language Obsidian notes in a use
   - keep English only for canonical framework names, metric names, tool names, code-level terms, established product/discovery method names, or when the English form is the stable industry term
   - if the English term matters, explain it on first mention and then prefer the Russian form afterward
   - rewrite sentences that stack several untranslated English nouns and become hard to read in Russian
+  - aggressively translate finance, labor-market, and business-operation nouns such as `output`, `white-collar`, `in-house`, `headcount`, `recurring revenue`, and similar phrases when a natural Russian equivalent exists
 - Run a final tag-normalization pass before saving:
   - keep all frontmatter tags strictly in English
   - avoid Cyrillic tags and mixed Russian-English tag variants

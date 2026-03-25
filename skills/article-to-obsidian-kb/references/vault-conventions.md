@@ -29,12 +29,15 @@
 - Put the main engineering theme first, then the company or system context.
 - Make the title readable outside the article context and searchable in Obsidian.
 - Avoid titles like `Lessons from X` or `Summary of X`.
+- For `type: lessons`, do not include the literal word `Lessons` in the title when the frontmatter already captures the note type.
+- Prefer a substantive topical title such as the main risk, model, method, or pattern described by the source.
 
 Examples:
 
-- `Developer Experience Lessons - Dropbox`
+- `Developer Experience - Dropbox`
 - `Platform Engineering Operating Model - Spotify`
 - `AI Code Review Workflow - ByteDance`
+- `Интенсификация работы с AI - Harvard Business Review`
 
 ### Concept notes
 

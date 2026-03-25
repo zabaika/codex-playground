@@ -35,10 +35,15 @@
 - Especially translate words and phrases like:
   - `customer pain` -> `боль пользователя` or `боль внутреннего клиента`
   - `outcome` -> `результат` or `ожидаемый эффект`
+  - `output` -> `выпуск` or `результат`
   - `interruptions` -> `прерывания`
   - `meetings` -> `встречи`
   - `workflow` -> `рабочий процесс`
   - `rollout` -> `внедрение`
+  - `white-collar` -> `офисный`, `офисные сотрудники`, or `беловоротничковый` only if the latter reads naturally in context
+  - `in-house` -> `внутренний` or `собственными силами`
+  - `headcount` -> `численность штата` or `штат`
+  - `recurring revenue` -> `повторяющаяся выручка`
   - `leadership alignment` -> `согласованность руководства`
   - `product thinking` -> `продуктовый подход`
   - `people problems` -> `проблемы в организации работы людей`
@@ -78,6 +83,7 @@
 ## Lessons Notes
 
 - Write lesson headings in Russian by default.
+- For lesson-note titles, prefer the Russian topical name and drop the literal label `Lessons` unless it is part of a canonical source title.
 - Keep English in the heading only for a canonical framework name or a term that loses precision in translation.
 - Good:
   - `Продуктивность разработчиков - это socio-technical system`
