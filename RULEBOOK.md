@@ -404,6 +404,18 @@ Rules:
 - but config and data should still point back to the project
 - for once-per-day AI analysis on macOS, prefer a scheduler like `launchd` over introducing a second always-on AI daemon
 - keep scheduler command lines thin and config-driven; do not duplicate business defaults in multiple shell scripts
+- scheduled and background jobs must run with an explicit interpreter/runtime path when runtime dependencies are interpreter-specific
+- when moving a workflow under `launchd` or another scheduler, verify the real launcher environment end-to-end instead of assuming the interactive shell environment matches it
+- validate the deployed runtime with the actual launcher entrypoint:
+  - check the chosen interpreter or binary path
+  - check that required dependencies are available in that runtime
+  - check that config, secrets, and project-root resolution work from the deployed service bundle
+- before considering a scheduler migration complete, perform at least one real trial run through the scheduler itself and confirm:
+  - startup log exists
+  - stdout/stderr are sane
+  - exit code is successful
+  - the expected side effect of the job actually happened
+- for machines that may sleep, validate both the scheduler path and the wake/resume behavior separately; a healthy job definition is not enough if the host never wakes in time
 
 After code changes:
 

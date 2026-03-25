@@ -20,9 +20,13 @@ class LaunchAgentScriptTests(unittest.TestCase):
         content = INSTALLER.read_text(encoding="utf-8")
         self.assertIn('SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"', content)
         self.assertIn('SOURCE_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"', content)
-        self.assertIn(': "${TELEGRAM_CONNECTOR_PROJECT_ROOT:?TELEGRAM_CONNECTOR_PROJECT_ROOT is required}"', content)
+        self.assertIn('resolve_python_bin()', content)
+        self.assertIn('PYTHON_BIN="$(resolve_python_bin)"', content)
+        self.assertIn(': "\\${TELEGRAM_CONNECTOR_PROJECT_ROOT:?TELEGRAM_CONNECTOR_PROJECT_ROOT is required}"', content)
         self.assertIn('printf \'[%s] starting telegram bridge from %s\\n\'', content)
-        self.assertIn('STARTUP_LOG="$TELEGRAM_CONNECTOR_PROJECT_ROOT/data/launchd/bridge.startup.log"', content)
+        self.assertIn('STARTUP_LOG="\\$TELEGRAM_CONNECTOR_PROJECT_ROOT/data/launchd/bridge.startup.log"', content)
+        self.assertIn('exec "$PYTHON_BIN" "\\$ROOT/telegram_connector.py" listen --run-commands', content)
+        self.assertIn('exec "$PYTHON_BIN" "\\$ROOT/telegram_digest.py" run', content)
 
     def test_installer_sets_project_root_env_in_plist(self) -> None:
         content = INSTALLER.read_text(encoding="utf-8")

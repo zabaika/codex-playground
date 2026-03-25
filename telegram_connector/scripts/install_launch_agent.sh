@@ -7,7 +7,7 @@ SERVICE_ROOT="$HOME/Library/Application Support/telegram_connector_service"
 LAUNCH_AGENTS_DIR="$HOME/Library/LaunchAgents"
 BRIDGE_PLIST_PATH="$LAUNCH_AGENTS_DIR/com.zabaika.telegram-connector-bridge.plist"
 DIGEST_PLIST_PATH="$LAUNCH_AGENTS_DIR/com.zabaika.telegram-connector-digest.plist"
-PYTHON_BIN="${PYTHON_BIN:-/usr/local/bin/python3}"
+PYTHON_BIN="${PYTHON_BIN:-}"
 PROJECT_LOG_DIR="$SOURCE_ROOT/data/launchd"
 STARTUP_LOG="$PROJECT_LOG_DIR/bridge.startup.log"
 STDOUT_LOG="$PROJECT_LOG_DIR/bridge.stdout.log"
@@ -15,6 +15,45 @@ STDERR_LOG="$PROJECT_LOG_DIR/bridge.stderr.log"
 DIGEST_STARTUP_LOG="$PROJECT_LOG_DIR/digest.startup.log"
 DIGEST_STDOUT_LOG="$PROJECT_LOG_DIR/digest.stdout.log"
 DIGEST_STDERR_LOG="$PROJECT_LOG_DIR/digest.stderr.log"
+
+resolve_python_bin() {
+  local explicit="${PYTHON_BIN:-}"
+  local candidates=()
+  if [[ -n "$explicit" ]]; then
+    candidates+=("$explicit")
+  fi
+  candidates+=(
+    "/usr/local/opt/python@3.13/bin/python3.13"
+    "/usr/local/bin/python3"
+    "/opt/homebrew/bin/python3"
+    "/usr/bin/python3"
+  )
+
+  local py
+  for py in "${candidates[@]}"; do
+    [[ -x "$py" ]] || continue
+    if "$py" - <<'PY' >/dev/null 2>&1
+import importlib.util
+import sys
+sys.exit(0 if importlib.util.find_spec("telethon") is not None else 1)
+PY
+    then
+      printf '%s\n' "$py"
+      return 0
+    fi
+  done
+
+  for py in "${candidates[@]}"; do
+    [[ -x "$py" ]] || continue
+    printf '%s\n' "$py"
+    return 0
+  done
+
+  echo "No usable python interpreter found." >&2
+  exit 1
+}
+
+PYTHON_BIN="$(resolve_python_bin)"
 
 read -r DIGEST_HOUR DIGEST_MINUTE < <(
   "$PYTHON_BIN" - <<PY
@@ -58,34 +97,34 @@ if [[ -d "$SOURCE_ROOT/data/media" && ! -d "$SERVICE_ROOT/data/media" ]]; then
   cp -R "$SOURCE_ROOT/data/media" "$SERVICE_ROOT/data/media"
 fi
 
-cat > "$SERVICE_ROOT/scripts/run_telegram_bridge.sh" <<'EOF'
+cat > "$SERVICE_ROOT/scripts/run_telegram_bridge.sh" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT="$HOME/Library/Application Support/telegram_connector_service"
+ROOT="\$HOME/Library/Application Support/telegram_connector_service"
 export PATH="/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
-: "${TELEGRAM_CONNECTOR_PROJECT_ROOT:?TELEGRAM_CONNECTOR_PROJECT_ROOT is required}"
-STARTUP_LOG="$TELEGRAM_CONNECTOR_PROJECT_ROOT/data/launchd/bridge.startup.log"
+: "\${TELEGRAM_CONNECTOR_PROJECT_ROOT:?TELEGRAM_CONNECTOR_PROJECT_ROOT is required}"
+STARTUP_LOG="\$TELEGRAM_CONNECTOR_PROJECT_ROOT/data/launchd/bridge.startup.log"
 
-cd "$ROOT"
-printf '[%s] starting telegram bridge from %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$ROOT" >> "$STARTUP_LOG"
-exec /usr/local/bin/python3 "$ROOT/telegram_connector.py" listen --run-commands
+cd "\$ROOT"
+printf '[%s] starting telegram bridge from %s\n' "\$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "\$ROOT" >> "\$STARTUP_LOG"
+exec "$PYTHON_BIN" "\$ROOT/telegram_connector.py" listen --run-commands
 EOF
 
 chmod +x "$SERVICE_ROOT/scripts/run_telegram_bridge.sh"
 
-cat > "$SERVICE_ROOT/scripts/run_telegram_digest.sh" <<'EOF'
+cat > "$SERVICE_ROOT/scripts/run_telegram_digest.sh" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT="$HOME/Library/Application Support/telegram_connector_service"
+ROOT="\$HOME/Library/Application Support/telegram_connector_service"
 export PATH="/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
-: "${TELEGRAM_CONNECTOR_PROJECT_ROOT:?TELEGRAM_CONNECTOR_PROJECT_ROOT is required}"
-STARTUP_LOG="$TELEGRAM_CONNECTOR_PROJECT_ROOT/data/launchd/digest.startup.log"
+: "\${TELEGRAM_CONNECTOR_PROJECT_ROOT:?TELEGRAM_CONNECTOR_PROJECT_ROOT is required}"
+STARTUP_LOG="\$TELEGRAM_CONNECTOR_PROJECT_ROOT/data/launchd/digest.startup.log"
 
-cd "$ROOT"
-printf '[%s] starting telegram digest from %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$ROOT" >> "$STARTUP_LOG"
-exec /usr/local/bin/python3 "$ROOT/telegram_digest.py" run
+cd "\$ROOT"
+printf '[%s] starting telegram digest from %s\n' "\$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "\$ROOT" >> "\$STARTUP_LOG"
+exec "$PYTHON_BIN" "\$ROOT/telegram_digest.py" run
 EOF
 
 chmod +x "$SERVICE_ROOT/scripts/run_telegram_digest.sh"
@@ -187,3 +226,4 @@ echo "Digest startup log: $DIGEST_STARTUP_LOG"
 echo "Digest stdout log: $DIGEST_STDOUT_LOG"
 echo "Digest stderr log: $DIGEST_STDERR_LOG"
 echo "Digest schedule: $(printf '%02d:%02d' "$DIGEST_HOUR" "$DIGEST_MINUTE")"
+echo "Python interpreter: $PYTHON_BIN"
