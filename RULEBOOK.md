@@ -69,6 +69,7 @@ Rules:
 - if a command includes a channel or channel list, ignore config defaults
 - for local Codex skills, keep exactly one editable `config/runtime.local.toml` in the repository skill folder
 - if the skill is also installed under `~/.codex/skills`, the installed copy should point to that same repo file instead of keeping a second divergent local config
+- if a skill is only an orchestration layer over other local skills, prefer pointing at the sibling skills' local configs instead of copying the same machine-specific values into another file
 
 Recommended default channels format:
 

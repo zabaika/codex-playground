@@ -49,10 +49,12 @@ python3 scripts/run_youtube_transcribe.py --url "[VIDEO_URL]"
 4. The runner should:
    - load `config/runtime.local.toml` when present
    - try `youtube-transcript-api` first when the vendored venv is installed
+   - if the first engine does not return subtitles, still attempt the `yt-dlp` path before stopping
    - keep `yt-dlp` plugins disabled unless a provider mode is explicitly configured
    - resolve project-root-relative `[paths]`
    - write subtitles to `[paths].output_dir`
    - append diagnostics into `[paths].log_file`
+   - retry temporary network, timeout, and rate-limit failures with bounded backoff
    - list available subtitles first
    - choose exactly one language by priority
    - download only that language in `srt`, then `vtt`, then best available subtitle format
@@ -79,7 +81,9 @@ Recommended engine order:
      `<safe video title> [<video id>].<language>.srt` for `youtube-transcript-api`
      `%(title).180B [%(id)s].%(ext)s` plus yt-dlp's subtitle language suffix for the `yt-dlp` path
 6. If the command fails because subtitles do not exist, say so plainly and stop.
-7. If the command fails because authentication is required and the current config uses no auth or provider auth, ask whether to temporarily retry with browser cookies from a specific browser such as `chrome`, `firefox`, `safari`, or `edge`.
+7. Do not treat a `youtube-transcript-api` no-subtitles result as final. Attempt the `yt-dlp` path too, because the engines can disagree on subtitle availability.
+8. If the command fails because authentication is required and the current config uses no auth or provider auth, ask whether to temporarily retry with browser cookies from a specific browser such as `chrome`, `firefox`, `safari`, or `edge`.
+9. If the command fails because of a temporary DNS, timeout, connection, or rate-limit issue, retry automatically according to `[retry]` and then stop with a concise final error if all attempts fail.
 
 ## Cookie-Gated Retry
 
@@ -118,3 +122,8 @@ Supporting files:
   - engine used
   - subtitle language
   - source type: uploaded or auto-generated, when known
+- Preferred failure reporting:
+  - concise no-subtitles message when the video has no captions
+  - both engines attempted before a final no-subtitles conclusion when the first engine fails to fetch subtitles
+  - bounded automatic retries for temporary failures
+  - compact log entries without raw stack traces or full yt-dlp dumps

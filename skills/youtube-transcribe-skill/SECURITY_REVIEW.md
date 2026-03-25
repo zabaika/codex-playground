@@ -30,8 +30,10 @@ The local fork keeps only the narrowly useful part of the workflow:
 - explicit user approval required before cookie-based retry
 - subtitle-only extraction with `--skip-download`
 - config-driven local runner with a safer `youtube-transcript-api` first path
+- a second `yt-dlp` extraction attempt before concluding that subtitles are unavailable
 - project-root-relative output and log paths
 - one append-only log file instead of per-run log fan-out
+- bounded retries only for temporary network-style failures
 - explicit plugin disablement outside dedicated provider modes
 
 ## Residual risks

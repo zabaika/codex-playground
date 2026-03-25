@@ -26,6 +26,13 @@ output_template = "%(title).180B [%(id)s].%(ext)s"
 sleep_subtitles = 5.0
 sleep_requests = 0.75
 
+[retry]
+# Retries apply only to temporary failures such as DNS, connection, timeout, or rate-limit issues.
+attempts = 3
+initial_delay_seconds = 2.0
+backoff_multiplier = 2.0
+max_delay_seconds = 10.0
+
 [auth]
 # Supported modes:
 # - "none"

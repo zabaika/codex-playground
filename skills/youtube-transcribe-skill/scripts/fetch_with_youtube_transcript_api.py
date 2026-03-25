@@ -3,16 +3,21 @@ from __future__ import annotations
 
 import argparse
 import re
+import socket
 import sys
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
+import requests
 from youtube_transcript_api import YouTubeTranscriptApi
 from youtube_transcript_api._errors import YouTubeTranscriptApiException
 from youtube_transcript_api.formatters import SRTFormatter
 
 
 DEFAULT_PRIORITY = ["orig", "ru", "en", "uk"]
+TRANSIENT_PREFIX = "TRANSIENT_ERROR:"
+NO_SUBTITLES_PREFIX = "NO_SUBTITLES:"
+GENERIC_PREFIX = "ERROR:"
 
 
 def extract_video_id(raw: str) -> str:
@@ -64,6 +69,24 @@ def sanitize_filename_component(raw_value: str, video_id: str) -> str:
     return value[:180].strip() or f"YouTube {video_id}"
 
 
+def classify_exception(exc: Exception) -> tuple[str, str]:
+    text = f"{exc.__class__.__name__}: {exc}".strip()
+    lowered = text.lower()
+    if isinstance(exc, (socket.gaierror, requests.exceptions.ConnectionError, requests.exceptions.Timeout)):
+        return TRANSIENT_PREFIX, "Temporary network or DNS error while contacting YouTube."
+    if "failed to resolve" in lowered or "nameresolutionerror" in lowered or "max retries exceeded" in lowered:
+        return TRANSIENT_PREFIX, "Temporary network or DNS error while contacting YouTube."
+    if "timed out" in lowered or "temporarily unavailable" in lowered:
+        return TRANSIENT_PREFIX, "Temporary network timeout while contacting YouTube."
+    if "transcriptsdisabled" in lowered or "subtitles are disabled for this video" in lowered:
+        return NO_SUBTITLES_PREFIX, "No subtitles are available for this video."
+    if "notranscriptfound" in lowered or "no transcripts were found" in lowered:
+        return NO_SUBTITLES_PREFIX, "No subtitles are available for this video."
+    if isinstance(exc, YouTubeTranscriptApiException):
+        return GENERIC_PREFIX, text
+    return GENERIC_PREFIX, text
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Fetch YouTube subtitles with youtube-transcript-api.")
     parser.add_argument("--url", required=True, help="YouTube video URL or ID")
@@ -98,8 +121,9 @@ def main() -> int:
         print(f"Selected subtitle language: {transcript.language_code}", file=sys.stderr)
         print(f"Saved subtitle file: {output_path.resolve()}", file=sys.stderr)
         return 0
-    except YouTubeTranscriptApiException as exc:
-        print(f"youtube-transcript-api failed: {exc.__class__.__name__}: {exc}", file=sys.stderr)
+    except Exception as exc:
+        prefix, message = classify_exception(exc)
+        print(f"{prefix} {message}", file=sys.stderr)
         return 1
 
 
