@@ -93,6 +93,7 @@ What it does:
 - accepts a YouTube URL
 - reuses `youtube-transcribe-skill` to fetch subtitles or transcripts locally
 - stages a cleaned markdown transcript in project-local `scratch/`
+- detects the shared `article-to-obsidian-kb` route up front and emits the chosen route once before note generation
 - reuses the `article-to-obsidian-kb` vault workflow for search, update-vs-create, tags, and note writing
 - stops honestly when no transcript can be fetched or the cleaned transcript has no usable content
 
@@ -100,6 +101,7 @@ Local runtime behavior:
 
 - prefers the existing sibling local configs instead of duplicating machine-specific settings
 - can optionally load its own `config/runtime.local.toml` only for config pointers and staging/log path overrides
+- resolves sibling config pointers relative to this skill's config file, so the same pointers work in both the repo skill and the installed `~/.codex/skills` copy
 - keeps transcript staging and logs project-local through `[paths]`
 - validates that the sibling article skill still has both required Obsidian note roots before note generation
 

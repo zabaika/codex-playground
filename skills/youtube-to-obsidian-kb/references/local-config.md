@@ -10,18 +10,18 @@ This skill is an orchestration layer and should reuse sibling skill configs by d
 
 ## Recommended Default Sources
 
-- Transcript settings: `../youtube-transcribe-skill/config/runtime.local.toml`
-- Obsidian note roots: `../article-to-obsidian-kb/config/runtime.local.toml`
+- Transcript settings: `../../youtube-transcribe-skill/config/runtime.local.toml`
+- Obsidian note roots: `../../article-to-obsidian-kb/config/runtime.local.toml`
 
 ## Supported Local Keys
 
 ```toml
 [skills]
-youtube_transcribe_config = "../youtube-transcribe-skill/config/runtime.local.toml"
-article_to_obsidian_config = "../article-to-obsidian-kb/config/runtime.local.toml"
+youtube_transcribe_config = "../../youtube-transcribe-skill/config/runtime.local.toml"
+article_to_obsidian_config = "../../article-to-obsidian-kb/config/runtime.local.toml"
 
 [paths]
-project_root = "/absolute/path/to/codex-playground"
+project_root = ""
 prepared_transcripts_dir = "scratch/youtube-to-obsidian-kb"
 log_file = "scratch/youtube-to-obsidian-kb.log"
 ```

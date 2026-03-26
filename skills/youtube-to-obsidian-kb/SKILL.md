@@ -21,8 +21,8 @@ Do not draft notes from the video title, thumbnail, or short description alone. 
 
 1. Load [references/local-config.md](references/local-config.md) before running the pipeline.
 2. Prefer the existing local configs from sibling skills instead of duplicating machine-specific values:
-   - `../youtube-transcribe-skill/config/runtime.local.toml`
-   - `../article-to-obsidian-kb/config/runtime.local.toml`
+   - in this skill's `config/runtime.local.toml`, point `youtube_transcribe_config` to `../../youtube-transcribe-skill/config/runtime.local.toml`
+   - in this skill's `config/runtime.local.toml`, point `article_to_obsidian_config` to `../../article-to-obsidian-kb/config/runtime.local.toml`
 3. Treat this skill's own `config/runtime.local.toml` as optional.
 4. If this skill has a local config, use it only for:
    - pointing at the sibling skill configs
@@ -45,13 +45,16 @@ python3 scripts/prepare_youtube_transcript.py --url "[VIDEO_URL]"
    - reuse the sibling local config for transcript settings unless this skill explicitly overrides the path
    - save or reuse the subtitle file produced by the transcript skill
    - create a cleaned markdown transcript under a project-local `scratch/` path
-   - print the prepared transcript path, subtitle path, engine used, and selected subtitle language
+   - detect the `article-to-obsidian-kb` route for the prepared transcript
+   - let `detect_source_route.py` print the chosen route immediately when it is detected
+   - print the prepared transcript path, subtitle path, engine used, and selected subtitle language without repeating the route block
 4. If transcript extraction fails or no subtitle file path is reported, stop.
 5. Do not retry with browser cookies unless the user explicitly approves that path for this task.
 6. After the helper succeeds, read the prepared markdown transcript as the source text.
 7. Then load the sibling article workflow in this order:
    - `../article-to-obsidian-kb/SKILL.md`
    - `../article-to-obsidian-kb/references/local-config.md`
+   - `../article-to-obsidian-kb/scripts/detect_source_route.py`
    - `../article-to-obsidian-kb/references/vault-conventions.md`
    - `../article-to-obsidian-kb/references/language-normalization.md`
    - `../article-to-obsidian-kb/references/update-patterns.md`

@@ -3,8 +3,8 @@
 
 [skills]
 # Reuse the sibling skill configs instead of duplicating their machine-specific values here.
-youtube_transcribe_config = "../youtube-transcribe-skill/config/runtime.local.toml"
-article_to_obsidian_config = "../article-to-obsidian-kb/config/runtime.local.toml"
+youtube_transcribe_config = "../../youtube-transcribe-skill/config/runtime.local.toml"
+article_to_obsidian_config = "../../article-to-obsidian-kb/config/runtime.local.toml"
 
 [paths]
 # Project-root-relative paths follow RULEBOOK.md.
