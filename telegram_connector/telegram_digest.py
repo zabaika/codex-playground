@@ -87,6 +87,7 @@ class DigestConfig:
     sync_mode: str
     ai_batch_size: int
     min_messages_for_ai: int
+    separator_text: str
     mark_read: bool
     use_ocr: bool
     system_instructions: str
@@ -153,6 +154,7 @@ def resolve_digest_config(config: dict[str, Any]) -> DigestConfig:
         sync_mode=history_client.get_config_value(config, "digest", "sync_mode") or "update",
         ai_batch_size=0,
         min_messages_for_ai=min_messages_for_ai,
+        separator_text=(history_client.get_config_value(config, "digest", "separator_text") or "").strip(),
         mark_read=parse_bool(
             history_client.get_config_value(config, "digest", "mark_read"),
             default=True,
@@ -803,7 +805,15 @@ def format_digest_summary_for_telegram(summary: str) -> str:
     return "\n".join(formatted)
 
 
-def build_channel_digest_message(channel_name: str, *, since: str, until: str, message_count: int, summary: str) -> str:
+def build_channel_digest_message(
+    channel_name: str,
+    *,
+    since: str,
+    until: str,
+    message_count: int,
+    summary: str,
+    separator_text: str = "",
+) -> str:
     formatted_summary = format_digest_summary_for_telegram(summary)
     header = "\n\n".join(
         [
@@ -817,8 +827,13 @@ def build_channel_digest_message(channel_name: str, *, since: str, until: str, m
         ]
     )
     if not formatted_summary:
-        return header
-    return f"{header}\n\n{formatted_summary}"
+        body = header
+    else:
+        body = f"{header}\n\n{formatted_summary}"
+    if separator_text:
+        escaped_separator = html.escape(separator_text, quote=False)
+        return f"{body}\n\n{escaped_separator}\n{escaped_separator}"
+    return body
 
 
 def build_channel_digest_skip_message(
@@ -828,6 +843,7 @@ def build_channel_digest_skip_message(
     until: str,
     message_count: int,
     min_messages_for_ai: int,
+    separator_text: str = "",
 ) -> str:
     return build_channel_digest_message(
         channel_name,
@@ -838,12 +854,21 @@ def build_channel_digest_skip_message(
             f"Сообщений меньше порога для AI-обработки ({min_messages_for_ai}). "
             "Сообщения загружены, но digest отправлен без анализа."
         ),
+        separator_text=separator_text,
     )
 
 
-def build_digest_error_message(*, since: str, until: str, errors: list[str]) -> str:
+def build_digest_error_message(*, since: str, until: str, errors: list[str], separator_text: str = "") -> str:
     header = f"Digest completed with errors\nПериод UTC: {since} .. {until}"
-    return "\n\n".join([header, *errors])
+    body = "\n\n".join([header, *errors])
+    if separator_text:
+        escaped_separator = html.escape(separator_text, quote=False)
+        return f"{body}\n\n{escaped_separator}\n{escaped_separator}"
+    return body
+
+
+def send_digest_message(token: str, chat_id: str | int, text: str) -> None:
+    bridge.send_text_chunks(token, chat_id, text, parse_mode="HTML")
 
 
 def summarize_channel_batches(
@@ -1069,7 +1094,7 @@ def cmd_run(args: argparse.Namespace) -> int:
                 until=until,
             )
             if not total_message_count:
-                bridge.send_text_chunks(
+                send_digest_message(
                     token,
                     chat_id,
                     build_channel_digest_message(
@@ -1078,14 +1103,14 @@ def cmd_run(args: argparse.Namespace) -> int:
                         until=until,
                         message_count=0,
                         summary="Новых сообщений в выбранном периоде нет.",
+                        separator_text=digest_config.separator_text,
                     ),
-                    parse_mode="HTML",
                 )
                 sent_channel_messages += 1
                 continue
             channel_name = preview.channel_name or channel
             if total_message_count < digest_config.min_messages_for_ai:
-                bridge.send_text_chunks(
+                send_digest_message(
                     token,
                     chat_id,
                     build_channel_digest_skip_message(
@@ -1094,8 +1119,8 @@ def cmd_run(args: argparse.Namespace) -> int:
                         until=until,
                         message_count=total_message_count,
                         min_messages_for_ai=digest_config.min_messages_for_ai,
+                        separator_text=digest_config.separator_text,
                     ),
-                    parse_mode="HTML",
                 )
                 sent_channel_messages += 1
                 continue
@@ -1113,6 +1138,7 @@ def cmd_run(args: argparse.Namespace) -> int:
                         sync_mode=digest_config.sync_mode,
                         ai_batch_size=limits.ai_batch_size,
                         min_messages_for_ai=digest_config.min_messages_for_ai,
+                        separator_text=digest_config.separator_text,
                         mark_read=digest_config.mark_read,
                         use_ocr=digest_config.use_ocr,
                         system_instructions=digest_config.system_instructions,
@@ -1130,7 +1156,7 @@ def cmd_run(args: argparse.Namespace) -> int:
             except Exception as exc:
                 errors.append(f"{channel_name}: analysis failed: {str(exc) or exc.__class__.__name__}")
                 continue
-            bridge.send_text_chunks(
+            send_digest_message(
                 token,
                 chat_id,
                 build_channel_digest_message(
@@ -1139,8 +1165,8 @@ def cmd_run(args: argparse.Namespace) -> int:
                     until=until,
                     message_count=message_count,
                     summary=summary,
+                    separator_text=digest_config.separator_text,
                 ),
-                parse_mode="HTML",
             )
             sent_channel_messages += 1
     finally:
@@ -1148,11 +1174,10 @@ def cmd_run(args: argparse.Namespace) -> int:
         log_conn.close()
 
     if errors:
-        bridge.send_text_chunks(
+        send_digest_message(
             token,
             chat_id,
-            build_digest_error_message(since=since, until=until, errors=errors),
-            parse_mode="HTML",
+            build_digest_error_message(since=since, until=until, errors=errors, separator_text=digest_config.separator_text),
         )
     print(
         json.dumps(

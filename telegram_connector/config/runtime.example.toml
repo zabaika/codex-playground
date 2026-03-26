@@ -43,6 +43,8 @@ ocr = "true"
 [digest]
 # Time in local machine time for the daily launchd digest schedule.
 time = "08:00"
+# Optional separator appended to the end of each digest message. Leave empty to disable.
+separator_text = "──────────────────────────────\n──────────────────────────────"
 # Default analysis window start. Supports today, yesterday, week, month, and -Nd.
 since = "yesterday"
 # Default analysis window end. Uses the same aliases as since and expands date-only values to the end of that UTC day.

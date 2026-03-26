@@ -27,6 +27,7 @@ class TelegramDigestTests(unittest.TestCase):
                 "until": "today",
                 "sync_mode": "tail",
                 "min_messages_for_ai": "7",
+                "separator_text": "────────",
             },
             "digest_prompts": {
                 "system_instructions": "system prompt",
@@ -46,6 +47,7 @@ class TelegramDigestTests(unittest.TestCase):
         self.assertEqual(result.sync_mode, "tail")
         self.assertEqual(result.ai_batch_size, 0)
         self.assertEqual(result.min_messages_for_ai, 7)
+        self.assertEqual(result.separator_text, "────────")
         self.assertTrue(result.mark_read)
         self.assertFalse(result.use_ocr)
         self.assertEqual(result.system_instructions, "system prompt")
@@ -63,6 +65,7 @@ class TelegramDigestTests(unittest.TestCase):
             sync_mode="update",
             ai_batch_size=100,
             min_messages_for_ai=1,
+            separator_text="",
             mark_read=False,
             use_ocr=True,
             system_instructions="system",
@@ -122,6 +125,33 @@ class TelegramDigestTests(unittest.TestCase):
         self.assertIn("forwards=12", rendered.message_block)
         self.assertIn("replies=34", rendered.message_block)
         self.assertIn("ocr=caption", rendered.message_block)
+
+    def test_send_digest_message_sends_text_only(self) -> None:
+        sent: list[str] = []
+        original_send_chunks = telegram_digest.bridge.send_text_chunks
+        try:
+            telegram_digest.bridge.send_text_chunks = lambda token, chat_id, text, chunk_size=None, parse_mode=None: sent.append(text)
+            telegram_digest.send_digest_message(
+                "token",
+                42,
+                "digest text",
+            )
+        finally:
+            telegram_digest.bridge.send_text_chunks = original_send_chunks
+
+        self.assertEqual(sent, ["digest text"])
+
+    def test_build_channel_digest_message_appends_separator_text(self) -> None:
+        message = telegram_digest.build_channel_digest_message(
+            "Channel A",
+            since="2026-03-17",
+            until="2026-03-17",
+            message_count=3,
+            summary="Главные темы дня: тема.",
+            separator_text="────────",
+        )
+
+        self.assertTrue(message.endswith("────────\n────────"))
 
     def test_build_message_link_uses_private_channel_fallback(self) -> None:
         link = telegram_digest.build_message_link({"channel_id": 2428609899, "message_id": 8, "username": None})

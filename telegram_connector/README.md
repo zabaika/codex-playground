@@ -131,6 +131,7 @@ For the history client:
 - `bridge.text_chunk_size` controls how long Telegram text replies may grow before the bot splits them into multiple messages
 - `bridge.agent_stats_row_limit` limits `/agent-stats` to the latest N rows from `ai_usage_log`, so the command stays fast as the database grows
 - `[digest]` stores default daily-digest behavior
+- `digest.separator_text` optionally appends the configured divider twice to the end of each digest message; leave it empty to disable the separator
 - `digest.since` and `digest.until` define the default analysis window; `yesterday` is the recommended morning default
 - `digest.until` uses the same aliases as `since`, but date-only values are expanded to the end of that UTC day
 - `digest.min_messages_for_ai` sets the per-channel minimum required for OpenAI analysis; below that threshold digest still syncs messages but sends only a short Telegram note without AI processing
