@@ -123,6 +123,8 @@ For the history client:
 - `auth.default_mode = "user"` makes user-auth the default when a command does not specify auth explicitly
 - you can still force `bot` or `auto` per command when needed
 - `channels.default_list` is optional and stores default channels in the format `"channel, display name"`
+- public channels can be listed as `@username`
+- private groups and channels without a public username can be listed by their Bot API-style numeric id, for example `-1001449711572, Private Group`
 - if a command does not include `--channel` or `/... @channel`, the history client uses `channels.default_list`
 - if a command explicitly includes one channel or a comma-separated channel list, that explicit value overrides the config list
 - `[processing]` stores cross-cutting defaults shared by analysis flows
@@ -156,6 +158,8 @@ For the history client:
 - `final_digest_template` supports `{channel_name}`, `{since}`, `{until}`, `{message_count}`, `{batch_count}`, and `{batch_summary_block}`
 - `digest` overrides for `channel`, `since`, `until`, and auth mode win over config defaults when you pass them explicitly
 - `message_block` already includes a direct Telegram message link, `message_id`, UTC date, sender display name, sender username, `forwards`, `replies`, text, and OCR text when available
+- for private groups and channels without a public username, `channels.username` may stay empty in SQLite; this is expected and not an error
+- when `channels.username` is empty, digest links fall back to the private-message format `https://t.me/c/<internal_chat_id>/<message_id>`
 - both batch and final digest prompts should require the same first-line convention, currently `Главные темы дня: ...`, to reduce model drift between intermediate and final summaries
 - the digest prompts are expected to output `Наиболее популярное` as direct Telegram message links with short human-readable titles, using `forwards` and `replies` as popularity hints
 - `Связки вопрос-ответ/развитие темы` stays optional and should only appear when it adds structure beyond the main topics and popularity block; when used, each item should also reference a direct message link
@@ -498,6 +502,7 @@ Additional notes:
 - `--limit 0` removes the per-channel message cap for `sync`; the run is then constrained only by `[sync].sync_limit`
 
 - `--mode backfill` is the reliable choice for older date ranges that are no longer in the latest channel tail
+- if you pass a private group or channel id in Bot API form like `-1001449711572`, `sync`, `digest`, and SQLite filtering normalize it automatically to the stored internal channel id
 - `--mode tail` scans the latest window of messages
 - `--mode update` stops at the boundary of already saved history and imports only newer messages
 - `ocr` implies media download for image files

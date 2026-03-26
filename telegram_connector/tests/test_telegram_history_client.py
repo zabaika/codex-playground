@@ -1125,6 +1125,137 @@ user_password = "pw_x"
         self.assertEqual(result["since"], "2026-03-15")
         self.assertEqual(result["until"], "2026-03-16")
 
+    def test_sync_one_channel_retries_numeric_group_id_after_get_dialogs(self) -> None:
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        telegram_history_client.init_db(conn)
+        runtime = telegram_history_client.RuntimeConfig(
+            db_path=Path("/tmp/db.sqlite3"),
+            media_root=Path("/tmp/media"),
+            user_session_name="user",
+            bot_session_name="bot",
+            api_id="1",
+            api_hash="hash",
+            phone="+1",
+            bot_token="token",
+            user_password="pw",
+            tesseract_binary="tesseract",
+            vision_prompt="prompt",
+            sync_batch_size=500,
+            sync_total_limit=6000,
+            sync_mode_limits={"backfill": 100, "tail": 100, "update": 100},
+            default_auth_mode="user",
+            public_auth_mode="bot",
+            private_auth_mode="user",
+            default_channels=[],
+        )
+
+        class Entity:
+            id = 1449711572
+            username = None
+            title = "Private Group"
+            broadcast = False
+
+        class Message:
+            def __init__(self):
+                self.id = 53403
+                self.message = "hello"
+                self.date = datetime(2026, 3, 25, 12, 0, tzinfo=timezone.utc)
+                self.edit_date = None
+                self.sender_id = None
+                self.post = False
+                self.views = None
+                self.forwards = None
+                self.replies = None
+                self.media = None
+                self.grouped_id = None
+                self.sender = None
+
+        class FakeClient:
+            def __init__(self):
+                self.entity_args: list[object] = []
+                self.dialogs_called = False
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return None
+
+            async def get_entity(self, channel):
+                self.entity_args.append(channel)
+                if len(self.entity_args) == 1:
+                    raise ValueError("Cannot find any entity corresponding to channel")
+                return Entity()
+
+            async def get_dialogs(self):
+                self.dialogs_called = True
+                return []
+
+            def iter_messages(self, entity, limit):
+                async def generator():
+                    yield Message()
+                return generator()
+
+        args = types.SimpleNamespace(
+            limit=10,
+            auth_mode="user",
+            download_media=False,
+            ocr=False,
+            mark_read=False,
+            since="2026-03-25",
+            until="2026-03-25",
+        )
+        fake_client = FakeClient()
+        original_open = telegram_history_client.open_telethon_client
+        original_build_entity_lookup_reference = telegram_history_client.build_entity_lookup_reference
+        peer_ref = object()
+        try:
+            async def fake_open(runtime, auth_mode):
+                return fake_client
+
+            telegram_history_client.open_telethon_client = fake_open
+            telegram_history_client.build_entity_lookup_reference = lambda channel: peer_ref
+            result = asyncio.run(
+                telegram_history_client.sync_one_channel(conn, runtime, args, "backfill", "-1001449711572")
+            )
+        finally:
+            telegram_history_client.open_telethon_client = original_open
+            telegram_history_client.build_entity_lookup_reference = original_build_entity_lookup_reference
+
+        self.assertTrue(fake_client.dialogs_called)
+        self.assertEqual(fake_client.entity_args, [peer_ref, peer_ref])
+        self.assertEqual(result["processed_messages"], 1)
+
+    def test_resolve_channel_filter_matches_bot_api_style_group_id(self) -> None:
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        telegram_history_client.init_db(conn)
+        conn.execute(
+            """
+            INSERT INTO channels (
+                channel_id, access_hash, username, title, channel_type, raw_json, first_seen_at, last_seen_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                1449711572,
+                None,
+                None,
+                "Mentors @ GetMentor.dev",
+                "Channel",
+                "{}",
+                "2026-03-23T06:28:17+00:00",
+                "2026-03-23T06:28:17+00:00",
+            ),
+        )
+        conn.commit()
+
+        row = telegram_history_client.resolve_channel_filter(conn, "-1001449711572")
+
+        self.assertIsNotNone(row)
+        assert row is not None
+        self.assertEqual(row["channel_id"], 1449711572)
+
     def test_sync_messages_limit_zero_removes_per_channel_cap(self) -> None:
         runtime = telegram_history_client.RuntimeConfig(
             db_path=Path("/tmp/db.sqlite3"),

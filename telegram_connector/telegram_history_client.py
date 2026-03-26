@@ -522,6 +522,17 @@ def resolve_auth_mode(runtime: RuntimeConfig, auth_mode: str, channel: str) -> s
     return normalize_auth_mode(runtime.private_auth_mode)
 
 
+def build_entity_lookup_reference(channel: str) -> Any:
+    normalized = channel.strip()
+    if normalized.startswith("-100") and normalized[4:].isdigit():
+        try:
+            from telethon.tl.types import PeerChannel
+        except ImportError:
+            return normalized
+        return PeerChannel(int(normalized[4:]))
+    return normalized
+
+
 async def open_telethon_client(runtime: RuntimeConfig, auth_mode: str) -> Any:
     if not runtime.api_id or not runtime.api_hash:
         raise SystemExit(
@@ -861,6 +872,13 @@ def parse_channel_list(raw: str) -> list[str]:
     return channels
 
 
+def normalize_channel_lookup_id(channel: str) -> str:
+    normalized = channel.strip()
+    if normalized.startswith("-100") and normalized[4:].isdigit():
+        return normalized[4:]
+    return normalized.lstrip("-")
+
+
 def resolve_channels_argument(runtime: RuntimeConfig, raw_channel: str | None) -> list[str]:
     if raw_channel and raw_channel.strip():
         return parse_channel_list(raw_channel)
@@ -908,7 +926,15 @@ async def sync_one_channel(
     auth_mode = resolve_auth_mode(runtime, args.auth_mode, channel)
     client = await open_telethon_client(runtime, auth_mode)
     async with client:
-        entity = await client.get_entity(channel)
+        entity_ref = build_entity_lookup_reference(channel)
+        try:
+            entity = await client.get_entity(entity_ref)
+        except ValueError:
+            if channel.startswith("-100") and channel[1:].isdigit():
+                await client.get_dialogs()
+                entity = await client.get_entity(entity_ref)
+            else:
+                raise
         upsert_channel(conn, entity)
         batch_commit_size = max(0, int(getattr(args, "batch_size", 0) or runtime.sync_batch_size or 0))
         pending_db_changes = 0
@@ -1157,6 +1183,7 @@ def process_pending_ocr(
 def resolve_channel_filter(conn: sqlite3.Connection, channel: str) -> sqlite3.Row | None:
     normalized = channel.strip()
     username = normalized[1:] if normalized.startswith("@") else normalized
+    lookup_id = normalize_channel_lookup_id(normalized)
     rows = conn.execute(
         """
         SELECT channel_id, username, title
@@ -1164,7 +1191,7 @@ def resolve_channel_filter(conn: sqlite3.Connection, channel: str) -> sqlite3.Ro
         WHERE username = ? OR CAST(channel_id AS TEXT) = ?
         LIMIT 1
         """,
-        (username, normalized.lstrip("-")),
+        (username, lookup_id),
     ).fetchall()
     return rows[0] if rows else None
 
