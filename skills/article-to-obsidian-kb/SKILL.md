@@ -28,6 +28,17 @@ Turn a source article, transcript, or other long-form text into compact, Russian
    - Prefer the full article body, transcript, or detailed show notes when they are available.
    - Do not draft source-derived notes from a short teaser alone when the page contains more operational detail deeper in the page.
 3. Route the source before extracting notes.
+   - When a local source file already exists, prefer the local helper first:
+
+```bash
+python3 scripts/detect_source_route.py --source-file "[SOURCE_FILE]"
+```
+
+   - As soon as the route is chosen, print it to the screen in this exact format:
+     - `Route used: engineering`
+     - or `Route used: general`
+   - Immediately print one short reason line after that:
+     - `Route reason: ...`
    - Load [references/source-analysis-engineering.md](references/source-analysis-engineering.md) when the source is primarily about an engineering organization, platform, delivery system, developer workflow, company operating model, or other material that can plausibly produce `operating-model` notes or engineering-heavy `lessons`.
    - Load [references/source-analysis-general.md](references/source-analysis-general.md) when the source is primarily broad expert content, business analysis, management thinking, career advice, productivity discussion, or another article or transcript that does not naturally map to an engineering operating model.
    - If the source is ambiguous, choose the closer path and do not load both references unless the source genuinely mixes both modes.
@@ -50,7 +61,10 @@ Turn a source article, transcript, or other long-form text into compact, Russian
    - normalize every candidate tag into English before comparing or writing it
    - search the configured note roots for the same tags and for close semantic variants
    - reuse an existing English vault tag when the meaning is the same and the difference is only wording, hyphenation, singular/plural, abbreviation, Russian/English variant, or word order
-   - avoid introducing a new tag when a nearby existing concept note or article note already uses the canonical form
+   - avoid introducing a new tag when a nearby existing concept note or source-derived note already uses the canonical form
+   - treat creation of a brand-new tag as a last resort
+   - create a new tag only when you are fully confident that no existing vault tag matches the meaning closely enough and that the new tag is clearly necessary for future retrieval
+   - if you are not fully confident, choose the closest existing canonical vault tag instead of inventing a new one
 9. Re-check final titles, tags, links, and duplicate risk before saving.
 
 ## Content Routing
@@ -69,6 +83,7 @@ Turn a source article, transcript, or other long-form text into compact, Russian
 - Do not force an `operating-model` note when the source does not actually explain how a company or system works.
 - Do not mirror the general-analysis sections one to one in the saved note. Use them to decide whether the vault needs:
   - a `lessons` note
+  - a `general` note
   - one or more `concept` notes
   - updates to existing notes only
 - If the source has signal but not enough reusable knowledge for a new note, update nearby existing notes and stop there.
@@ -115,6 +130,22 @@ Turn a source article, transcript, or other long-form text into compact, Russian
   - `## Внедрение AI`
   - `## Покупать или строить`
 - If a standalone lessons note would mostly repeat the operating model, merge the lessons into the operating-model note and add `## Key lessons`.
+
+### General Note
+
+- Create at most one `general` note per source.
+- Use it only when the chosen route is `general` and the source has useful signal but does not naturally fit a `lessons` note or an `operating-model` note.
+- A `general` note may capture a structured high-signal digest of the source, including:
+  - main thesis
+  - key ideas
+  - practical recommendations
+  - cases or examples
+  - frameworks or tools
+  - anti-patterns
+  - immediately applicable takeaways
+- Do not mirror empty sections just because the general analysis reference listed them.
+- Keep only the sections that are truly supported by the source.
+- Title the note with the main topic and context, using the same inverted-pyramid rule as other source-derived notes.
 
 ### Concept Notes
 

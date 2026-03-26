@@ -14,7 +14,7 @@ article = "/absolute/path/to/article-notes"
 concept = "/absolute/path/to/concept-notes"
 ```
 
-- `note_roots.article`: search and save root for `lessons` and `operating-model` notes.
+- `note_roots.article`: search and save root for `lessons`, `general`, and `operating-model` notes.
 - `note_roots.concept`: search and save root for `concept` notes.
 
 ## Optional Keys

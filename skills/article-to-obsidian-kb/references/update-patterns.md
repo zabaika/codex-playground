@@ -28,6 +28,19 @@ Bullet format:
 - YYYY-MM-DD: подтверждено статьей [[<article note title>]]; связанные концепты: [[Concept A]], [[Concept B]].
 ```
 
+## General Notes
+
+- Keep the stable summary of the source near the top.
+- Append only the new signal that the source adds, rather than rewriting the whole note into a different structure.
+- If the note has no evidence section, add `## Evidence`.
+- Append one bullet per processed source.
+
+Bullet format:
+
+```markdown
+- YYYY-MM-DD: дополнено по материалу [[<general note title>]]; связанные концепты: [[Concept A]], [[Concept B]].
+```
+
 ## Operating-Model Notes
 
 - Keep the stable description of the operating model near the top.

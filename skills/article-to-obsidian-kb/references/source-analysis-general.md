@@ -72,6 +72,7 @@ You are a senior business analyst, technical expert, and editor with critical th
 - After extraction, switch back to the main skill rules.
 - Use the extracted signal to decide whether the vault needs:
   - a `lessons` note
+  - a `general` note
   - one or more `concept` notes
   - updates to existing notes
 - Do not force an `operating-model` note unless the source truly explains how a company or system works.

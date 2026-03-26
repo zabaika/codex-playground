@@ -19,12 +19,12 @@ What it does:
 
 - reads a source URL or provided long-form text
 - routes the source through either an engineering analysis path or a general source-analysis path
-- builds an internal extraction with reusable concepts, non-obvious insights, lessons, and operating-model details when they are really present
+- builds an internal extraction with reusable concepts, non-obvious insights, lessons, general high-signal summaries, and operating-model details when they are really present
 - searches existing Obsidian note roots before drafting anything
 - prefers updating matching notes over creating duplicates
-- writes source-derived notes and concept notes in Russian
+- writes source-derived notes of type `lessons`, `general`, or `operating-model`, plus concept notes in Russian
 - keeps technical terms in English only when they are the stable industry form
-- normalizes tags into canonical English forms
+- normalizes tags into canonical English forms and treats brand-new tags as a last resort
 - keeps one shared rule set for titles, tags, vault search, language cleanup, and update-vs-create regardless of the chosen analysis route
 - reports the chosen route in the final response with a short reason, without writing that trace into the saved Obsidian notes
 - preserves concrete operational detail instead of flattening everything into generic summaries

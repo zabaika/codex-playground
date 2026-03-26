@@ -11,12 +11,14 @@
 ## Note Types
 
 - `lessons`: source-derived note with 6-10 reusable lessons, principles, or practical guidelines.
+- `general`: source-derived note for general-route materials that have durable signal but do not naturally fit `lessons` or `operating-model`.
 - `operating-model`: source-derived note describing how a company or system actually works.
 - `concept`: reusable concept note that can connect multiple sources.
 
 ## Placement Rules
 
 - Save `lessons` notes in `note_roots.article`.
+- Save `general` notes in `note_roots.article`.
 - Save `operating-model` notes in `note_roots.article`.
 - Save `concept` notes in `note_roots.concept`.
 - Search both locations before deciding that a note is new.
@@ -54,14 +56,14 @@ Examples:
 
 ## Frontmatter
 
-### Lessons and operating-model notes
+### Lessons, general, and operating-model notes
 
 ```yaml
 ---
 title: <title>
 source:
   - <url>
-type: <lessons | operating-model>
+type: <lessons | general | operating-model>
 tags:
   - <tag>
 date: <year>
@@ -81,7 +83,7 @@ tags:
 
 ## Tags
 
-- Generate tags only from the article or concept context.
+- Generate tags only from the source or concept context.
 - Keep 4-8 tags.
 - Keep all tags strictly in English.
 - Use ASCII lowercase kebab-case for new tags unless an established existing vault tag already uses another English form.
@@ -92,6 +94,9 @@ tags:
 - Normalize terminology when multiple variants exist.
 - Deduplicate tags against the existing vault before saving the note.
 - Translate Russian candidate tags into English before the vault deduplication check.
+- Treat the creation of a brand-new tag as a last resort.
+- Create a new tag only when you are fully confident that no existing vault tag is close enough in meaning and the new tag is clearly necessary for future retrieval.
+- If there is any material doubt, prefer the nearest existing canonical vault tag instead of introducing a new one.
 - Reuse an existing vault tag when the meaning matches and the difference is only:
   - singular vs plural
   - hyphenation or spacing
@@ -111,7 +116,7 @@ tags:
 - Use only information supported by the source.
 - Keep the structure compact, but do not over-compress the content.
 - Preserve concrete mechanisms when the source states them explicitly, especially team scope, owned systems, partner teams, named metrics, prioritization logic, AI/platform details, and major constraints.
-- When the source came through a transcript-analysis reference, treat that extraction as a working scaffold only and rewrite the final note into a native Obsidian structure instead of preserving the extractor headings literally.
+- When the source came through a source-analysis reference, treat that extraction as a working scaffold only and rewrite the final note into a native Obsidian structure instead of preserving the extractor headings literally.
 - Use bold only for key terms, short labels, or the leading clause of a bullet.
 - Use enough bold emphasis that dense sections remain easy to scan, but do not bold entire list items.
 - Do not repeat `title` or `source` from frontmatter inside the body.
