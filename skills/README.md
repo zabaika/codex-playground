@@ -32,8 +32,10 @@ What it does:
 Local runtime behavior:
 
 - loads local vault roots from [config/runtime.local.toml](./article-to-obsidian-kb/config/runtime.local.toml)
+- resolves temporary and staging files through `paths.scratch_root`, defaulting to `scratch/article-to-obsidian-kb`
 - keeps the repo copy of `config/runtime.local.toml` as the single editable local config, with the installed Codex skill expected to point at the same file
 - uses separate note roots for source-derived notes and concept notes
+- keeps temporary artifacts under `scratch/` instead of creating repo-local `tmp/` folders
 - depends on local-only paths and therefore must not commit machine-specific roots or secrets
 
 Supporting references:

@@ -167,6 +167,8 @@ Rules:
 - keep runtime data inside the project unless there is a strong reason not to
 - if a daemon deploys code elsewhere, still point config and data back to the project root
 - for local tools and skills, prefer project-root-relative config paths such as `scratch/` or `data/` instead of absolute home-directory paths
+- for temporary and staging artifacts, prefer one shared project-local scratch root such as `scratch/` rather than creating many sibling `tmp/` or per-tool temporary folders across the repository
+- when a tool needs its own temporary area, place it under the shared scratch root, for example `scratch/<tool-name>/`, so periodic cleanup can happen by cleaning `scratch/` alone
 
 Recommended env override:
 
@@ -473,6 +475,7 @@ Do not commit:
 
 - `runtime.local.toml`
 - `data/`
+- `scratch/`
 - session files
 - SQLite databases
 - exported CSVs

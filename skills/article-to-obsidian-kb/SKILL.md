@@ -16,14 +16,19 @@ Turn a source article, transcript, or other long-form text into compact, Russian
 3. Read `<skill-dir>/config/runtime.local.toml` when it exists.
 4. Treat that repo copy as the single editable local config. If an installed Codex copy exists under `~/.codex/skills`, it should point to the same file rather than keeping a second divergent copy.
 5. Use `note_roots.article` and `note_roots.concept` from that file for all search and save operations.
-6. Do not look for the config relative to the current working directory unless the skill directory itself is the current working directory.
-7. If `<skill-dir>/config/runtime.local.toml` exists and contains both required note roots, do not ask the user for those paths again.
-8. Never commit machine-specific paths, local roots, passwords, or tokens into `SKILL.md`, references, or tracked config files.
-9. If the local config is missing and the roots are not already obvious from the current task, pause and ask the user instead of guessing.
+6. Resolve `paths.scratch_root` from that file when it exists. If it is missing, default to `scratch/article-to-obsidian-kb` relative to the current project root.
+7. If temporary or staging files are needed at any point in the workflow, write them only under `paths.scratch_root`.
+8. Never create repo-local temporary folders under `tmp/` for this skill. Keep temporary artifacts consolidated under `scratch/` so they are easy to inspect and clean.
+9. Do not look for the config relative to the current working directory unless the skill directory itself is the current working directory.
+10. If `<skill-dir>/config/runtime.local.toml` exists and contains both required note roots, do not ask the user for those paths again.
+11. Never commit machine-specific paths, local roots, passwords, or tokens into `SKILL.md`, references, or tracked config files.
+12. If the local config is missing and the roots are not already obvious from the current task, pause and ask the user instead of guessing.
 
 ## Workflow
 
 1. Load the local runtime config and resolve the note roots.
+   - Resolve the scratch staging root too.
+   - If `paths.scratch_root` is absent, use `scratch/article-to-obsidian-kb`.
 2. Read the source from the provided URL or supplied text.
    - Prefer the full article body, transcript, or detailed show notes when they are available.
    - Do not draft source-derived notes from a short teaser alone when the page contains more operational detail deeper in the page.
@@ -56,6 +61,7 @@ python3 scripts/detect_source_route.py --source-file "[SOURCE_FILE]"
    - Treat the analysis reference as an internal extraction step, not as the final Obsidian format.
    - Map the extracted signal into vault note types instead of copying the analysis headings verbatim.
    - Keep one shared set of vault rules for every source regardless of the chosen route: search the vault first, deduplicate tags against existing notes, apply the same title rules, apply the same language-normalization rules, remove unnecessary anglicisms, and reuse or update existing notes when the meaning already exists.
+   - If you need intermediate files, previews, or staged markdown, store them only under the resolved scratch root and never under repo-local `tmp/`.
 8. Run tag deduplication against the vault before saving:
    - collect the draft note's candidate tags
    - normalize every candidate tag into English before comparing or writing it
