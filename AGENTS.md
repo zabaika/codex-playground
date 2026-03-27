@@ -46,6 +46,11 @@ When working in `telegram_agent_bot`, prefer these sources in this order:
 
 If README, code, and tests disagree, update them together rather than fixing only one layer.
 
+Operational guidance:
+- for route selection, engine choice, selected inputs, config resolution, and similar runtime facts, keep exactly one canonical producer and let wrapper layers consume that output instead of rebuilding it
+- do not add parallel summary formats, convenience placeholders, or local stub values when the real metadata already exists in an upstream tool, structured payload, or canonical log
+- when a wrapper replays cached or preexisting artifacts, recover metadata from the original producer's persisted output before introducing any fallback
+
 ## Runtime And Secrets
 
 - Never commit machine-specific paths, usernames, home-directory paths, or local workstation identifiers.
@@ -93,6 +98,8 @@ If behavior changes in bridge or digest startup flow, update:
 - Avoid broad refactors unless they simplify both code and command semantics.
 - Prefer config-driven defaults over hardcoded runtime values.
 - Keep user-facing help and README aligned with parser behavior.
+- Avoid "temporary" local shims that duplicate existing behavior unless they clearly reduce complexity and are documented as the new source of truth.
+- When adding logging or diagnostics, extend the canonical producer first; only add wrapper-side logging when it carries distinct value and does not duplicate the same fact in a second schema.
 - When changing sync or digest behavior, check both:
   - direct CLI usage
   - Telegram bot command mapping

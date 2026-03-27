@@ -27,6 +27,9 @@ Rules:
 - put a rule in only one primary place unless a short pointer is needed elsewhere
 - prefer links to duplication when a project follows a repository-wide rule
 - if behavior changes, update code, tests, and the relevant source-of-truth document in the same change
+- for any operational fact such as route decisions, chosen engines, selected inputs, or resolved config, define one canonical producer and treat every other layer as a consumer of that fact
+- do not create parallel summaries, shadow metadata, or alternate debug formats when the canonical producer already emits the needed information
+- if a wrapper or orchestration layer needs to expose upstream metadata, pass through or parse the canonical upstream artifact instead of reconstructing it with local placeholders or guessed values
 
 ## 1. Architecture Rules
 
@@ -206,6 +209,10 @@ Rules:
 - log command metadata, not full sensitive payloads
 - for local tools and skills, prefer one append-only log file per tool unless per-run log separation is operationally necessary
 - when a tool supports multiple execution engines or many available variants, log the chosen engine and selected result by default; emit the full variant list only on explicit request or in a dedicated diagnostic mode
+- for each logged fact, prefer exactly one canonical log representation; avoid writing both a derived summary block and the original structured payload unless both serve distinct operational needs
+- orchestration layers should reuse structured routing, engine, and selection diagnostics from the underlying tool that made the decision instead of inventing a second local schema
+- when replaying from cached or preexisting artifacts, recover engine or selection metadata from the original producer's persisted logs or metadata if available; only synthesize fallback values when no canonical source exists, and label such values explicitly as fallback
+- do not log convenience placeholders such as `unknown`, `existing-*`, or stub engine names when the real value can be recovered from an upstream source of truth with reasonable effort
 
 For inbox/update storage:
 

@@ -2,6 +2,18 @@
 
 Local Codex skills that extend workspace-specific workflows.
 
+## Skill Conventions
+
+Use [RULEBOOK.md](../RULEBOOK.md) as the repository-wide policy baseline when creating or updating any local skill.
+
+For local skills in this repository:
+
+- keep one source of truth for each operational fact such as routing decisions, engine selection, chosen files, and resolved config
+- if a skill is an orchestration layer over sibling skills, reuse upstream structured output, persisted metadata, or canonical logs instead of reconstructing the same facts locally
+- do not add convenience placeholders, stub engine names, or alternate debug schemas when the real value can be recovered from the underlying skill with reasonable effort
+- if both human-readable diagnostics and structured diagnostics are needed, make one representation canonical and keep the other clearly subordinate instead of letting them diverge
+- when introducing a new reusable pattern here, prefer codifying it in [RULEBOOK.md](../RULEBOOK.md) so future skills inherit it by default
+
 ## Available Skills
 
 - [article-to-obsidian-kb](./article-to-obsidian-kb/SKILL.md)  
@@ -105,6 +117,7 @@ Local runtime behavior:
 - can optionally load its own `config/runtime.local.toml` only for config pointers and staging/log path overrides
 - resolves sibling config pointers relative to this skill's config file, so the same pointers work in both the repo skill and the installed `~/.codex/skills` copy
 - keeps transcript staging and logs project-local through `[paths]`
+- treats sibling-skill logs and structured outputs as the canonical source for engine and selection metadata when replaying an existing subtitle artifact
 - validates that the sibling article skill still has both required Obsidian note roots before note generation
 
 Supporting references:

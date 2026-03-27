@@ -27,6 +27,7 @@ DEFAULT_ARTICLE_ROUTER_FROM_SKILL = "../../article-to-obsidian-kb/scripts/detect
 DEFAULT_ARTICLE_ROUTER_FROM_PROJECT = "skills/article-to-obsidian-kb/scripts/detect_source_route.py"
 DEFAULT_PREPARED_DIR = "scratch/youtube-to-obsidian-kb"
 DEFAULT_LOG_FILE = "scratch/youtube-to-obsidian-kb.log"
+DEFAULT_TRANSCRIBE_LOG_FILE = "scratch/youtube-transcribe.log"
 YOUTUBE_HOSTS = {
     "youtu.be",
     "www.youtu.be",
@@ -84,6 +85,13 @@ def log_path(config: dict, current_dir: Path) -> Path:
     resolved = resolve_path(raw_value, base_dir)
     resolved.parent.mkdir(parents=True, exist_ok=True)
     return resolved
+
+
+def configured_path(config: dict, current_dir: Path, key: str, default_value: str) -> Path:
+    paths = config.get("paths", {})
+    base_dir = project_root(config, current_dir)
+    raw_value = _string_value(paths.get(key), default_value)
+    return resolve_path(raw_value, base_dir)
 
 
 def append_log(path: Path, message: str) -> None:
@@ -159,6 +167,39 @@ def parse_value_marker(text: str, marker: str) -> str:
         if line.startswith(marker):
             return line[len(marker) :].strip()
     return ""
+
+
+def lookup_transcribe_metadata_for_subtitle(subtitle_path: Path, transcribe_log_path: Path) -> dict[str, str]:
+    if not transcribe_log_path.exists():
+        return {}
+    needle = f"Saved subtitle file: {subtitle_path.resolve()}"
+    lines = transcribe_log_path.read_text(encoding="utf-8").splitlines()
+    for index in range(len(lines) - 1, -1, -1):
+        if lines[index].strip() != needle:
+            continue
+        engine_used = ""
+        selected_language = ""
+        for forward_index in range(index + 1, min(index + 6, len(lines))):
+            candidate = lines[forward_index].strip()
+            if candidate.startswith("Engine used:"):
+                engine_used = candidate.split(":", 1)[1].strip()
+                break
+            if candidate.startswith("=== run started "):
+                break
+        for backward_index in range(index - 1, max(index - 6, -1), -1):
+            candidate = lines[backward_index].strip()
+            if candidate.startswith("Selected subtitle language:"):
+                selected_language = candidate.split(":", 1)[1].strip()
+                break
+            if candidate.startswith("=== run started "):
+                break
+        result: dict[str, str] = {}
+        if engine_used:
+            result["engine_used"] = engine_used
+        if selected_language:
+            result["selected_subtitle_language"] = selected_language
+        return result
+    return {}
 
 
 def parse_json_output(text: str) -> dict:
@@ -413,7 +454,16 @@ def main() -> int:
     if args.subtitle_file:
         subtitle_path = Path(args.subtitle_file).expanduser().resolve()
         selected_language = infer_language_from_subtitle_path(subtitle_path)
-        engine_used = "existing-subtitle-file"
+        transcribe_config = load_toml(transcribe_config_path)
+        transcribe_log_path = configured_path(
+            transcribe_config,
+            current_dir,
+            "log_file",
+            DEFAULT_TRANSCRIBE_LOG_FILE,
+        )
+        cached_metadata = lookup_transcribe_metadata_for_subtitle(subtitle_path, transcribe_log_path)
+        selected_language = cached_metadata.get("selected_subtitle_language", selected_language)
+        engine_used = cached_metadata.get("engine_used", "unknown")
     else:
         result = run_transcribe_runner(args.url, transcribe_runner, transcribe_config_path)
         runner_output = (result.stdout or "") + ("\n" if result.stdout and result.stderr else "") + (result.stderr or "")
@@ -442,17 +492,23 @@ def main() -> int:
         language=selected_language,
         prepared_dir=prepared_dir,
     )
+    if args.subtitle_file:
+        append_log(current_log_path, f"Selected subtitle language: {selected_language or 'unknown'}")
+        append_log(current_log_path, f"Engine used: {engine_used or 'unknown'}")
     append_log(current_log_path, f"Prepared transcript file: {prepared_path}")
     prepared_title = infer_title(subtitle_path, video_id)
 
     route_result = run_article_router(prepared_path, article_router_path, prepared_title)
     route_stdout = route_result.stdout or ""
     route_stderr = route_result.stderr or ""
+    route_json_log_output = route_stdout.strip()
     route_log_output = route_stderr.strip()
+    if route_json_log_output:
+        append_log(current_log_path, route_json_log_output)
     if route_log_output:
         sys.stderr.write(route_stderr if route_stderr.endswith("\n") else f"{route_stderr}\n")
         append_log(current_log_path, route_log_output)
-    else:
+    elif not route_json_log_output:
         append_log(current_log_path, "No route output.")
     if route_result.returncode != 0:
         raise SystemExit(
@@ -473,8 +529,9 @@ def main() -> int:
         "article_config": str(article_config_path.resolve()),
         "transcribe_config": str(transcribe_config_path.resolve()),
     }
+    summary_json = json.dumps(summary, ensure_ascii=True, indent=2)
     if args.json:
-        print(json.dumps(summary, ensure_ascii=True, indent=2))
+        print(summary_json)
         return 0
 
     print(f"Prepared transcript file: {summary['prepared_transcript_file']}")
