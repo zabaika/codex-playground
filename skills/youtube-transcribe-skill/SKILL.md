@@ -40,13 +40,17 @@ Input YouTube URL: `$ARGUMENTS`
 
 1. Validate the URL.
 2. Confirm `yt-dlp` is available with `which yt-dlp`.
-3. Prefer the local runner:
+3. For real YouTube subtitle extraction, request to run the local runner outside the sandbox immediately instead of first waiting for an in-sandbox DNS or HTTPS failure.
+   - Treat network access to YouTube as the normal path for this skill, not as an exceptional fallback.
+   - Do not burn a full failed attempt inside the sandbox just to rediscover that YouTube resolution is blocked there.
+   - If the user declines the outside-sandbox run, stop honestly and report that the transcript pipeline cannot continue under the current network restrictions.
+4. Prefer the local runner:
 
 ```bash
 python3 scripts/run_youtube_transcribe.py --url "[VIDEO_URL]"
 ```
 
-4. The runner should:
+5. The runner should:
    - load `config/runtime.local.toml` when present
    - try `youtube-transcript-api` first when the vendored venv is installed
    - if the first engine does not return subtitles, still attempt the `yt-dlp` path before stopping
@@ -71,7 +75,7 @@ Recommended engine order:
 1. `youtube-transcript-api`
 2. `yt-dlp` with the configured auth mode
 
-5. If the command succeeds, report:
+6. If the command succeeds, report:
    - saved file path
    - engine used: `youtube-transcript-api` or `yt-dlp`
    - selected subtitle language
@@ -80,10 +84,10 @@ Recommended engine order:
    - filename pattern:
      `<safe video title> [<video id>].<language>.srt` for `youtube-transcript-api`
      `%(title).180B [%(id)s].%(ext)s` plus yt-dlp's subtitle language suffix for the `yt-dlp` path
-6. If the command fails because subtitles do not exist, say so plainly and stop.
-7. Do not treat a `youtube-transcript-api` no-subtitles result as final. Attempt the `yt-dlp` path too, because the engines can disagree on subtitle availability.
-8. If the command fails because authentication is required and the current config uses no auth or provider auth, ask whether to temporarily retry with browser cookies from a specific browser such as `chrome`, `firefox`, `safari`, or `edge`.
-9. If the command fails because of a temporary DNS, timeout, connection, or rate-limit issue, retry automatically according to `[retry]` and then stop with a concise final error if all attempts fail.
+7. If the command fails because subtitles do not exist, say so plainly and stop.
+8. Do not treat a `youtube-transcript-api` no-subtitles result as final. Attempt the `yt-dlp` path too, because the engines can disagree on subtitle availability.
+9. If the command fails because authentication is required and the current config uses no auth or provider auth, ask whether to temporarily retry with browser cookies from a specific browser such as `chrome`, `firefox`, `safari`, or `edge`.
+10. If the command fails because of a temporary DNS, timeout, connection, or rate-limit issue, retry automatically according to `[retry]` and then stop with a concise final error if all attempts fail.
 
 ## Cookie-Gated Retry
 
