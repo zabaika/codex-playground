@@ -77,4 +77,6 @@ Bullet format:
 - Remove obvious duplicate wikilinks.
 - Prefer the touched notes over loosely related older links when the closing section becomes too long.
 - After concept titles are finalized, run one more exact-title sweep through the source-derived note and convert remaining plain-text or inline-code mentions of those touched concepts into wikilinks.
+- After the exact-title sweep, run one more semantic-alias sweep for touched concepts whose canonical title differs from the wording that naturally appears in the prose.
+- Use that sweep for source terms, abbreviations, English labels, shortened metric names, or compact phrases that should stay visible in the text but now point at a broader canonical concept title.
 - When the visible wording should stay shorter than the canonical title, use an Obsidian alias instead of leaving the mention as plain text.

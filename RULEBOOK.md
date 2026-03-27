@@ -187,6 +187,8 @@ For knowledge-base notes, keep section design additive rather than repetitive:
 - title differences, translations, word-order variants, and small framing changes are not enough to justify a new knowledge node
 - links, tags, and later references should point to the canonical existing entity rather than to a local duplicate name
 - when one note explicitly mentions another existing note, concept, or durable knowledge node in the prose, write it as a wikilink instead of plain text
+- when the canonical target title is longer, broader, translated, or otherwise less natural than the wording that appears in the prose, keep the canonical target but link through an alias instead of leaving the shorter wording as plain text
+- run this alias-link pass after final create-vs-update decisions so terms like abbreviations, English source labels, shortened metric names, or compact phrases still resolve to the canonical knowledge node
 
 Recommended env override:
 

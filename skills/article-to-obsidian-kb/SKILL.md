@@ -235,6 +235,9 @@ python3 scripts/detect_source_route.py --source-file "[SOURCE_FILE]"
   - do not leave plain-text mentions of an existing note when the mention is actually a reference to that note
   - run this pass after the final concept create-or-update decisions are complete, not before
   - for each concept note touched in the current run, do one exact-title sweep through the source-derived note body and replace remaining plain-text or inline-code mentions with wikilinks
+  - after the exact-title sweep, run one semantic-alias sweep for each touched concept note whose canonical title is broader, longer, translated, or more explicit than the wording used in the source-derived note
+  - build a small alias map from the actual source wording and the final canonical concept title, especially for abbreviations, English source terms, shortened metric names, and compact phrases like `AI evaluation`, `LOC`, `PR throughput`, or `AI-assisted`
+  - when that shorter wording clearly refers to the touched concept, replace it with a wikilink that keeps the canonical target and preserves the source wording through an alias
   - if the prose needs a shorter visible label, keep the canonical target and use an alias rather than leaving the mention unlinked
 - Run a final language-normalization pass before saving:
   - translate non-essential English management and business vocabulary into Russian
