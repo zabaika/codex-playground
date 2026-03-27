@@ -113,6 +113,11 @@ python3 scripts/detect_source_route.py --source-file "[SOURCE_FILE]"
   - treat translations, word-order changes, narrower phrasing, and cosmetic title improvements as possible duplicates
   - if an existing concept already captures the same durable idea, update that canonical note instead of creating a new file
   - link the source-derived notes, related concepts, and tags to the canonical concept title rather than to a local synonym
+ - After drafting the candidate concept list but before filling any concept note, run one more concept-validity pass:
+  - drop or merge candidates that are really examples, brands, sources, sections of the article, or one-off formulations rather than durable reusable concepts
+  - drop or merge candidates that only restate another candidate from the same run at a different level of specificity
+  - prefer the more universal concept node over a brand-specific or source-specific wording
+  - only keep candidates that still look worth linking from multiple future notes, not just from the current article
 
 ## Decide Which Notes To Touch
 
@@ -179,6 +184,7 @@ python3 scripts/detect_source_route.py --source-file "[SOURCE_FILE]"
 - Title each concept note with the concept name itself.
 - Never use the company name as a concept title.
 - Reuse an existing concept note when the meaning matches, even if the phrasing differs.
+- Before filling concept notes, re-check the candidate set and make sure each remaining item is truly a reusable concept rather than a branded example, a source-specific phrase, or a detail that belongs only inside the source-derived note.
 - Keep the concept definition tight and additive: define the concept once, then let later sections add observations or evidence rather than restating the definition in new words.
 - Use two concept-note shapes:
   - `compact` is the default: one tight definition, then `## Additional insights`, then `# Связанные заметки`
@@ -240,6 +246,12 @@ python3 scripts/detect_source_route.py --source-file "[SOURCE_FILE]"
   - or `Route used: general`
 - Add one short reason sentence after the route so the user can understand why that path was chosen.
 - Do not write the route or the reason into any Obsidian note.
+- Structure the final response in separate blocks in this order:
+  - `Созданы` for all new source-derived notes
+  - `Новые концепты` for all new concept notes
+  - `Обновлены` for updated source-derived notes and updated concept notes
+- In `Созданы` and `Новые концепты`, give each file a one-line explanation of what it is about.
+- In `Обновлены`, group updated files together and briefly say what changed or what new signal was appended.
 - Output only files that were created or updated.
 - Do not list unchanged notes.
 - If the source adds no new knowledge, say so briefly and mention which existing notes already cover it.
