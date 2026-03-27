@@ -206,6 +206,9 @@ python3 scripts/detect_source_route.py --source-file "[SOURCE_FILE]"
   - whenever the prose explicitly mentions another existing note, concept, or durable knowledge node, convert that mention into an Obsidian wikilink
   - reuse the exact canonical existing title in the wikilink
   - do not leave plain-text mentions of an existing note when the mention is actually a reference to that note
+  - run this pass after the final concept create-or-update decisions are complete, not before
+  - for each concept note touched in the current run, do one exact-title sweep through the source-derived note body and replace remaining plain-text or inline-code mentions with wikilinks
+  - if the prose needs a shorter visible label, keep the canonical target and use an alias rather than leaving the mention unlinked
 - Run a final language-normalization pass before saving:
   - translate non-essential English management and business vocabulary into Russian
   - keep English only for canonical framework names, metric names, tool names, code-level terms, established product/discovery method names, or when the English form is the stable industry term

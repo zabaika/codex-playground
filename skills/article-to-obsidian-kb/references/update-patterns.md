@@ -72,3 +72,5 @@ Bullet format:
 - Update `# Связанные заметки` after every create or update.
 - Remove obvious duplicate wikilinks.
 - Prefer the touched notes over loosely related older links when the closing section becomes too long.
+- After concept titles are finalized, run one more exact-title sweep through the source-derived note and convert remaining plain-text or inline-code mentions of those touched concepts into wikilinks.
+- When the visible wording should stay shorter than the canonical title, use an Obsidian alias instead of leaving the mention as plain text.
