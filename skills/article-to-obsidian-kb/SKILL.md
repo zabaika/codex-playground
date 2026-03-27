@@ -108,6 +108,11 @@ python3 scripts/detect_source_route.py --source-file "[SOURCE_FILE]"
 - Treat semantic overlap as a match even when wording differs.
 - Before creating any new file, run one more targeted search with the final proposed title and 2-4 core terms.
 - Before saving tags, run one more targeted search for each borderline candidate tag and compare it with tags already used by the closest matching notes.
+- Before creating any concept note, run a canonical entity check:
+  - compare the candidate against existing concept notes by meaning, not just by title
+  - treat translations, word-order changes, narrower phrasing, and cosmetic title improvements as possible duplicates
+  - if an existing concept already captures the same durable idea, update that canonical note instead of creating a new file
+  - link the source-derived notes, related concepts, and tags to the canonical concept title rather than to a local synonym
 
 ## Decide Which Notes To Touch
 
@@ -176,6 +181,7 @@ python3 scripts/detect_source_route.py --source-file "[SOURCE_FILE]"
 - Reuse an existing concept note when the meaning matches, even if the phrasing differs.
 - Keep the concept definition tight and additive: define the concept once, then let later sections add observations or evidence rather than restating the definition in new words.
 - If a source only reinforces an existing concept, prefer updating the existing note instead of creating a near-duplicate concept note.
+- Do not let title generation hide a semantic duplicate. A cleaner title is still a duplicate if the underlying concept is the same.
 
 ## Write Notes
 
@@ -196,6 +202,10 @@ python3 scripts/detect_source_route.py --source-file "[SOURCE_FILE]"
   - each next section or bullet should add net-new knowledge
   - do not duplicate, invert, or paraphrase the previous section or bullet just to fill structure
   - if two sections or bullets overlap heavily, keep the stronger one and remove or merge the weaker one
+- Run a final link-normalization pass before saving:
+  - whenever the prose explicitly mentions another existing note, concept, or durable knowledge node, convert that mention into an Obsidian wikilink
+  - reuse the exact canonical existing title in the wikilink
+  - do not leave plain-text mentions of an existing note when the mention is actually a reference to that note
 - Run a final language-normalization pass before saving:
   - translate non-essential English management and business vocabulary into Russian
   - keep English only for canonical framework names, metric names, tool names, code-level terms, established product/discovery method names, or when the English form is the stable industry term

@@ -124,6 +124,8 @@ tags:
 - In `operating-model` notes, make each section cover a distinct part of how the organization or system works.
 - In `concept` notes, keep the definition compact and avoid restating it in later sections; later additions should extend the note with evidence, observed practices, or adjacent insight.
 - When a source only reinforces an existing concept, update the existing concept note instead of creating a near-duplicate concept file.
+- Before creating a new concept file, run a canonical concept check against the existing vault and reuse the canonical note when the meaning already exists.
+- Do not let a nicer title, a translation, or a local wording variant justify a duplicate concept node when the durable idea is already present.
 - In `general` notes, fold examples and cases into the relevant recommendation inside `## Практика` instead of giving them a standalone section.
 - Add `## Инструменты и фреймворки` only when it contributes a clearly separate layer of knowledge beyond `## Практика`.
 - Add `## Подводные камни и антипаттерны` only when the source discusses distinct mistakes with their own consequences; do not use it for negative rewrites of recommendations.
@@ -149,6 +151,8 @@ tags:
 - Keep link labels short and consistent with filenames.
 - Reuse the exact existing title when linking to an existing note.
 - Link concept notes by title only, even though they live in `Ideas/Concepts`.
+- When the body text explicitly mentions another existing note or concept as a knowledge reference, turn that mention into a wikilink instead of leaving it as plain text.
+- Prefer inline wikilinks at the point of mention, not only in `# Связанные заметки`.
 
 ## Required Closing Section
 

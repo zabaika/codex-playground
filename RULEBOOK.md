@@ -179,6 +179,11 @@ For knowledge-base notes, keep section design additive rather than repetitive:
 - if two sections would carry the same material, keep the stronger section and remove the weaker one
 - examples and cases should usually live next to the recommendation, lesson, or claim they support instead of being copied into a second standalone section
 - optional sections should be omitted when they do not add a distinct layer of value
+- when creating concepts, taxonomy nodes, or other durable knowledge entities, run a canonical-entity check before creating anything new
+- if a nearby existing entity already captures the same meaning, update the canonical existing entity instead of creating a synonym or near-duplicate
+- title differences, translations, word-order variants, and small framing changes are not enough to justify a new knowledge node
+- links, tags, and later references should point to the canonical existing entity rather than to a local duplicate name
+- when one note explicitly mentions another existing note, concept, or durable knowledge node in the prose, write it as a wikilink instead of plain text
 
 Recommended env override:
 
