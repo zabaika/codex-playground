@@ -180,6 +180,17 @@ python3 scripts/detect_source_route.py --source-file "[SOURCE_FILE]"
 - Never use the company name as a concept title.
 - Reuse an existing concept note when the meaning matches, even if the phrasing differs.
 - Keep the concept definition tight and additive: define the concept once, then let later sections add observations or evidence rather than restating the definition in new words.
+- Use two concept-note shapes:
+  - `compact` is the default: one tight definition, then `## Additional insights`, then `# Связанные заметки`
+  - `expanded` is required when the reader would likely misunderstand the concept without one more explanatory layer
+- Promote a concept note from `compact` to `expanded` when at least one of these is true:
+  - the concept is primarily comparative or contrastive, such as `X vs Y`
+  - the concept is easy to confuse with a nearby existing concept in the same run or the same note cluster
+  - the concept is named by an abbreviation, shorthand metric, or compressed label that hides the mechanism
+  - the source relies on the concept for a recommendation, but the default one-paragraph definition would not make the recommendation understandable
+- In an `expanded` concept note, add only one or two short sections that resolve the ambiguity directly, such as `## Чем отличается`, `## Когда полезен`, `## Почему метрика шумная`, or another equally specific heading.
+- Do not expand every concept note by default; use `expanded` only to remove a real comprehension gap.
+- When one concept note is expanded mainly to distinguish it from a nearby concept, update the neighboring concept note enough that the distinction is visible from both sides, even if the neighbor remains compact.
 - If a source only reinforces an existing concept, prefer updating the existing note instead of creating a near-duplicate concept note.
 - Do not let title generation hide a semantic duplicate. A cleaner title is still a duplicate if the underlying concept is the same.
 

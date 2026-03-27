@@ -60,6 +60,10 @@ Bullet format:
 - Do not rewrite the concept definition unless the existing definition is clearly incomplete or inaccurate.
 - If the note has no insight log, add `## Additional insights`.
 - Append one dated bullet that references the source-derived note and nearby concepts.
+- Keep concept notes `compact` by default, but promote them to an `expanded` shape when the compact form would still leave the concept easy to confuse, too compressed, or too opaque.
+- Use `expanded` especially for contrastive concepts, abbreviation-based metric names, and concepts that need an explicit distinction from a neighboring note.
+- In an `expanded` concept note, add only the minimum clarifying section set needed to close the gap.
+- If the clarification depends on contrast with another touched concept note, update that neighbor too so the distinction is visible from both directions.
 
 Bullet format:
 
