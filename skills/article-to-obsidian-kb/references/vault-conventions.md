@@ -117,6 +117,17 @@ tags:
 - Keep the structure compact, but do not over-compress the content.
 - Preserve concrete mechanisms when the source states them explicitly, especially team scope, owned systems, partner teams, named metrics, prioritization logic, AI/platform details, and major constraints.
 - When the source came through a source-analysis reference, treat that extraction as a working scaffold only and rewrite the final note into a native Obsidian structure instead of preserving the extractor headings literally.
+- For every note type, make sections and bullets additive: do not repeat the same recommendation, example, claim, mechanism, or definition under multiple headings unless the source truly requires cross-reference.
+- Every next block or bullet must add new knowledge instead of duplicating, inverting, or paraphrasing the previous one.
+- Prefer one stronger section over two overlapping ones.
+- In `lessons` notes, merge overlapping lessons instead of keeping two nearby principles with different wording.
+- In `operating-model` notes, make each section cover a distinct part of how the organization or system works.
+- In `concept` notes, keep the definition compact and avoid restating it in later sections; later additions should extend the note with evidence, observed practices, or adjacent insight.
+- When a source only reinforces an existing concept, update the existing concept note instead of creating a near-duplicate concept file.
+- In `general` notes, fold examples and cases into the relevant recommendation inside `## Практика` instead of giving them a standalone section.
+- Add `## Инструменты и фреймворки` only when it contributes a clearly separate layer of knowledge beyond `## Практика`.
+- Add `## Подводные камни и антипаттерны` only when the source discusses distinct mistakes with their own consequences; do not use it for negative rewrites of recommendations.
+- Omit `## Что можно применить сразу` when it would only repeat the same actions from `## Практика`.
 - Use bold only for key terms, short labels, or the leading clause of a bullet.
 - Use enough bold emphasis that dense sections remain easy to scan, but do not bold entire list items.
 - Do not repeat `title` or `source` from frontmatter inside the body.

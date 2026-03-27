@@ -118,6 +118,8 @@ python3 scripts/detect_source_route.py --source-file "[SOURCE_FILE]"
 - Keep 6-10 lessons maximum.
 - Each lesson must be a reusable principle or practical guideline plus a short explanation.
 - Do not retell the source chronologically.
+- Keep the lessons mutually non-overlapping: each lesson should add a distinct principle or mechanism instead of restating another lesson with slightly different wording.
+- If two lesson bullets would mostly say the same thing, merge them into one stronger lesson.
 - Title the note with the substantive topic and context, not with the literal word `Lessons`.
 - Treat `type: lessons` in frontmatter as the place that encodes the note class, so the title should not repeat it unless the source itself uses `Lessons` as a canonical name.
 
@@ -127,6 +129,8 @@ python3 scripts/detect_source_route.py --source-file "[SOURCE_FILE]"
 - Cover only real operating details such as team structure, platform architecture, tooling, processes, metrics, workflow, or infrastructure.
 - Preserve concrete operating detail when the source gives it, including org scope, team composition, owned systems, cross-functional partners, named metrics, segmentation logic, triage process, AI rollout mechanics, platform constraints, and build-vs-buy reasoning.
 - Do not compress several distinct mechanisms into one generic sentence just to keep the note short.
+- Keep operating-model sections additive: each section should cover a different part of how the system works instead of repeating the same mechanism under new headings.
+- If two operating-model sections would describe the same operating behavior, merge or delete the weaker section.
 - Prefer a sectioned structure. When the source supports it, cover:
   - `## Команда и зона ответственности`
   - `## Платформы и системы`
@@ -141,16 +145,27 @@ python3 scripts/detect_source_route.py --source-file "[SOURCE_FILE]"
 
 - Create at most one `general` note per source.
 - Use it only when the chosen route is `general` and the source has useful signal but does not naturally fit a `lessons` note or an `operating-model` note.
+- Prefer `general` over `lessons` when the source keeps substantial value in practical recommendations, supporting cases, tool context, or anti-patterns that would be lost if everything were collapsed into portable principles.
+- Use `lessons` only when the source can mostly be reduced to transferable principles and little signal would be lost by omitting separate practice-oriented structure.
 - A `general` note may capture a structured high-signal digest of the source, including:
   - main thesis
   - key ideas
-  - practical recommendations
-  - cases or examples
-  - frameworks or tools
-  - anti-patterns
+  - practical recommendations with attached examples
+  - optional frameworks or tools
+  - optional anti-patterns
   - immediately applicable takeaways
 - Do not mirror empty sections just because the general analysis reference listed them.
 - Keep only the sections that are truly supported by the source.
+- Keep the sections semantically distinct instead of repeating the same points under new headings.
+- Every next block must add net-new knowledge instead of duplicating, inverting, or paraphrasing the previous blocks.
+- If two sections would carry the same material, keep the stronger section and delete the weaker one.
+- Use this split when several blocks are present:
+  - the first paragraph explains the source and its main problem instead of using a separate `## Суть` heading
+  - `## Ключевые тезисы` captures the core ideas and claims, not action steps
+  - `## Практика` captures reusable action steps and attaches the relevant examples, scenarios, numbers, or illustrations directly to the recommendation they support
+  - `## Инструменты и фреймворки` appears only when at least two named tools, methods, or frameworks are independently useful and the block adds clear new information beyond `## Практика`
+  - `## Подводные камни и антипаттерны` appears only when the source discusses at least three distinct mistakes or false approaches with their own consequences, not just the inverse wording of `## Практика`
+  - `## Что можно применить сразу` captures a short prioritized starter subset and should be omitted if it would just restate `## Практика`
 - Title the note with the main topic and context, using the same inverted-pyramid rule as other source-derived notes.
 
 ### Concept Notes
@@ -159,6 +174,8 @@ python3 scripts/detect_source_route.py --source-file "[SOURCE_FILE]"
 - Title each concept note with the concept name itself.
 - Never use the company name as a concept title.
 - Reuse an existing concept note when the meaning matches, even if the phrasing differs.
+- Keep the concept definition tight and additive: define the concept once, then let later sections add observations or evidence rather than restating the definition in new words.
+- If a source only reinforces an existing concept, prefer updating the existing note instead of creating a near-duplicate concept note.
 
 ## Write Notes
 
@@ -175,6 +192,10 @@ python3 scripts/detect_source_route.py --source-file "[SOURCE_FILE]"
 - Keep the markdown compact and ready to save without cleanup.
 - Keep enough concrete detail that a reader can recover how the operating model actually works without reopening the source.
 - Use selective bold emphasis for key mechanisms, labels, or constraints so dense notes stay scannable, but never bold an entire list item.
+- Apply the additive-structure rule to every note type:
+  - each next section or bullet should add net-new knowledge
+  - do not duplicate, invert, or paraphrase the previous section or bullet just to fill structure
+  - if two sections or bullets overlap heavily, keep the stronger one and remove or merge the weaker one
 - Run a final language-normalization pass before saving:
   - translate non-essential English management and business vocabulary into Russian
   - keep English only for canonical framework names, metric names, tool names, code-level terms, established product/discovery method names, or when the English form is the stable industry term

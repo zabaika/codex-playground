@@ -173,6 +173,13 @@ Rules:
 - for temporary and staging artifacts, prefer one shared project-local scratch root such as `scratch/` rather than creating many sibling `tmp/` or per-tool temporary folders across the repository
 - when a tool needs its own temporary area, place it under the shared scratch root, for example `scratch/<tool-name>/`, so periodic cleanup can happen by cleaning `scratch/` alone
 
+For knowledge-base notes, keep section design additive rather than repetitive:
+
+- each next section should add net-new knowledge instead of duplicating, inverting, or paraphrasing the previous section
+- if two sections would carry the same material, keep the stronger section and remove the weaker one
+- examples and cases should usually live next to the recommendation, lesson, or claim they support instead of being copied into a second standalone section
+- optional sections should be omitted when they do not add a distinct layer of value
+
 Recommended env override:
 
 - `TELEGRAM_CONNECTOR_PROJECT_ROOT`
