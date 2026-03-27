@@ -114,10 +114,19 @@ python3 scripts/detect_source_route.py --source-file "[SOURCE_FILE]"
   - if an existing concept already captures the same durable idea, update that canonical note instead of creating a new file
   - link the source-derived notes, related concepts, and tags to the canonical concept title rather than to a local synonym
  - After drafting the candidate concept list but before filling any concept note, run one more concept-validity pass:
-  - drop or merge candidates that are really examples, brands, sources, sections of the article, or one-off formulations rather than durable reusable concepts
-  - drop or merge candidates that only restate another candidate from the same run at a different level of specificity
-  - prefer the more universal concept node over a brand-specific or source-specific wording
-  - only keep candidates that still look worth linking from multiple future notes, not just from the current article
+ - drop or merge candidates that are really examples, brands, sources, sections of the article, or one-off formulations rather than durable reusable concepts
+ - drop or merge candidates that only restate another candidate from the same run at a different level of specificity
+ - prefer the more universal concept node over a brand-specific or source-specific wording
+ - only keep candidates that still look worth linking from multiple future notes, not just from the current article
+  - drop candidates that are only narrow decision filters for one local scenario in the current source, such as a one-off hiring heuristic, one choice criterion, or one risk check whose best home is a bullet inside the source-derived note
+  - if a candidate mainly sharpens one recommendation inside one article and is not likely to earn independent reuse across multiple future notes, merge it back into the source-derived note instead of promoting it to a top-level concept
+- Before saving `# Связанные заметки`, run one more related-link validation pass:
+  - do not add a related note only because the source comes from the same podcast, channel, author, series, or brand shell
+  - treat lexical overlap, similar titles, or shared career/AI/startup framing as insufficient on their own
+  - add a related source-derived note only when at least two durable topical anchors actually match, such as the same market, the same decision context, the same mechanism, or the same operating constraint
+  - if the candidate note comes from a different source id or a different episode, verify that the dominant topic still overlaps before linking it
+  - if the candidate would send the reader into a different task or scenario than the current source, drop the link even when some vocabulary overlaps
+  - prefer topical identity over surface similarity and treat `same series != same knowledge node` as a hard rule
 
 ## Decide Which Notes To Touch
 
@@ -185,6 +194,7 @@ python3 scripts/detect_source_route.py --source-file "[SOURCE_FILE]"
 - Never use the company name as a concept title.
 - Reuse an existing concept note when the meaning matches, even if the phrasing differs.
 - Before filling concept notes, re-check the candidate set and make sure each remaining item is truly a reusable concept rather than a branded example, a source-specific phrase, or a detail that belongs only inside the source-derived note.
+- Do not promote a source-local decision filter to a concept note unless it is likely to become a reusable node across multiple future notes; if it mainly serves one recommendation in one source, keep it inside the source-derived note.
 - Keep the concept definition tight and additive: define the concept once, then let later sections add observations or evidence rather than restating the definition in new words.
 - Use two concept-note shapes:
   - `compact` is the default: one tight definition, then `## Additional insights`, then `# Связанные заметки`
@@ -238,6 +248,12 @@ python3 scripts/detect_source_route.py --source-file "[SOURCE_FILE]"
   - deduplicate draft tags against the existing vault
   - prefer the exact canonical English tag already used in overlapping notes
   - collapse near-duplicates before writing frontmatter
+- Run a final output-synthesis pass before replying:
+  - build an explicit touched-file ledger from the actual side effects of the run, not from memory
+  - keep separate buckets for newly created source-derived notes, newly created concept notes, updated source-derived notes, and updated concept notes
+  - derive the final user-facing report only from that ledger
+  - if a wrapper skill invoked this workflow, the wrapper must still reuse this skill's final-output contract instead of improvising its own block structure
+  - if a file was not actually created or updated in this run, it must not appear in the final report
 
 ## Final Output
 

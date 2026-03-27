@@ -60,6 +60,10 @@ python3 scripts/prepare_youtube_transcript.py --url "[VIDEO_URL]"
    - `../article-to-obsidian-kb/references/update-patterns.md`
 8. Apply the `article-to-obsidian-kb` workflow to the prepared transcript, not to the raw subtitle file.
 9. Search the configured vault roots before drafting anything and prefer updates over duplicate notes.
+10. Reuse the sibling `article-to-obsidian-kb` final-output contract verbatim.
+   - do not redefine the report block names, ordering, or inclusion rules locally
+   - do not keep a second summary schema in this skill for created vs updated notes
+   - if `article-to-obsidian-kb` changes its final output format later, follow that source of truth instead of preserving an older local copy here
 
 ## Transcript-Specific Guidance
 
@@ -71,6 +75,6 @@ python3 scripts/prepare_youtube_transcript.py --url "[VIDEO_URL]"
 
 ## Final Output
 
-- Output only files that were created or updated in the Obsidian vault.
-- Mention the prepared transcript file and subtitle file that were used as source artifacts.
+- Follow the `## Final Output` section from `../article-to-obsidian-kb/SKILL.md` as the canonical report format.
+- After that inherited report, mention the prepared transcript file and subtitle file that were used as source artifacts.
 - If no transcript was obtained, report that the pipeline stopped before note generation.
