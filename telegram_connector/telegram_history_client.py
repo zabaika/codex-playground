@@ -1012,8 +1012,14 @@ async def sync_one_channel(
         if getattr(args, "ocr", False):
             binary = require_tesseract(runtime)
             ocr_processed = process_pending_ocr(conn, binary, limit=scan_limit, channel_id=entity.id)
-        if mark_read_target_id is None and highest_message_id is not None:
-            mark_read_target_id = highest_message_id
+        if highest_message_id is not None:
+            if mark_read_target_id is None:
+                mark_read_target_id = highest_message_id
+            elif mode == "backfill":
+                # For historical digest-style backfills we want to mark the
+                # full range that was actually processed in this run, even when
+                # a previous backfill boundary already exists in sync_state.
+                mark_read_target_id = max(mark_read_target_id, highest_message_id)
         current_read_max_id = None
         marked_read_from = None
         marked_read_until = None

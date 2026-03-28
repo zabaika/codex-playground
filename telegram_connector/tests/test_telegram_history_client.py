@@ -1034,6 +1034,108 @@ user_password = "pw_x"
         self.assertEqual(result["marked_read_until"], 10)
         self.assertEqual(mark_calls, [(1, 10)])
 
+    def test_sync_one_channel_mark_read_backfill_advances_to_newly_processed_boundary(self) -> None:
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        telegram_history_client.init_db(conn)
+
+        runtime = telegram_history_client.RuntimeConfig(
+            db_path=Path("/tmp/db.sqlite3"),
+            media_root=Path("/tmp/media"),
+            user_session_name="user",
+            bot_session_name="bot",
+            api_id="1",
+            api_hash="hash",
+            phone="+1",
+            bot_token="token",
+            user_password="pw",
+            tesseract_binary="tesseract",
+            vision_prompt="prompt",
+            sync_batch_size=500,
+            default_auth_mode="user",
+            public_auth_mode="bot",
+            private_auth_mode="user",
+            default_channels=[],
+        )
+
+        class Entity:
+            id = 1
+            username = "vcnews"
+            title = "vc.ru"
+            access_hash = None
+
+        class Message:
+            def __init__(self, message_id: int) -> None:
+                self.id = message_id
+                self.message = f"message {message_id}"
+                self.date = None
+                self.edit_date = None
+                self.sender_id = Entity.id
+                self.post = True
+                self.views = None
+                self.forwards = None
+                self.replies = None
+                self.media = None
+                self.grouped_id = None
+                self.sender = None
+
+        telegram_history_client.upsert_channel(conn, Entity())
+        telegram_history_client.upsert_message(conn, Entity(), Message(10), "vcnews", "vc.ru", None, None)
+        telegram_history_client.update_sync_state(
+            conn,
+            Entity.id,
+            last_backfill_message_id=10,
+            last_full_sync_at="2026-03-17T00:00:00+00:00",
+            last_error=None,
+        )
+        conn.commit()
+
+        messages = [Message(12), Message(11), Message(10)]
+        mark_calls: list[tuple[int | None, int | None]] = []
+
+        class FakeClient:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return None
+
+            async def get_entity(self, channel):
+                return Entity()
+
+            def iter_messages(self, entity, limit):
+                async def generator():
+                    for item in messages:
+                        yield item
+                return generator()
+
+            async def send_read_acknowledge(self, entity, max_id=None):
+                mark_calls.append((entity.id, max_id))
+
+        args = types.SimpleNamespace(limit=10, auth_mode="user", download_media=False, ocr=False, mark_read=True)
+        original_open = telegram_history_client.open_telethon_client
+        original_current_read = telegram_history_client.current_read_inbox_max_id
+        try:
+            async def fake_open(runtime, auth_mode):
+                return FakeClient()
+
+            async def fake_current_read(client, entity):
+                return 10
+
+            telegram_history_client.open_telethon_client = fake_open
+            telegram_history_client.current_read_inbox_max_id = fake_current_read
+            result = asyncio.run(telegram_history_client.sync_one_channel(conn, runtime, args, "backfill", "@vcnews"))
+        finally:
+            telegram_history_client.open_telethon_client = original_open
+            telegram_history_client.current_read_inbox_max_id = original_current_read
+
+        self.assertEqual(result["processed_messages"], 2)
+        self.assertTrue(result["marked_read"])
+        self.assertEqual(result["current_read_max_id"], 10)
+        self.assertEqual(result["marked_read_from"], 11)
+        self.assertEqual(result["marked_read_until"], 12)
+        self.assertEqual(mark_calls, [(1, 12)])
+
     def test_sync_one_channel_applies_since_until_filters(self) -> None:
         conn = sqlite3.connect(":memory:")
         conn.row_factory = sqlite3.Row
