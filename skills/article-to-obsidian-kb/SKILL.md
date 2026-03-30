@@ -120,6 +120,8 @@ python3 scripts/detect_source_route.py --source-file "[SOURCE_FILE]"
  - only keep candidates that still look worth linking from multiple future notes, not just from the current article
   - drop candidates that are only narrow decision filters for one local scenario in the current source, such as a one-off hiring heuristic, one choice criterion, or one risk check whose best home is a bullet inside the source-derived note
   - if a candidate mainly sharpens one recommendation inside one article and is not likely to earn independent reuse across multiple future notes, merge it back into the source-derived note instead of promoting it to a top-level concept
+  - if a candidate mostly restates one pillar of the current source-derived note's own thesis, one subsection that would naturally live inside that note, or one supporting argument that is not yet useful outside this source, keep it embedded in the source-derived note instead of splitting it out
+  - if the candidate's only realistic backlinks for now would be the current source-derived note and one or two sibling candidates from the same run, treat that as evidence against promotion unless the concept is clearly durable outside this source
 - Before saving `# Связанные заметки`, run one more related-link validation pass:
   - do not add a related note only because the source comes from the same podcast, channel, author, series, or brand shell
   - treat lexical overlap, similar titles, or shared career/AI/startup framing as insufficient on their own
@@ -195,6 +197,8 @@ python3 scripts/detect_source_route.py --source-file "[SOURCE_FILE]"
 - Reuse an existing concept note when the meaning matches, even if the phrasing differs.
 - Before filling concept notes, re-check the candidate set and make sure each remaining item is truly a reusable concept rather than a branded example, a source-specific phrase, or a detail that belongs only inside the source-derived note.
 - Do not promote a source-local decision filter to a concept note unless it is likely to become a reusable node across multiple future notes; if it mainly serves one recommendation in one source, keep it inside the source-derived note.
+- Do not turn a strong subsection of the current source-derived note into a top-level concept note unless it has a cleaner reusable boundary than the source note itself and can plausibly attract independent future reuse.
+- A good concept note should still feel meaningful if the current source-derived note disappeared; if it mostly reads like a detached paragraph from that one source, keep it embedded there instead.
 - Keep the concept definition tight and additive: define the concept once, then let later sections add observations or evidence rather than restating the definition in new words.
 - Use two concept-note shapes:
   - `compact` is the default: one tight definition, then `## Additional insights`, then `# Связанные заметки`
