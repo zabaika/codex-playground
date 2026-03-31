@@ -86,6 +86,9 @@ Frontmatter is part of the note schema, not optional decoration.
 - After any late manual rewrite, merge, or structural cleanup, run one full-note compliance check instead of validating only the field or section you just touched.
 - Re-check frontmatter, links, required closing section, spacing, emphasis, and section shape together on the final note.
 - Treat “I only changed one small thing” as a common source of regressions in the rest of the note.
+- After that first full-note compliance check, run one more full regression sweep with the same coverage again.
+- The second sweep is not a narrower validator; it repeats the same final note contract for reliability after the compliance fixes themselves.
+- Do not stop after frontmatter, links, or language are repaired once; re-check the whole note again because late fixes often regress another already-fixed rule.
 - Validate required frontmatter fields after the final body rewrite, not only after the first draft.
 - When a source-derived note is manually reworked, merged with an older note, or restructured late in the run, re-check that `title`, `source`, `type`, `tags`, and `date` still exist and still match the saved note.
 - When a concept note is manually reworked, re-check that `title`, `type: concept`, and `tags` are still present.

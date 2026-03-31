@@ -36,6 +36,10 @@ Rules:
 - when deciding whether to create a top-level knowledge object, prefer keeping material inside the source-derived note if it mainly restates that note's own thesis, reads like a detachable subsection, or would realistically have no meaningful backlinks beyond the current source and a couple of sibling nodes from the same run
 - when a workflow relies on structured metadata such as frontmatter, route payloads, manifests, or config blocks, validate that metadata after the final manual rewrite or merge instead of trusting an earlier draft; a finished-looking body does not make partial metadata acceptable
 - when a workflow produces structured documents with formatting and schema rules, run one final holistic compliance pass after any late manual edit or merge instead of validating only the one thing that was just changed; re-check the whole document contract in its final form because small late fixes often regress unrelated rules
+- when those structured-document workflows are especially prone to late manual edits, formatting repairs, link cleanup, or language rewrites, add a second final regression sweep with the same coverage as the first compliance pass so the document survives two identical whole-note checks before it is considered done
+- when a workflow also maintains a local contract checker or regression harness for those structured outputs, keep that harness focused on mechanically checkable constraints such as schema, formatting, links, and explicit preservation rules; do not pretend it can prove the full semantic quality of AI interpretation
+- when a new mechanically checkable output rule is added to such a workflow, update the checker or regression fixtures in the same change so the documented contract and the executable contract do not drift apart
+- when a workflow already has a local contract harness, any change to that workflow's output contract, checker, or contract-facing documentation should trigger the harness before the change is considered complete, even if the edit looks like "docs only"
 
 ## 1. Architecture Rules
 

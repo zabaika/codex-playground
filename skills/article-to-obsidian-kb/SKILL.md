@@ -74,6 +74,30 @@ python3 scripts/detect_source_route.py --source-file "[SOURCE_FILE]"
    - create a new tag only when you are fully confident that no existing vault tag matches the meaning closely enough and that the new tag is clearly necessary for future retrieval
    - if you are not fully confident, choose the closest existing canonical vault tag instead of inventing a new one
 9. Re-check final titles, tags, links, and duplicate risk before saving.
+10. When you add or tighten a mechanically checkable note-contract rule in this skill, update the local contract harness in the same change.
+   - This applies to rules about frontmatter, tags, headings, spacing, closing sections, wikilinks, language cleanup, emphasis, or preservation of explicitly required examples.
+   - Update at least one of:
+     - the checker under `scripts/`
+     - a broken regression fixture
+     - a clean passing fixture
+     - a `unittest` that proves the new rule is enforced
+   - Do not treat semantic source understanding as testable by this harness. The harness exists to protect deterministic output constraints after note drafting, not to prove that every future source was interpreted perfectly.
+11. When this skill's contract layer changes, run the local note-contract tests before finishing the change.
+   - Treat changes to any of these files as a required test trigger:
+     - `SKILL.md`
+     - `references/vault-conventions.md`
+     - `references/language-normalization.md`
+     - `references/update-patterns.md`
+     - `references/test-matrix.md`
+     - files under `tests/`
+     - the checker under `scripts/`
+   - The current required command is:
+
+```bash
+python3 -m unittest skills/article-to-obsidian-kb/tests/test_note_contract_regression.py -q
+```
+
+   - Do not skip this test run just because the change is "only documentation" if that documentation changes the executable note contract.
 
 ## Content Routing
 
@@ -240,6 +264,13 @@ python3 scripts/detect_source_route.py --source-file "[SOURCE_FILE]"
   - re-check frontmatter, title consistency, note type, tags, required closing section, wikilinks, language normalization, spacing, bold emphasis, and section-shape rules together
   - do not assume that a late fix for one thing, such as links or frontmatter, preserved the rest of the note formatting
   - do not mark a note complete until it passes this full-note compliance pass in its final saved form
+- Run one final regression-sweep pass immediately after the note-compliance pass:
+  - treat this as a second large pass with the same coverage as the note-compliance pass, not as a smaller spot check
+  - re-run the full final-note checklist again after all late edits, merges, link fixes, language cleanup, and formatting cleanup are done
+  - verify the same contract again: frontmatter, title consistency, note type, tags, required closing section, wikilinks, language normalization, spacing, bold emphasis, section-shape rules, and preservation of concrete examples
+  - use this second pass specifically to catch regressions introduced by the first compliance fixes themselves, such as restored links that break scanability, translated phrases that drop aliases, or frontmatter repairs that disturb section layout
+  - the two passes should be identical in coverage; the second exists for reliability, not because it checks a narrower subset
+  - do not mark a note complete until it survives both the note-compliance pass and the regression-sweep pass in its final saved form
 - Run a final frontmatter-validation pass before saving:
   - treat frontmatter as required structured metadata, not as optional decoration
   - for every source-derived note, verify that `title`, `source`, `type`, `tags`, and `date` are all present and match the final note state
