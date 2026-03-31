@@ -59,11 +59,19 @@ python3 scripts/prepare_youtube_transcript.py --url "[VIDEO_URL]"
    - `../article-to-obsidian-kb/references/language-normalization.md`
    - `../article-to-obsidian-kb/references/update-patterns.md`
 8. Apply the `article-to-obsidian-kb` workflow to the prepared transcript, not to the raw subtitle file.
+   - inherit the sibling workflow completely, not partially
+   - do not stop after note drafting or note updates if the sibling workflow still requires final validation passes
+   - when `article-to-obsidian-kb` requires `note-compliance pass` and `regression-sweep pass`, execute both of them for every touched note in this wrapper flow too
+   - do not treat the YouTube wrapper as a shortcut path that may skip final contract validation because the source came from a transcript
 9. Search the configured vault roots before drafting anything and prefer updates over duplicate notes.
 10. Reuse the sibling `article-to-obsidian-kb` final-output contract verbatim.
    - do not redefine the report block names, ordering, or inclusion rules locally
    - do not keep a second summary schema in this skill for created vs updated notes
    - if `article-to-obsidian-kb` changes its final output format later, follow that source of truth instead of preserving an older local copy here
+11. Inherit the sibling workflow's final validation contract, not only its report shape.
+   - if `article-to-obsidian-kb` adds or tightens full-note validation, regression sweeps, note-contract checks, or similar final quality gates later, this wrapper must follow those gates automatically
+   - do not re-specify a narrower local validation subset here
+   - if there is any conflict between this wrapper and the sibling note workflow, prefer the deeper sibling workflow as the source of truth for note validation
 
 ## Transcript-Specific Guidance
 
