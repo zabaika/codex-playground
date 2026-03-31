@@ -176,9 +176,15 @@ Frontmatter is part of the note schema, not optional decoration.
 - Link concept notes by title only, even though they live in `Ideas/Concepts`.
 - When the body text explicitly mentions another existing note or concept as a knowledge reference, turn that mention into a wikilink instead of leaving it as plain text.
 - Prefer inline wikilinks at the point of mention, not only in `# Связанные заметки`.
+- Treat inline wikilinks as the primary graph edges.
+- Do not mechanically repeat the same note in `# Связанные заметки` when it was already linked in the body.
+- Use the closing section for net-new navigation links, not as a duplicate dump of all inline references.
 
 ## Required Closing Section
 
-- End every note with `# Связанные заметки`.
-- Add 5-10 wikilinks when that many relevant notes exist.
+- End the note with `# Связанные заметки` only when at least one net-new navigation link remains after final deduplication.
+- Remove the closing heading entirely when deduplication leaves it empty.
+- Add 3-10 wikilinks when that many net-new relevant notes exist.
 - Prefer links to touched concept notes, source-derived notes, and the closest existing concepts in the vault.
+- Remove from the closing section any note that was already linked inline in the body, unless there is a deliberate reason to highlight that one hub note twice.
+- Do not add weak or merely thematic filler links just to satisfy a target count.

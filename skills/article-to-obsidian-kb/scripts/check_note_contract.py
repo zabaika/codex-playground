@@ -115,6 +115,10 @@ def _closing_links_count(body: str) -> tuple[int | None, int]:
     return line_no, count
 
 
+def _extract_wikilink_targets(text: str) -> list[str]:
+    return [match.group(1) for match in WIKILINK_RE.finditer(text)]
+
+
 def _visible_text(line: str) -> str:
     line = URL_RE.sub("", line)
     line = WIKILINK_RE.sub(lambda m: m.group(2) or m.group(1), line)
@@ -439,6 +443,34 @@ def _check_required_related_links(
     return violations
 
 
+def _check_related_links_dedup(body: str) -> list[Violation]:
+    violations: list[Violation] = []
+    heading_line, tail = _find_heading_block(body, "# Связанные заметки")
+    if heading_line is None:
+        return violations
+    body_before_closing = body.split("# Связанные заметки", 1)[0]
+    inline_targets = set(_extract_wikilink_targets(body_before_closing))
+    for offset, line in enumerate(tail, start=1):
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if stripped.startswith("# "):
+            break
+        match = WIKILINK_RE.fullmatch(stripped)
+        if not match:
+            continue
+        target = match.group(1)
+        if target in inline_targets:
+            violations.append(
+                Violation(
+                    f"closing.duplicate-inline-link:{target}",
+                    f"Ссылка `[[{target}]]` уже есть в теле заметки и не должна механически повторяться в `# Связанные заметки`.",
+                    heading_line + offset,
+                )
+            )
+    return violations
+
+
 def _check_closing_section(
     body: str,
     min_related_links: int,
@@ -448,14 +480,23 @@ def _check_closing_section(
     violations: list[Violation] = []
     heading_line, links_count = _closing_links_count(body)
     if heading_line is None:
+        for target in required_related_links:
+            violations.append(
+                Violation(
+                    f"closing.missing-related-link:{target}",
+                    f"В closing section отсутствует обязательная ссылка `[[{target}]]`.",
+                )
+            )
+        return violations
+    if links_count == 0:
         violations.append(
             Violation(
-                "closing.missing-related-section",
-                "В заметке отсутствует обязательный блок `# Связанные заметки`.",
+                "closing.empty-related-section",
+                "Пустой блок `# Связанные заметки` нужно удалить целиком, а не оставлять пустой heading.",
+                heading_line,
             )
         )
-        return violations
-    if links_count < min_related_links:
+    elif min_related_links and links_count < min_related_links:
         violations.append(
             Violation(
                 "closing.too-few-related-links",
@@ -474,6 +515,7 @@ def _check_closing_section(
                 )
             )
     violations.extend(_check_required_related_links(body, required_related_links))
+    violations.extend(_check_related_links_dedup(body))
     return violations
 
 
@@ -481,7 +523,7 @@ def collect_violations(
     path: Path,
     *,
     expect: str,
-    min_related_links: int = 5,
+    min_related_links: int = 0,
     forbidden_terms: list[str] | None = None,
     required_linked_phrases: list[str] | None = None,
     required_example_phrases: list[str] | None = None,
@@ -550,7 +592,7 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("path", type=Path)
     parser.add_argument("--expect", choices=("source", "concept"), default="source")
-    parser.add_argument("--min-related-links", type=int, default=5)
+    parser.add_argument("--min-related-links", type=int, default=0)
     parser.add_argument("--forbid", action="append", default=[])
     parser.add_argument("--allow-latin-term", action="append", default=[])
     parser.add_argument("--require-linked-phrase", action="append", default=[])

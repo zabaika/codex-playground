@@ -197,6 +197,8 @@ For knowledge-base notes, keep section design additive rather than repetitive:
 - when one note explicitly mentions another existing note, concept, or durable knowledge node in the prose, write it as a wikilink instead of plain text
 - when the canonical target title is longer, broader, translated, or otherwise less natural than the wording that appears in the prose, keep the canonical target but link through an alias instead of leaving the shorter wording as plain text
 - run this alias-link pass after final create-vs-update decisions so terms like abbreviations, English source labels, shortened metric names, or compact phrases still resolve to the canonical knowledge node
+- when a note already links to another knowledge object inline in the body, do not repeat the same link mechanically in a closing related-notes section; keep the closing block for net-new navigation context instead of duplicating already established graph edges
+- if the closing related-notes block becomes empty after deduplicating inline links, remove the block entirely instead of leaving an empty heading or padding it with weak filler links
 
 Recommended env override:
 

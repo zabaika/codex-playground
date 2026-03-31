@@ -291,6 +291,14 @@ python3 -m unittest skills/article-to-obsidian-kb/tests/test_note_contract_regre
   - build a small alias map from the actual source wording and the final canonical concept title, especially for abbreviations, English source terms, shortened metric names, and compact phrases like `AI evaluation`, `LOC`, `PR throughput`, or `AI-assisted`
   - when that shorter wording clearly refers to the touched concept, replace it with a wikilink that keeps the canonical target and preserves the source wording through an alias
   - if the prose needs a shorter visible label, keep the canonical target and use an alias rather than leaving the mention unlinked
+- Run a final related-links dedup pass before saving:
+  - treat inline wikilinks in the body as the primary knowledge links
+  - remove from `# Связанные заметки` every note that is already mentioned as a wikilink in the body
+  - keep in `# Связанные заметки` only net-new navigation links that broaden the reader's path through the cluster
+  - if the closing block becomes shorter after deduplication, prefer a shorter non-duplicative block over a longer repetitive one
+  - if deduplication removes every useful net-new navigation link, delete the `# Связанные заметки` heading entirely instead of leaving an empty block
+  - do not add weak or filler links just to keep the closing block non-empty
+  - allow a rare exception only when one especially important hub note needs to be highlighted both inline and in the closing block on purpose
 - Run a final language-normalization pass before saving:
   - translate non-essential English management and business vocabulary into Russian
   - keep English only for canonical framework names, metric names, tool names, code-level terms, established product/discovery method names, or when the English form is the stable industry term

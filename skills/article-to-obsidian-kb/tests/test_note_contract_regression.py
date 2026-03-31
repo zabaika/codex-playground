@@ -25,7 +25,6 @@ class CheckNoteContractTests(unittest.TestCase):
         violations = collect_violations(
             fixture,
             expect="source",
-            min_related_links=5,
             forbidden_terms=["good enough", "builder-режим"],
             allow_latin_terms=["AI", "CPO"],
             required_linked_phrases=["Грейды всё сильнее определяются ответственностью"],
@@ -53,7 +52,6 @@ class CheckNoteContractTests(unittest.TestCase):
         self.assertIn("language.forbidden-term:builder-режим", codes)
         self.assertIn("spacing.blank-line-after-heading", codes)
         self.assertIn("spacing.blank-line-before-list", codes)
-        self.assertIn("closing.too-few-related-links", codes)
         self.assertIn(
             "structure.missing-heading:## Подводные камни и антипаттерны", codes
         )
@@ -64,13 +62,37 @@ class CheckNoteContractTests(unittest.TestCase):
         )
         self.assertIn("language.unexpected-latin:product", codes)
         self.assertIn("language.unexpected-latin:lead", codes)
+        self.assertIn("closing.duplicate-inline-link:Найм с AI-усилением", codes)
+
+    def test_empty_related_section_is_rejected(self) -> None:
+        fixture = (
+            Path(__file__).resolve().parent
+            / "fixtures"
+            / "empty-related-section.md"
+        )
+        violations = collect_violations(
+            fixture,
+            expect="source",
+            allow_latin_terms=["AI", "OKR"],
+            required_headings=[
+                "## Ключевые тезисы",
+                "## Практика",
+                "## Подводные камни и антипаттерны",
+            ],
+            enforce_leading_bold_under=[
+                "## Ключевые тезисы",
+                "## Практика",
+                "## Подводные камни и антипаттерны",
+            ],
+        )
+        codes = {violation.code for violation in violations}
+        self.assertIn("closing.empty-related-section", codes)
 
     def test_clean_note_passes_full_contract(self) -> None:
         fixture = Path(__file__).resolve().parent / "fixtures" / "clean-general-note.md"
         violations = collect_violations(
             fixture,
             expect="source",
-            min_related_links=5,
             forbidden_terms=["good enough", "builder-режим"],
             allow_latin_terms=[
                 "AI",
@@ -95,7 +117,7 @@ class CheckNoteContractTests(unittest.TestCase):
             ],
             required_related_links=[
                 "Найм с AI-усилением",
-                "Грейд определяется зоной ответственности",
+                "Оркестрация мультиагентных систем",
             ],
         )
         self.assertEqual([], violations)

@@ -31,7 +31,7 @@ Those remain judgment tasks for the skill itself and for human review.
 | Required wikilinks | `SKILL.md`, `vault-conventions.md` | `links.unlinked-phrase:*` | `after-first-pass-regression.md` | `clean-general-note.md` |
 | Required examples retained | `SKILL.md`, `vault-conventions.md` | `examples.missing:*` | `after-first-pass-regression.md` | `clean-general-note.md` |
 | Bold-leading scanability | `SKILL.md`, `vault-conventions.md` | `emphasis.missing-leading-bold:*` | `after-first-pass-regression.md` | `clean-general-note.md` |
-| Closing related-notes section | `SKILL.md`, `vault-conventions.md` | `closing.*` | `after-first-pass-regression.md` | `clean-general-note.md` |
+| Closing related-notes section | `SKILL.md`, `vault-conventions.md` | `closing.*` | `after-first-pass-regression.md`, `empty-related-section.md` | `clean-general-note.md` |
 
 ## Gaps To Keep In Mind
 
