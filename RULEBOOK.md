@@ -34,6 +34,8 @@ Rules:
 - when creating links between knowledge objects, prefer topical identity over lexical similarity; a shared author, podcast series, brand shell, or similar title is not enough to establish a durable relation on its own
 - when creating top-level knowledge objects, do not promote a narrow source-local decision filter or one-off heuristic into its own durable node unless it is likely to be reused across multiple future notes; if its best role is to sharpen one recommendation inside one source note, keep it there
 - when deciding whether to create a top-level knowledge object, prefer keeping material inside the source-derived note if it mainly restates that note's own thesis, reads like a detachable subsection, or would realistically have no meaningful backlinks beyond the current source and a couple of sibling nodes from the same run
+- when a workflow relies on structured metadata such as frontmatter, route payloads, manifests, or config blocks, validate that metadata after the final manual rewrite or merge instead of trusting an earlier draft; a finished-looking body does not make partial metadata acceptable
+- when a workflow produces structured documents with formatting and schema rules, run one final holistic compliance pass after any late manual edit or merge instead of validating only the one thing that was just changed; re-check the whole document contract in its final form because small late fixes often regress unrelated rules
 
 ## 1. Architecture Rules
 

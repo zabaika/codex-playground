@@ -53,6 +53,8 @@ python3 scripts/detect_source_route.py --source-file "[SOURCE_FILE]"
    - likely company, system, speaker context, or domain
    - whether a real operating model is present
    - concrete details worth preserving, such as team scope, owned systems, partner functions, named metrics, examples, AI rollout mechanics, build-vs-buy constraints, recommendations, and anti-patterns
+   - useful concrete examples, mini-cases, scenarios, before/after transitions, or worked illustrations from the source
+   - for each such example, whether it materially improves understanding of a claim, recommendation, anti-pattern, or metric and therefore should survive into the saved note
 5. Search the configured note roots before drafting any file:
    - `note_roots.article`
    - `note_roots.concept`
@@ -180,9 +182,12 @@ python3 scripts/detect_source_route.py --source-file "[SOURCE_FILE]"
 - Keep the sections semantically distinct instead of repeating the same points under new headings.
 - Every next block must add net-new knowledge instead of duplicating, inverting, or paraphrasing the previous blocks.
 - If two sections would carry the same material, keep the stronger section and delete the weaker one.
+- If the source includes concrete examples, scenarios, or mini-cases that materially clarify an idea, recommendation, anti-pattern, or metric, keep at least one such example attached to the relevant point instead of flattening the note into abstract statements only.
+- Do not drop a concrete example when removing it would make the point harder to understand, easier to misread, or less actionable.
+- Prefer embedding a compact example directly under the relevant thesis or recommendation instead of collecting examples in a detached dump section.
 - Use this split when several blocks are present:
   - the first paragraph explains the source and its main problem instead of using a separate `## Суть` heading
-  - `## Ключевые тезисы` captures the core ideas and claims, not action steps
+  - `## Ключевые тезисы` captures the core ideas and claims, not action steps, but may keep a compact source example when that example is the shortest path to understanding the claim
   - `## Практика` captures reusable action steps and attaches the relevant examples, scenarios, numbers, or illustrations directly to the recommendation they support
   - `## Инструменты и фреймворки` appears only when at least two named tools, methods, or frameworks are independently useful and the block adds clear new information beyond `## Практика`
   - `## Подводные камни и антипаттерны` appears only when the source discusses at least three distinct mistakes or false approaches with their own consequences, not just the inverse wording of `## Практика`
@@ -229,6 +234,18 @@ python3 scripts/detect_source_route.py --source-file "[SOURCE_FILE]"
 - Keep the markdown compact and ready to save without cleanup.
 - Keep enough concrete detail that a reader can recover how the operating model actually works without reopening the source.
 - Use selective bold emphasis for key mechanisms, labels, or constraints so dense notes stay scannable, but never bold an entire list item.
+- Run one final note-compliance pass before saving any touched note:
+  - treat this as a holistic re-check of the entire note, not as a narrow validator for only one recent edit
+  - if the note was manually rewritten, merged, structurally reorganized, or otherwise changed late in the run, re-run all relevant note rules after that late edit
+  - re-check frontmatter, title consistency, note type, tags, required closing section, wikilinks, language normalization, spacing, bold emphasis, and section-shape rules together
+  - do not assume that a late fix for one thing, such as links or frontmatter, preserved the rest of the note formatting
+  - do not mark a note complete until it passes this full-note compliance pass in its final saved form
+- Run a final frontmatter-validation pass before saving:
+  - treat frontmatter as required structured metadata, not as optional decoration
+  - for every source-derived note, verify that `title`, `source`, `type`, `tags`, and `date` are all present and match the final note state
+  - for every concept note, verify that `title`, `type: concept`, and `tags` are present
+  - if a note was manually rewritten, merged, or heavily restructured late in the run, re-validate frontmatter after that rewrite instead of trusting the earlier draft
+  - do not consider a note complete until its frontmatter passes this check
 - Apply the additive-structure rule to every note type:
   - each next section or bullet should add net-new knowledge
   - do not duplicate, invert, or paraphrase the previous section or bullet just to fill structure
@@ -249,6 +266,17 @@ python3 scripts/detect_source_route.py --source-file "[SOURCE_FILE]"
   - if the English term matters, explain it on first mention and then prefer the Russian form afterward
   - rewrite sentences that stack several untranslated English nouns and become hard to read in Russian
   - aggressively translate finance, labor-market, and business-operation nouns such as `output`, `white-collar`, `in-house`, `headcount`, `recurring revenue`, and similar phrases when a natural Russian equivalent exists
+- Run a final scannability-emphasis pass before saving:
+  - after the last manual rewrite, merge, or structural cleanup, re-check that the note still has enough bold emphasis to remain easy to scan
+  - restore bold on key mechanisms, labels, contrasts, or the leading clause of dense bullets when that emphasis was lost during rewriting
+  - in dense `general`, `lessons`, and `operating-model` notes, prefer bolded leading clauses for high-signal bullets instead of leaving long uniform text blocks
+  - do not bold entire list items, whole sentences, or random quoted words just to increase visual weight
+  - if a rewrite changed structure from bullets to paragraphs or vice versa, re-balance emphasis for the final structure rather than inheriting the old pattern mechanically
+- Run a final example-retention pass before saving:
+  - check whether the source contained concrete examples, scenarios, mini-cases, numbers, or worked transitions that materially clarified the main ideas
+  - verify that those examples were either preserved in the note or consciously dropped only because they were redundant, trivial, or pure source-local noise
+  - if removing an example made a recommendation, anti-pattern, or thesis more abstract, more vague, or harder to operationalize, restore a compact version of that example
+  - prefer one strong clarifying example per dense idea over several abstract bullets with no grounding
 - Run a final tag-normalization pass before saving:
   - keep all frontmatter tags strictly in English
   - avoid Cyrillic tags and mixed Russian-English tag variants

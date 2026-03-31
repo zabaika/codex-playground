@@ -81,6 +81,16 @@ tags:
 ---
 ```
 
+Frontmatter is part of the note schema, not optional decoration.
+
+- After any late manual rewrite, merge, or structural cleanup, run one full-note compliance check instead of validating only the field or section you just touched.
+- Re-check frontmatter, links, required closing section, spacing, emphasis, and section shape together on the final note.
+- Treat “I only changed one small thing” as a common source of regressions in the rest of the note.
+- Validate required frontmatter fields after the final body rewrite, not only after the first draft.
+- When a source-derived note is manually reworked, merged with an older note, or restructured late in the run, re-check that `title`, `source`, `type`, `tags`, and `date` still exist and still match the saved note.
+- When a concept note is manually reworked, re-check that `title`, `type: concept`, and `tags` are still present.
+- Do not save a note with partial frontmatter just because the body already looks finished.
+
 ## Tags
 
 - Generate tags only from the source or concept context.
@@ -116,6 +126,8 @@ tags:
 - Use only information supported by the source.
 - Keep the structure compact, but do not over-compress the content.
 - Preserve concrete mechanisms when the source states them explicitly, especially team scope, owned systems, partner teams, named metrics, prioritization logic, AI/platform details, and major constraints.
+- Preserve concrete examples, mini-cases, numbers, and before/after transitions when they materially improve understanding of the idea instead of merely decorating it.
+- If an example is the shortest path to making a recommendation, claim, or anti-pattern understandable, keep a compact version of that example in the note.
 - When the source came through a source-analysis reference, treat that extraction as a working scaffold only and rewrite the final note into a native Obsidian structure instead of preserving the extractor headings literally.
 - For every note type, make sections and bullets additive: do not repeat the same recommendation, example, claim, mechanism, or definition under multiple headings unless the source truly requires cross-reference.
 - Every next block or bullet must add new knowledge instead of duplicating, inverting, or paraphrasing the previous one.
@@ -132,11 +144,14 @@ tags:
 - Before creating a new concept file, run a canonical concept check against the existing vault and reuse the canonical note when the meaning already exists.
 - Do not let a nicer title, a translation, or a local wording variant justify a duplicate concept node when the durable idea is already present.
 - In `general` notes, fold examples and cases into the relevant recommendation inside `## Практика` instead of giving them a standalone section.
+- In `general` notes, do not strip useful examples out of `## Ключевые тезисы` or `## Практика` if that would leave only abstract restatements.
 - Add `## Инструменты и фреймворки` only when it contributes a clearly separate layer of knowledge beyond `## Практика`.
 - Add `## Подводные камни и антипаттерны` only when the source discusses distinct mistakes with their own consequences; do not use it for negative rewrites of recommendations.
 - Omit `## Что можно применить сразу` when it would only repeat the same actions from `## Практика`.
 - Use bold only for key terms, short labels, or the leading clause of a bullet.
 - Use enough bold emphasis that dense sections remain easy to scan, but do not bold entire list items.
+- After a late manual rewrite or merge, re-check bold emphasis explicitly; it often disappears when frontmatter, links, or structure are fixed in a second pass.
+- Treat lost emphasis as a formatting regression, not as an acceptable cleanup side effect.
 - Do not repeat `title` or `source` from frontmatter inside the body.
 - Do not rewrite several concrete observations into one abstract sentence if that would hide how the system actually operates.
 - For source-derived notes, prefer short sections with 2-4 bullets when the source provides multiple concrete points for the same topic.
