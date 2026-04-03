@@ -276,6 +276,8 @@ python3 -m unittest skills/article-to-obsidian-kb/tests/test_note_contract_regre
   - for every source-derived note, verify that `title`, `source`, `type`, `tags`, and `date` are all present and match the final note state
   - for every concept note, verify that `title`, `type: concept`, and `tags` are present
   - if a note was manually rewritten, merged, or heavily restructured late in the run, re-validate frontmatter after that rewrite instead of trusting the earlier draft
+  - if a new canonical source-derived note absorbs, renames, or replaces an older source-derived note, merge the older note's surviving provenance into the new frontmatter instead of dropping it
+  - preserve the absorbed note's `source` entries and any still-valid canonical tags in the new note's frontmatter unless they were clearly wrong noise
   - do not consider a note complete until its frontmatter passes this check
 - Apply the additive-structure rule to every note type:
   - each next section or bullet should add net-new knowledge

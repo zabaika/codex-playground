@@ -91,6 +91,8 @@ Frontmatter is part of the note schema, not optional decoration.
 - Do not stop after frontmatter, links, or language are repaired once; re-check the whole note again because late fixes often regress another already-fixed rule.
 - Validate required frontmatter fields after the final body rewrite, not only after the first draft.
 - When a source-derived note is manually reworked, merged with an older note, or restructured late in the run, re-check that `title`, `source`, `type`, `tags`, and `date` still exist and still match the saved note.
+- When a new canonical source-derived note absorbs, renames, or replaces an older source-derived note, carry forward the older note's surviving frontmatter provenance into the new one instead of resetting it from scratch.
+- Merge the absorbed note's `source` values into the new note's `source` list and keep any still-valid canonical tags from the absorbed note rather than silently dropping them.
 - When a concept note is manually reworked, re-check that `title`, `type: concept`, and `tags` are still present.
 - Do not save a note with partial frontmatter just because the body already looks finished.
 
