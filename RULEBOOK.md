@@ -189,6 +189,7 @@ For knowledge-base notes, keep section design additive rather than repetitive:
 - each next section should add net-new knowledge instead of duplicating, inverting, or paraphrasing the previous section
 - if two sections would carry the same material, keep the stronger section and remove the weaker one
 - examples and cases should usually live next to the recommendation, lesson, or claim they support instead of being copied into a second standalone section
+- after restoring examples or late-editing a structured note, explicitly re-check section boundaries; preserving a useful example is not a reason to repeat the same example or claim across multiple sections
 - optional sections should be omitted when they do not add a distinct layer of value
 - when creating concepts, taxonomy nodes, or other durable knowledge entities, run a canonical-entity check before creating anything new
 - if a nearby existing entity already captures the same meaning, update the canonical existing entity instead of creating a synonym or near-duplicate

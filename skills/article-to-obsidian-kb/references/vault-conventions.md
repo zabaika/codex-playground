@@ -148,6 +148,8 @@ Frontmatter is part of the note schema, not optional decoration.
 - Do not let a nicer title, a translation, or a local wording variant justify a duplicate concept node when the durable idea is already present.
 - In `general` notes, fold examples and cases into the relevant recommendation inside `## Практика` instead of giving them a standalone section.
 - In `general` notes, do not strip useful examples out of `## Ключевые тезисы` or `## Практика` if that would leave only abstract restatements.
+- In `general` notes, do not let `## Практика` restate the same source case that already sits in `## Ключевые тезисы`; if the case is needed in both places, keep the concrete example in the stronger section and rewrite the other bullet so it adds a new action or a different implication.
+- In `general` notes, after restoring examples, explicitly compare `## Ключевые тезисы` and `## Практика` for near-duplicate bullets or repeated mini-cases.
 - Add `## Инструменты и фреймворки` only when it contributes a clearly separate layer of knowledge beyond `## Практика`.
 - Add `## Подводные камни и антипаттерны` only when the source discusses distinct mistakes with their own consequences; do not use it for negative rewrites of recommendations.
 - Omit `## Что можно применить сразу` when it would only repeat the same actions from `## Практика`.

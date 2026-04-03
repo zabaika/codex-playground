@@ -281,6 +281,13 @@ python3 -m unittest skills/article-to-obsidian-kb/tests/test_note_contract_regre
   - each next section or bullet should add net-new knowledge
   - do not duplicate, invert, or paraphrase the previous section or bullet just to fill structure
   - if two sections or bullets overlap heavily, keep the stronger one and remove or merge the weaker one
+- Run a final section-distinctness pass for source-derived notes:
+  - compare `## Ключевые тезисы`, `## Практика`, and `## Подводные камни и антипаттерны` against each other after examples have already been restored
+  - keep `## Ключевые тезисы` for claims, patterns, and observations from the source
+  - keep `## Практика` for reusable user actions derived from those claims, not for restating the same example with an imperative verb
+  - keep `## Подводные камни и антипаттерны` for distinct failure modes, not as a negative rewrite of either `## Ключевые тезисы` or `## Практика`
+  - if the same source example appears in two sections, keep it only where it adds the most explanatory value and replace the weaker copy with a more general action, a different example, or nothing
+  - do not let the example-retention pass justify semantic duplication across sections
 - Run a final link-normalization pass before saving:
   - whenever the prose explicitly mentions another existing note, concept, or durable knowledge node, convert that mention into an Obsidian wikilink
   - reuse the exact canonical existing title in the wikilink
