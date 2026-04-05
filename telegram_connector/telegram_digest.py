@@ -77,6 +77,8 @@ DEFAULT_FINAL_DIGEST_TEMPLATE = """Тип шага: финальный дайд�
 {batch_summary_block}
 """
 
+OPENAI_DIGEST_RETRY_ATTEMPTS = 3
+
 
 @dataclass
 class DigestConfig:
@@ -423,6 +425,22 @@ def count_channel_messages(
     return int(row["message_count"] or 0)
 
 
+def resolve_display_channel_name(conn: Any, channel: str, preview_name: str = "") -> str:
+    normalized_preview_name = preview_name.strip()
+    if normalized_preview_name:
+        return normalized_preview_name
+    channel_row = history_client.resolve_channel_filter(conn, channel)
+    if channel_row is None:
+        return channel
+    title = history_client.optional_text(channel_row["title"])
+    if title:
+        return title
+    username = history_client.optional_text(channel_row["username"])
+    if username:
+        return f"@{username.lstrip('@')}"
+    return channel
+
+
 def render_sender_label(message: dict[str, Any]) -> str:
     display_name = (message.get("sender_display_name") or "").strip()
     username = (message.get("sender_username") or "").strip()
@@ -670,15 +688,37 @@ def run_openai_digest(
         },
         method="POST",
     )
-    started_at = time.perf_counter()
-    try:
-        with request.urlopen(req, timeout=120) as resp:
-            response = json.loads(resp.read().decode("utf-8"))
-    except error.HTTPError as exc:
-        raise SystemExit(f"OpenAI API HTTP {exc.code} while creating digest.") from exc
-    except error.URLError as exc:
-        raise SystemExit("OpenAI API request failed while creating digest.") from exc
-    latency_ms = int((time.perf_counter() - started_at) * 1000)
+    last_network_error: BaseException | None = None
+    response: dict[str, Any] | None = None
+    latency_ms = 0
+    for attempt in range(1, OPENAI_DIGEST_RETRY_ATTEMPTS + 1):
+        started_at = time.perf_counter()
+        try:
+            with request.urlopen(req, timeout=120) as resp:
+                response = json.loads(resp.read().decode("utf-8"))
+            latency_ms = int((time.perf_counter() - started_at) * 1000)
+            break
+        except error.HTTPError as exc:
+            raise SystemExit(f"OpenAI API HTTP {exc.code} while creating digest.") from exc
+        except (TimeoutError, error.URLError, OSError) as exc:
+            latency_ms = int((time.perf_counter() - started_at) * 1000)
+            error_text = str(exc).lower()
+            is_retryable = isinstance(exc, (TimeoutError, error.URLError)) or "timed out" in error_text or "connection reset" in error_text
+            if not is_retryable or attempt >= OPENAI_DIGEST_RETRY_ATTEMPTS:
+                last_network_error = exc
+                break
+            time.sleep(attempt)
+            last_network_error = exc
+    if response is None:
+        if isinstance(last_network_error, error.URLError):
+            raise SystemExit(
+                f"OpenAI API request failed while creating digest after {OPENAI_DIGEST_RETRY_ATTEMPTS} attempts."
+            ) from last_network_error
+        if isinstance(last_network_error, (TimeoutError, OSError)):
+            raise SystemExit(
+                f"OpenAI API request timed out while creating digest after {OPENAI_DIGEST_RETRY_ATTEMPTS} attempts."
+            ) from last_network_error
+        raise SystemExit("OpenAI API request failed while creating digest.")
     text = extract_response_text(response)
     if not text:
         raise SystemExit("OpenAI API returned an empty digest response.")
@@ -1093,12 +1133,13 @@ def cmd_run(args: argparse.Namespace) -> int:
                 since=since,
                 until=until,
             )
+            channel_name = resolve_display_channel_name(conn, channel, preview.channel_name)
             if not total_message_count:
                 send_digest_message(
                     token,
                     chat_id,
                     build_channel_digest_message(
-                        channel,
+                        channel_name,
                         since=since,
                         until=until,
                         message_count=0,
@@ -1108,7 +1149,6 @@ def cmd_run(args: argparse.Namespace) -> int:
                 )
                 sent_channel_messages += 1
                 continue
-            channel_name = preview.channel_name or channel
             if total_message_count < digest_config.min_messages_for_ai:
                 send_digest_message(
                     token,

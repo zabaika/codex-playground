@@ -19,10 +19,14 @@ def api_call(token: str, method: str, payload: dict[str, Any] | None = None) -> 
     try:
         with request.urlopen(req, timeout=65) as resp:
             response = json.loads(resp.read().decode("utf-8"))
+    except TimeoutError as exc:
+        raise SystemExit(f"Telegram API request timed out while calling {method}.") from exc
     except error.HTTPError as exc:
         raise SystemExit(f"Telegram API HTTP {exc.code} while calling {method}.") from exc
     except error.URLError as exc:
-        raise SystemExit(f"Telegram API request failed while calling {method}.") from exc
+        reason = getattr(exc, "reason", None)
+        details = f": {reason}" if reason else ""
+        raise SystemExit(f"Telegram API request failed while calling {method}{details}.") from exc
     if not response.get("ok"):
         description = response.get("description") or "request failed"
         raise SystemExit(f"Telegram API error while calling {method}: {description}")

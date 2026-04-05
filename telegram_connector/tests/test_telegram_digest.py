@@ -4,6 +4,7 @@ import sys
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib import error
 
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "telegram_digest.py"
@@ -139,7 +140,72 @@ class TelegramDigestTests(unittest.TestCase):
         finally:
             telegram_digest.bridge.send_text_chunks = original_send_chunks
 
-        self.assertEqual(sent, ["digest text"])
+    def test_run_openai_digest_retries_after_timeout(self) -> None:
+        attempts = {"count": 0}
+        original_urlopen = telegram_digest.request.urlopen
+        original_sleep = telegram_digest.time.sleep
+
+        class FakeResponse:
+            def __enter__(self) -> "FakeResponse":
+                return self
+
+            def __exit__(self, exc_type, exc, tb) -> None:
+                return None
+
+            def read(self) -> bytes:
+                return json_bytes
+
+        json_bytes = b'{"id":"resp_1","output":[{"type":"message","content":[{"type":"output_text","text":"summary"}]}],"usage":{"input_tokens":10,"output_tokens":5,"total_tokens":15}}'
+
+        def fake_urlopen(req, timeout=120):
+            attempts["count"] += 1
+            if attempts["count"] == 1:
+                raise TimeoutError("The read operation timed out")
+            return FakeResponse()
+
+        try:
+            telegram_digest.request.urlopen = fake_urlopen
+            telegram_digest.time.sleep = lambda seconds: None
+            result = telegram_digest.run_openai_digest(
+                "k",
+                "gpt-5.4-mini",
+                "system",
+                "prompt",
+                prompt_cache_key="digest:test",
+            )
+        finally:
+            telegram_digest.request.urlopen = original_urlopen
+            telegram_digest.time.sleep = original_sleep
+
+        self.assertEqual(attempts["count"], 2)
+        self.assertEqual(result.text, "summary")
+
+    def test_run_openai_digest_raises_after_exhausted_timeouts(self) -> None:
+        attempts = {"count": 0}
+        original_urlopen = telegram_digest.request.urlopen
+        original_sleep = telegram_digest.time.sleep
+
+        def fake_urlopen(req, timeout=120):
+            attempts["count"] += 1
+            raise error.URLError("timed out")
+
+        try:
+            telegram_digest.request.urlopen = fake_urlopen
+            telegram_digest.time.sleep = lambda seconds: None
+            with self.assertRaises(SystemExit) as ctx:
+                telegram_digest.run_openai_digest(
+                    "k",
+                    "gpt-5.4-mini",
+                    "system",
+                    "prompt",
+                    prompt_cache_key="digest:test",
+                )
+        finally:
+            telegram_digest.request.urlopen = original_urlopen
+            telegram_digest.time.sleep = original_sleep
+
+        self.assertEqual(attempts["count"], telegram_digest.OPENAI_DIGEST_RETRY_ATTEMPTS)
+        self.assertIn("after 3 attempts", str(ctx.exception))
 
     def test_build_channel_digest_message_appends_separator_text(self) -> None:
         message = telegram_digest.build_channel_digest_message(
@@ -156,6 +222,46 @@ class TelegramDigestTests(unittest.TestCase):
     def test_build_message_link_uses_private_channel_fallback(self) -> None:
         link = telegram_digest.build_message_link({"channel_id": 2428609899, "message_id": 8, "username": None})
         self.assertEqual(link, "https://t.me/c/2428609899/8")
+
+    def test_resolve_display_channel_name_uses_db_title_when_preview_is_empty(self) -> None:
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        conn.execute(
+            """
+            CREATE TABLE channels (
+                channel_id INTEGER PRIMARY KEY,
+                access_hash INTEGER,
+                username TEXT,
+                title TEXT NOT NULL,
+                channel_type TEXT NOT NULL,
+                raw_json TEXT NOT NULL,
+                first_seen_at TEXT NOT NULL,
+                last_seen_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO channels (
+                channel_id, access_hash, username, title, channel_type, raw_json, first_seen_at, last_seen_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                123,
+                None,
+                "safetraveltrip",
+                "Визы, выезд и вояжи в условиях санкций",
+                "Channel",
+                "{}",
+                "2026-04-05T00:00:00+00:00",
+                "2026-04-05T00:00:00+00:00",
+            ),
+        )
+
+        self.assertEqual(
+            telegram_digest.resolve_display_channel_name(conn, "@safetraveltrip", ""),
+            "Визы, выезд и вояжи в условиях санкций",
+        )
 
     def test_format_digest_summary_for_telegram_adds_blank_lines_but_keeps_popular_dense(self) -> None:
         summary = "\n".join(

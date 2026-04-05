@@ -6,6 +6,7 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "telegram_connector.py"
@@ -205,6 +206,41 @@ class TelegramConnectorTests(unittest.TestCase):
             telegram_connector.normalize_bridge_command_text("/update@verter_the_bot 10"),
             "/update 10",
         )
+
+    def test_cmd_listen_continues_after_retryable_timeout(self) -> None:
+        original_resolve_bridge_secrets = telegram_connector.resolve_bridge_secrets
+        original_require_bot_token_from_secrets = telegram_connector.require_bot_token_from_secrets
+        original_load_offset = telegram_connector.load_offset
+        original_fetch_updates = telegram_connector.fetch_updates
+        try:
+            telegram_connector.resolve_bridge_secrets = lambda config: {"TELEGRAM_BOT_TOKEN": "token"}
+            telegram_connector.require_bot_token_from_secrets = lambda secret_env: "token"
+            telegram_connector.load_offset = lambda: None
+            calls = {"count": 0}
+
+            def fake_fetch_updates(token: str, offset: int | None, timeout: int) -> list[dict[str, object]]:
+                calls["count"] += 1
+                if calls["count"] == 1:
+                    raise SystemExit("Telegram API request timed out while calling getUpdates.")
+                raise KeyboardInterrupt()
+
+            telegram_connector.fetch_updates = fake_fetch_updates
+            args = SimpleNamespace(from_scratch=False, timeout=30, once=False, echo=False, run_commands=False)
+
+            original_sleep = telegram_connector.time.sleep
+            telegram_connector.time.sleep = lambda seconds: None
+            try:
+                with self.assertRaises(KeyboardInterrupt):
+                    telegram_connector.cmd_listen(args)
+            finally:
+                telegram_connector.time.sleep = original_sleep
+        finally:
+            telegram_connector.resolve_bridge_secrets = original_resolve_bridge_secrets
+            telegram_connector.require_bot_token_from_secrets = original_require_bot_token_from_secrets
+            telegram_connector.load_offset = original_load_offset
+            telegram_connector.fetch_updates = original_fetch_updates
+
+        self.assertEqual(calls["count"], 2)
 
     def test_build_history_command_for_exportcsv_with_limit(self) -> None:
         command = telegram_connector.build_history_command("/exportcsv @vcnews 100")

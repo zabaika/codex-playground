@@ -6,6 +6,7 @@ import re
 import shlex
 import subprocess
 import sys
+import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -807,6 +808,15 @@ def print_update(update: dict[str, Any]) -> None:
     print(f"[{date}] chat_id={chat_id} from={username} event={command} text_length={len(text)}")
 
 
+def is_retryable_listen_error(exc: BaseException) -> bool:
+    if isinstance(exc, TimeoutError):
+        return True
+    message = str(exc).lower()
+    if isinstance(exc, SystemExit):
+        return "getupdates" in message and ("timed out" in message or "request failed" in message)
+    return "timed out" in message
+
+
 def cmd_listen(args: argparse.Namespace) -> int:
     config = load_runtime_config()
     secret_env = resolve_bridge_secrets(config)
@@ -815,7 +825,19 @@ def cmd_listen(args: argparse.Namespace) -> int:
     print("Listening for Telegram updates.")
 
     while True:
-        updates = fetch_updates(token, offset, args.timeout)
+        try:
+            updates = fetch_updates(token, offset, args.timeout)
+        except BaseException as exc:
+            if not is_retryable_listen_error(exc):
+                raise
+            print(
+                f"Telegram long poll timed out or failed transiently; continuing listen loop: {str(exc) or exc.__class__.__name__}",
+                file=sys.stderr,
+            )
+            if args.once:
+                return 1
+            time.sleep(2)
+            continue
         if not updates:
             if args.once:
                 return 0

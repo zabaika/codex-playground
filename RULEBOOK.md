@@ -449,6 +449,11 @@ Rules:
   - check the chosen interpreter or binary path
   - check that required dependencies are available in that runtime
   - check that config, secrets, and project-root resolution work from the deployed service bundle
+- for long-polling listeners, scheduled jobs, and external API integrations, treat transient network failures as an operational condition, not an automatic process-fatal error
+- if a timeout or short-lived transport error is safe to retry, prefer bounded retry with a small backoff for one-shot external calls
+- for interactive or scheduled external API calls, 2-3 retry attempts is a good default starting point for timeout and other short-lived transport failures
+- if a timeout happens inside a long-running listener loop, prefer logging and continuing the loop over exiting the whole daemon
+- reserve process-fatal exits for persistent misconfiguration, invalid credentials, schema problems, or non-retryable API failures
 - before considering a scheduler migration complete, perform at least one real trial run through the scheduler itself and confirm:
   - startup log exists
   - stdout/stderr are sane
