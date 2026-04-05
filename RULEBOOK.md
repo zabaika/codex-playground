@@ -43,6 +43,7 @@ Rules:
 - when a workflow also maintains a local contract checker or regression harness for those structured outputs, keep that harness focused on mechanically checkable constraints such as schema, formatting, links, and explicit preservation rules; do not pretend it can prove the full semantic quality of AI interpretation
 - when a new mechanically checkable output rule is added to such a workflow, update the checker or regression fixtures in the same change so the documented contract and the executable contract do not drift apart
 - when a workflow already has a local contract harness, any change to that workflow's output contract, checker, or contract-facing documentation should trigger the harness before the change is considered complete, even if the edit looks like "docs only"
+- when a workflow saves structured knowledge notes, the final prose should read as standalone knowledge rather than as commentary on source order, draft history, or merge mechanics; keep provenance in structured metadata and only mention the source in the body when it is itself a useful case or comparison
 
 ## 1. Architecture Rules
 

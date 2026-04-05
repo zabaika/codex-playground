@@ -275,6 +275,13 @@ python3 -m unittest skills/article-to-obsidian-kb/tests/test_note_contract_regre
   - use this second pass specifically to catch regressions introduced by the first compliance fixes themselves, such as restored links that break scanability, translated phrases that drop aliases, or frontmatter repairs that disturb section layout
   - the two passes should be identical in coverage; the second exists for reliability, not because it checks a narrower subset
   - do not mark a note complete until it survives both the note-compliance pass and the regression-sweep pass in its final saved form
+- Run one final source-to-prose de-meta pass immediately after the regression-sweep pass:
+  - make the saved note read as a standalone knowledge object rather than as a commentary on how it was assembled
+  - remove process-language from the prose, including phrases such as `в этом выпуске`, `во втором видео`, `исходная заметка`, `старый материал`, `новый выпуск`, `в этом разговоре`, or similar references to the assembly process
+  - keep provenance in frontmatter `source` and, when needed, in compact evidence-style sections; do not narrate provenance inside the main explanatory prose
+  - keep a source reference inside the body only when the source itself is a useful case, scenario, or comparison that materially clarifies the idea
+  - rewrite procedural provenance into final knowledge, recommendation, or example wording before saving
+  - do not mark a note complete until this de-meta pass is done on the final saved prose
 - Run a final frontmatter-validation pass before saving:
   - treat frontmatter as required structured metadata, not as optional decoration
   - for every source-derived note, verify that `title`, `source`, `type`, `tags`, and `date` are all present and match the final note state

@@ -163,6 +163,9 @@ Frontmatter is part of the note schema, not optional decoration.
 - After a late manual rewrite or merge, re-check bold emphasis explicitly; it often disappears when frontmatter, links, or structure are fixed in a second pass.
 - Treat lost emphasis as a formatting regression, not as an acceptable cleanup side effect.
 - Do not repeat `title` or `source` from frontmatter inside the body.
+- Make every saved note read as a standalone knowledge object, not as a diary of how it was produced.
+- Do not keep process-language in the prose such as `в этом выпуске`, `во втором видео`, `исходная заметка`, `старый материал`, or similar assembly comments when the sentence can be rewritten as direct knowledge.
+- Keep provenance in frontmatter and use source mentions in the body only when the source itself is a useful case, scenario, or comparison rather than a process footnote.
 - Do not rewrite several concrete observations into one abstract sentence if that would hide how the system actually operates.
 - For source-derived notes, prefer short sections with 2-4 bullets when the source provides multiple concrete points for the same topic.
 - Prefer Russian lesson headings and Russian section bullets unless the English wording is the canonical name of a framework, metric, tool, or code-level term.
