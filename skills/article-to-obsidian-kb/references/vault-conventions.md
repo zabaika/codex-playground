@@ -84,9 +84,12 @@ tags:
 Frontmatter is part of the note schema, not optional decoration.
 
 - After any late manual rewrite, merge, or structural cleanup, run one full-note compliance check instead of validating only the field or section you just touched.
+- If you updated an already existing note, run that compliance check against the final merged note as a whole, not only against the newly appended fragment.
+- Treat touched legacy notes as upgrade candidates: once a note is open for editing, old violations in untouched sections should be cleaned instead of being grandfathered in.
 - Re-check frontmatter, links, required closing section, spacing, emphasis, and section shape together on the final note.
 - Treat “I only changed one small thing” as a common source of regressions in the rest of the note.
 - After that first full-note compliance check, run one more full regression sweep with the same coverage again.
+- For pre-existing notes, that second sweep must still target the whole saved note, not the latest delta.
 - The second sweep is not a narrower validator; it repeats the same final note contract for reliability after the compliance fixes themselves.
 - Do not stop after frontmatter, links, or language are repaired once; re-check the whole note again because late fixes often regress another already-fixed rule.
 - Validate required frontmatter fields after the final body rewrite, not only after the first draft.

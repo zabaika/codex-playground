@@ -261,12 +261,16 @@ python3 -m unittest skills/article-to-obsidian-kb/tests/test_note_contract_regre
 - Run one final note-compliance pass before saving any touched note:
   - treat this as a holistic re-check of the entire note, not as a narrow validator for only one recent edit
   - if the note was manually rewritten, merged, structurally reorganized, or otherwise changed late in the run, re-run all relevant note rules after that late edit
+  - if you updated an already existing note, run this pass against the final merged note as a whole rather than only against the newly appended or rewritten fragment
+  - treat touched legacy notes as upgrade candidates: if the update reveals old violations in untouched sections, clean the whole note before considering the run complete
   - re-check frontmatter, title consistency, note type, tags, required closing section, wikilinks, language normalization, spacing, bold emphasis, and section-shape rules together
   - do not assume that a late fix for one thing, such as links or frontmatter, preserved the rest of the note formatting
   - do not mark a note complete until it passes this full-note compliance pass in its final saved form
 - Run one final regression-sweep pass immediately after the note-compliance pass:
   - treat this as a second large pass with the same coverage as the note-compliance pass, not as a smaller spot check
   - re-run the full final-note checklist again after all late edits, merges, link fixes, language cleanup, and formatting cleanup are done
+  - if the note already existed before the current run, apply this second pass to the whole saved note again, not only to the section that was just updated
+  - use touched old notes as an opportunity to bring pre-rule content up to the current contract instead of preserving stale violations outside the latest diff
   - verify the same contract again: frontmatter, title consistency, note type, tags, required closing section, wikilinks, language normalization, spacing, bold emphasis, section-shape rules, and preservation of concrete examples
   - use this second pass specifically to catch regressions introduced by the first compliance fixes themselves, such as restored links that break scanability, translated phrases that drop aliases, or frontmatter repairs that disturb section layout
   - the two passes should be identical in coverage; the second exists for reliability, not because it checks a narrower subset
