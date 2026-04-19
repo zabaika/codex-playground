@@ -633,6 +633,9 @@ Python requirements file:
 python3 -m pip install -r telegram_connector/requirements.txt
 ```
 
+The tracked requirements include both runtime dependencies and the local `pytest`
+test dependency used by the regression suite.
+
 ## Tests
 
 Run the local regression suite before each code change:
