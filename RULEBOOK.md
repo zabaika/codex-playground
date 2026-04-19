@@ -163,6 +163,7 @@ Implementation checklist for daemon code review:
 - standalone one-shot worker CLIs may resolve their own secrets, but that must remain separate from the long-running daemon path
 - if launchd runs from a copied service root, changes to code, shared modules, or `runtime.local.toml` must be applied with the install/redeploy script, not only with a restart script
 - a restart script may only reload the already installed plist and running copy; it should not be assumed to sync fresh code into the service root
+- if schedule-bearing launcher config changes, such as LaunchAgent timing or generated plist fields, rerun the install/redeploy path so launcher artifacts are regenerated; restart alone is not enough unless it explicitly rebuilds them
 
 Tradeoff guidance:
 

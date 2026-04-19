@@ -64,7 +64,9 @@ Operational guidance:
 ## Telegram Connector Notes
 
 - Canonical CLI sync entrypoint is `sync --mode <backfill|tail|update>`.
+- Canonical digest CLI entrypoint is `python3 telegram_connector/telegram_digest.py run`; keep `digest` config-driven and only override `channel`, `since`, `until`, or auth mode explicitly per run.
 - Bot aliases may expose a friendlier surface than the CLI; keep bot UX and CLI internals clearly separated.
+- `/agent-stats` is a bridge-local command for recent `ai_usage_log` usage and prompt-cache summaries; it does not invoke the history client.
 - `digest` is config-driven:
   - model and OCR defaults come from `[processing]`
   - schedule/window defaults come from `[digest]`
@@ -92,6 +94,8 @@ If behavior changes in bridge or digest startup flow, update:
 - README
 - installer scripts
 - tests
+
+If `digest.time` or other schedule-related config changes, rerun `telegram_connector/scripts/install_launch_agent.sh` so the LaunchAgent plist is regenerated; `restart_launch_agent.sh` is only a reload path.
 
 ## Editing Guidance
 
