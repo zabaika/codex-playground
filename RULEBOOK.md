@@ -204,6 +204,9 @@ For knowledge-base notes, keep section design additive rather than repetitive:
 - run this alias-link pass after final create-vs-update decisions so terms like abbreviations, English source labels, shortened metric names, or compact phrases still resolve to the canonical knowledge node
 - when a note already links to another knowledge object inline in the body, do not repeat the same link mechanically in a closing related-notes section; keep the closing block for net-new navigation context instead of duplicating already established graph edges
 - if the closing related-notes block becomes empty after deduplicating inline links, remove the block entirely instead of leaving an empty heading or padding it with weak filler links
+- when working in a knowledge vault, maintain one canonical navigation index as the default entry point for both humans and agents; prefer auto-updating indexes over manually rebuilt note lists whenever the platform supports them
+- when answering questions against a knowledge vault that has such an index, consult the canonical index first to scope the search and only then open the relevant notes directly for factual verification instead of relying on the index alone
+- when writing Obsidian `query` blocks that reference paths or file names containing spaces, wrap the full value in quotes instead of relying on shell-style escaping so expressions like `path:"Ideas/AI prompts"` and `-file:"Индекс заметок"` stay reliable
 
 Recommended env override:
 
