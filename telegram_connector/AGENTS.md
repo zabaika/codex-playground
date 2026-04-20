@@ -63,5 +63,6 @@ python3 -m pytest telegram_connector/tests -q
 Before finishing changes:
 
 - rerun the full `telegram_connector/tests` suite
+- if you change `telegram_shared/bot_api.py`, still rerun `telegram_connector/tests` because the shared Bot API transport regressions live there
 - update README when command behavior changes
 - update installer scripts when bridge startup flow changes

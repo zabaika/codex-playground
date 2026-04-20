@@ -648,6 +648,7 @@ Current tests cover:
 
 - Telegram bot command parsing
 - chat allowlist parsing
+- shared Bot API timeout and transport error messaging
 - response chunk splitting
 - CSV export logic
 - SQLite schema initialization
