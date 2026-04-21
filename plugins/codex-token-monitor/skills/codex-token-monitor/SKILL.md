@@ -1,0 +1,140 @@
+---
+name: codex-token-monitor
+description: Launch or inspect a local realtime token monitor for Codex rollout JSONL sessions. Use when the user wants active-session token totals, per-turn deltas, rate-limit status, or rollout-file discovery without patching Codex UI.
+---
+
+# Codex Token Monitor
+
+## Overview
+
+Use this skill when the user wants realtime visibility into Codex token usage without modifying Codex UI. The monitor is an external sidecar TUI that reads the canonical rollout JSONL files already written by Codex under `~/.codex/sessions/`.
+
+The workflow is:
+
+1. resolve the active rollout file, usually by matching the current project path to `session_meta.payload.cwd`
+2. read `session_meta` plus `event_msg.payload.type == "token_count"`
+3. display:
+   - active session file
+   - cumulative tokens
+   - per-update delta
+   - rate limits
+   - throughput and freshness
+
+## Source Of Truth
+
+- Treat the rollout JSONL as the only canonical telemetry source.
+- Do not create parallel token logs, cache files, or convenience summaries if the same facts are already present in the rollout stream.
+- Prefer `last_token_usage` for the delta block.
+- Use cumulative totals only for the totals block and throughput calculations.
+- If the first `token_count` event contains only `rate_limits` and no `info`, keep the rate-limit block visible and leave token fields blank until a later event arrives.
+
+## Run The Monitor
+
+From the repository checkout:
+
+```bash
+python3 plugins/codex-token-monitor/scripts/codex_token_monitor.py --cwd "$PWD"
+```
+
+Inside the Codex app, prefer the built-in integrated terminal for the current
+thread:
+
+1. open the terminal panel with `Cmd+J` or the terminal icon in the top-right
+2. run:
+
+```bash
+python3 plugins/codex-token-monitor/scripts/codex_token_monitor.py --cwd "$PWD"
+```
+
+Useful terminal shortcuts:
+
+- `Cmd+J`: toggle terminal
+- `Ctrl+L`: clear terminal
+- `Cmd+N`: open a separate thread if you want a dedicated thread-local terminal for the monitor
+
+For a single snapshot instead of live follow mode:
+
+```bash
+python3 plugins/codex-token-monitor/scripts/codex_token_monitor.py --cwd "$PWD" --once
+```
+
+To pin an exact rollout file:
+
+```bash
+python3 plugins/codex-token-monitor/scripts/codex_token_monitor.py --file "[ROLLOUT_JSONL]"
+```
+
+To force the expanded renderer:
+
+```bash
+python3 plugins/codex-token-monitor/scripts/codex_token_monitor.py --cwd "$PWD" --mode full
+```
+
+## Skill Behavior
+
+1. Resolve the skill directory from this `SKILL.md`.
+2. If the user asked to run the monitor, use the local script under `../../scripts/`.
+3. If the user asked only for architecture or troubleshooting, inspect:
+   - `~/.codex/sessions/**/rollout-*.jsonl`
+   - `~/.codex/session_index.jsonl` when it helps map thread names
+4. Prefer project-scoped rollout discovery by matching `session_meta.payload.cwd` to the current working directory.
+5. If there is no matching live rollout for the current project, report that clearly instead of guessing.
+
+## Output Contract
+
+The monitor has two output modes.
+
+### `brief` mode
+
+- Default mode for постоянного использования.
+- Keep width near 80 characters.
+- Show exactly these logical rows:
+  - `session`
+  - `delta`
+  - `limits`
+
+Field contract:
+
+- `session`: thread name only
+- `delta.in`: latest per-update input tokens
+- `delta.out`: latest per-update output tokens
+- `delta.total`: latest per-update total tokens
+- `limits.day`: primary limit remaining percent plus reset in minutes
+- `limits.week`: secondary limit remaining percent plus reset in minutes
+
+Omit in `brief`:
+
+- session id
+- rollout filename
+- cumulative tokens row
+- cached input
+- reasoning tokens
+- plan name
+- `time`
+
+### `full` mode
+
+- Inspection mode for debugging and detailed review.
+- Show these logical rows:
+  - `session`
+  - `tokens`
+  - `delta`
+  - `limits`
+  - `time`
+
+Field contract:
+
+- `session`: thread name, session id, rollout filename
+- `tokens`: input, cached input, output, reasoning, total
+- `delta`: input, cached input, output, reasoning, total
+- `limits.plan`: plan type
+- `limits.day`: primary limit used percent, remaining percent, wall-clock reset time, window minutes
+- `limits.week`: secondary limit used percent, remaining percent, wall-clock reset time, window minutes
+- `time.event`: age of the latest event
+- `time.file`: age of rollout file mtime
+- `time.events`: parsed event count
+- `time.tok_events`: retained token-count sample count
+- `time.tok/min`: rolling token throughput
+- `time.upd/min`: rolling update frequency
+
+Keep the display read-only. This skill is for observability, not for altering Codex state.

@@ -1,0 +1,20 @@
+{
+  "name": "codex-playground-local",
+  "interface": {
+    "displayName": "Codex Playground Local"
+  },
+  "plugins": [
+    {
+      "name": "codex-token-monitor",
+      "source": {
+        "source": "local",
+        "path": "./plugins/codex-token-monitor"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

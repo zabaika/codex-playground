@@ -1,0 +1,42 @@
+{
+  "name": "codex-token-monitor",
+  "version": "0.1.0",
+  "description": "Reusable realtime token monitor workflow for Codex rollout sessions.",
+  "author": {
+    "name": "Andrej Zabaev",
+    "email": "noreply@example.com",
+    "url": "https://github.com/zabaika"
+  },
+  "homepage": "https://github.com/zabaika/codex-playground/tree/master/plugins/codex-token-monitor",
+  "repository": "https://github.com/zabaika/codex-playground",
+  "license": "MIT",
+  "keywords": [
+    "codex",
+    "tokens",
+    "monitoring",
+    "tui",
+    "skills"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Codex Token Monitor",
+    "shortDescription": "Reusable rollout token monitor",
+    "longDescription": "Packages a reusable Codex skill and helper script for watching rollout token usage, deltas, rate limits, and freshness in realtime.",
+    "developerName": "Andrej Zabaev",
+    "category": "Productivity",
+    "capabilities": [
+      "Read",
+      "Interactive"
+    ],
+    "websiteURL": "https://github.com/zabaika/codex-playground/tree/master/plugins/codex-token-monitor",
+    "privacyPolicyURL": "https://github.com/zabaika/codex-playground",
+    "termsOfServiceURL": "https://github.com/zabaika/codex-playground",
+    "defaultPrompt": [
+      "Show how to run the Codex token monitor for this project",
+      "Inspect the current rollout file and token deltas",
+      "Troubleshoot missing token_count events"
+    ],
+    "brandColor": "#0F766E",
+    "screenshots": []
+  }
+}

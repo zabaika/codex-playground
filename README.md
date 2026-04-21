@@ -16,6 +16,9 @@ Workspace for local experiments, tools, and reusable operating conventions.
 - [skills](./skills/README.md)  
   Local Codex skill collection for workspace-specific workflows, including Obsidian knowledge-base generation from engineering articles.
 
+- [plugins](./plugins/README.md)  
+  Local Codex plugin sources that package reusable skills and, when needed, broader Codex integrations.
+
 ## Shared Docs
 
 - [RULEBOOK.md](./RULEBOOK.md)  

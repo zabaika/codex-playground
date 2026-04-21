@@ -1,0 +1,157 @@
+# codex-token-monitor
+
+`codex-token-monitor` is a local Codex plugin that packages one reusable skill and a helper script for watching rollout token usage in realtime.
+
+## Why plugin first
+
+According to the official Codex docs:
+
+- skills are the authoring format for reusable workflows
+- plugins are the installable distribution unit
+
+This plugin follows that model:
+
+- the workflow lives as a skill under `skills/codex-token-monitor/`
+- the implementation lives in `scripts/codex_token_monitor.py`
+- the plugin wrapper makes it installable through a marketplace
+
+## What it shows
+
+- active rollout file for the selected project
+- cumulative tokens: input, cached input, output, reasoning, total
+- latest delta from `last_token_usage`
+- rate-limit usage, remaining percentage, and reset time
+- file freshness and rough throughput
+
+## Run from the source checkout
+
+```bash
+python3 plugins/codex-token-monitor/scripts/codex_token_monitor.py --cwd "$PWD"
+```
+
+## Run inside the Codex app terminal
+
+Open the integrated terminal for the current thread with `Cmd+J` or the
+terminal icon in the top-right corner of the Codex app window, then run:
+
+```bash
+python3 plugins/codex-token-monitor/scripts/codex_token_monitor.py --cwd "$PWD"
+```
+
+Useful built-in terminal shortcuts:
+
+- `Cmd+J`: toggle the integrated terminal panel
+- `Ctrl+L`: clear the terminal
+- `Cmd+N`: open a new thread if you want a separate thread-local terminal just for the monitor
+
+This matches the official Codex app behavior for the integrated terminal and
+keyboard shortcuts.
+
+Print one snapshot:
+
+```bash
+python3 plugins/codex-token-monitor/scripts/codex_token_monitor.py --cwd "$PWD" --once
+```
+
+Show the detailed format:
+
+```bash
+python3 plugins/codex-token-monitor/scripts/codex_token_monitor.py --cwd "$PWD" --mode full
+```
+
+## Output formats
+
+The monitor has two render modes:
+
+- `brief`: default mode for constant on-screen use
+- `full`: expanded mode for inspection and troubleshooting
+
+### Brief mode
+
+Example:
+
+```text
+session Добавь realtime-статус токенов
+delta   in +210,755 | out +195 | total +210,950
+limits  day 91% left r 282m | week 86% left r 8016m
+```
+
+Field meanings:
+
+- `session`: current thread name only
+- `delta.in`: latest per-update `input_tokens`
+- `delta.out`: latest per-update `output_tokens`
+- `delta.total`: latest per-update `total_tokens`
+- `limits.day`: remaining percentage in the primary rate-limit window
+- `limits.week`: remaining percentage in the secondary rate-limit window
+- `left`: remaining percentage before that window is exhausted
+- `r`: time until reset in minutes
+
+Brief mode intentionally omits:
+
+- session id
+- rollout filename
+- cumulative tokens row
+- cached input
+- reasoning tokens
+- plan name
+- freshness and throughput lines
+
+### Full mode
+
+Example:
+
+```text
+session Добавь realtime-статус токенов | sid 019daacd-d004-77c1-8c43-880e765537ef | rollout-...
+tokens  in 6,689,927 | cache 5,613,056 | out 59,499 | rsn 15,995 | total 6,749,426
+delta   in +209,784 | cache +209,536 | out +322 | rsn +35 | total +210,106
+limits  plan plus | day 9.0% used 91.0% left reset 03:17:14 CEST (300m) | week 14.0% used 86.0% left reset 12:12:00 CEST (10080m)
+time    event <1s | file <1s | events 535 | tok_events 20 | 173282 tok/min | 1.1 upd/min
+```
+
+Field meanings:
+
+- `session`: current thread name
+- `sid`: Codex session id from `session_meta.payload.id`
+- `rollout-...jsonl`: active rollout filename
+- `tokens.in`: cumulative `input_tokens`
+- `tokens.cache`: cumulative `cached_input_tokens`
+- `tokens.out`: cumulative `output_tokens`
+- `tokens.rsn`: cumulative `reasoning_output_tokens`
+- `tokens.total`: cumulative `total_tokens`
+- `delta.*`: latest per-update values from `last_token_usage`
+- `plan`: plan type from `rate_limits.plan_type`
+- `day`: primary rate-limit window
+- `week`: secondary rate-limit window
+- `used`: used percent inside that limit window
+- `left`: remaining percent inside that limit window
+- `reset`: wall-clock reset time followed by the configured window size in minutes
+- `time.event`: age of the latest parsed event
+- `time.file`: age of the rollout file mtime
+- `events`: total parsed events in the rollout file
+- `tok_events`: parsed `token_count` events kept in memory
+- `tok/min`: throughput based on the rolling sample window
+- `upd/min`: update frequency based on the rolling sample window
+
+## Color thresholds
+
+Colors are enabled only in TTY mode.
+
+- rate limits: color is still based on used percent even when `brief` shows `left`; green `<60% used`, yellow `60-84.9% used`, red `>=85% used`
+- freshness lag: green `<5s`, yellow `5-29.9s`, red `>=30s`
+
+## Repo-local plugin wiring
+
+This repository includes `.agents/plugins/marketplace.json`, which points at:
+
+- `./plugins/codex-token-monitor`
+
+That follows the documented repo-marketplace layout for local plugins.
+
+## Install as a personal plugin
+
+```bash
+bash plugins/codex-token-monitor/scripts/install_local_plugin.sh
+```
+
+This copies the plugin into `~/.codex/plugins/codex-token-monitor`, updates `~/.agents/plugins/marketplace.json`, and leaves the workflow available across repositories after a Codex restart.
