@@ -47,6 +47,27 @@ Useful built-in terminal shortcuts:
 This matches the official Codex app behavior for the integrated terminal and
 keyboard shortcuts.
 
+## Run from the Codex action button
+
+This repository now includes a repo-local Codex local environment config at:
+
+- `.codex/environments/environment.toml`
+
+It defines one header action:
+
+- `Token monitor`
+
+In the Codex app this action appears under the `Run` button for this project
+and launches the monitor in the integrated terminal with:
+
+```bash
+python3 plugins/codex-token-monitor/scripts/codex_token_monitor.py --cwd "$PWD"
+```
+
+If the action is not visible yet, open the project again or open Codex
+Settings -> Local Environments for this workspace so the app reloads the
+project-local `.codex/environments/environment.toml`.
+
 Print one snapshot:
 
 ```bash

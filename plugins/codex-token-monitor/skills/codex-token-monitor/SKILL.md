@@ -52,6 +52,17 @@ Useful terminal shortcuts:
 - `Ctrl+L`: clear terminal
 - `Cmd+N`: open a separate thread if you want a dedicated thread-local terminal for the monitor
 
+This repository also defines a repo-local Codex local environment action in:
+
+- `.codex/environments/environment.toml`
+
+The action name is:
+
+- `Token monitor`
+
+Use it when the user wants one-click launch from the Codex app header `Run`
+button instead of typing the command manually in the terminal.
+
 For a single snapshot instead of live follow mode:
 
 ```bash
