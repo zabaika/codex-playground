@@ -416,6 +416,38 @@ class CodexTokenMonitorTests(unittest.TestCase):
         self.assertIn("(300m)", rendered)
         self.assertIn("(10080m)", rendered)
 
+    def test_build_snapshot_text_rolls_expired_rate_window_forward_in_brief(self) -> None:
+        sample = self._make_sample(
+            primary_used_percent=61.0,
+            primary_reset_at=1_776_686_435,
+            primary_window_minutes=300,
+            secondary_used_percent=14.0,
+            secondary_reset_at=1_776_700_835,
+            secondary_window_minutes=10080,
+        )
+        state = self._make_state(sample)
+
+        with mock.patch.object(MODULE.time, "time", return_value=1_776_686_435):
+            rendered = MODULE.build_snapshot_text(state, mode="brief")
+
+        self.assertIn("day 100% left r 300m", rendered)
+        self.assertIn("week 86% left r 240m", rendered)
+        self.assertNotIn("day 39% left r 0m", rendered)
+
+    def test_build_snapshot_text_rolls_expired_rate_window_forward_in_full(self) -> None:
+        sample = self._make_sample(
+            primary_used_percent=61.0,
+            primary_reset_at=1_776_686_435,
+            primary_window_minutes=300,
+        )
+        state = self._make_state(sample)
+
+        with mock.patch.object(MODULE.time, "time", return_value=1_776_686_435):
+            rendered = MODULE.build_snapshot_text(state, mode="full")
+
+        self.assertIn("day 0.0% used 100.0% left reset", rendered)
+        self.assertIn("(300m)", rendered)
+
     def test_build_snapshot_text_tty_uses_ansi_colors_for_thresholds(self) -> None:
         sample = self._make_sample(
             primary_used_percent=90.0,
@@ -428,7 +460,9 @@ class CodexTokenMonitorTests(unittest.TestCase):
         state = self._make_state(sample)
         state.last_event_at = MODULE.datetime.now(MODULE.timezone.utc) - timedelta(seconds=45)
 
-        with mock.patch.object(MODULE.sys.stdout, "isatty", return_value=True):
+        with mock.patch.object(MODULE.sys.stdout, "isatty", return_value=True), mock.patch.object(
+            MODULE.time, "time", return_value=1_776_685_835
+        ):
             rendered = MODULE.build_snapshot_text(state, mode="full")
 
         self.assertIn(MODULE.ANSI_CYAN, rendered)

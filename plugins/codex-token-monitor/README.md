@@ -161,6 +161,13 @@ Colors are enabled only in TTY mode.
 - rate limits: color is still based on used percent even when `brief` shows `left`; green `<60% used`, yellow `60-84.9% used`, red `>=85% used`
 - freshness lag: green `<5s`, yellow `5-29.9s`, red `>=30s`
 
+## Reset handling
+
+`rate_limits` are only refreshed when Codex emits a new `token_count` event.
+If a reset time has already passed but no newer `token_count` has arrived yet,
+the monitor now rolls that window forward to the next interval and clears the
+stale usage instead of rendering the old percentage with `r 0m`.
+
 ## Repo-local plugin wiring
 
 This repository includes `.agents/plugins/marketplace.json`, which points at:

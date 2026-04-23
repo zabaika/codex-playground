@@ -300,6 +300,42 @@ def _lag_color(seconds: float | None) -> str:
     return ANSI_GREEN
 
 
+def _effective_rate_window(window: RateWindow | None) -> RateWindow | None:
+    """Project expired windows forward instead of rendering stale usage at 0m.
+
+    `rate_limits` only refresh when Codex emits a new `token_count`. After a
+    reset passes, the last authoritative sample is stale. Carrying its old
+    `used_percent` forward produces misleading output such as `39% left r 0m`.
+    For expired windows, roll the reset forward by whole window intervals and
+    clear the stale usage until the next authoritative update arrives.
+    """
+
+    if window is None:
+        return None
+    if window.resets_at is None or not window.window_minutes:
+        return window
+
+    now_epoch = int(time.time())
+    if now_epoch < window.resets_at:
+        return window
+
+    step_seconds = window.window_minutes * 60
+    if step_seconds <= 0:
+        return RateWindow(
+            used_percent=0.0,
+            window_minutes=window.window_minutes,
+            resets_at=window.resets_at,
+        )
+
+    cycles = ((now_epoch - window.resets_at) // step_seconds) + 1
+    next_reset = window.resets_at + (cycles * step_seconds)
+    return RateWindow(
+        used_percent=0.0,
+        window_minutes=window.window_minutes,
+        resets_at=next_reset,
+    )
+
+
 def _render_rate_window(label: str, window: RateWindow | None, use_color: bool) -> str:
     if window is None:
         return f"{label} -"
@@ -346,6 +382,8 @@ def build_snapshot_text(state: MonitorState, mode: str = "brief") -> str:
     total = last_sample.total if last_sample else None
     delta = last_sample.delta if last_sample else None
     rate_limits = last_sample.rate_limits if last_sample else None
+    primary_window = _effective_rate_window(rate_limits.primary) if rate_limits else None
+    secondary_window = _effective_rate_window(rate_limits.secondary) if rate_limits else None
     file_mtime = _safe_stat_mtime(state.rollout_path)
     tokens_per_min, updates_per_min = compute_throughput(state.token_samples)
     use_color = sys.stdout.isatty()
@@ -392,8 +430,8 @@ def build_snapshot_text(state: MonitorState, mode: str = "brief") -> str:
                 "limits",
                 [
                     f"plan {rate_limits.plan_type if rate_limits and rate_limits.plan_type else '-'}",
-                    _render_rate_window("day", rate_limits.primary if rate_limits else None, use_color),
-                    _render_rate_window("week", rate_limits.secondary if rate_limits else None, use_color),
+                    _render_rate_window("day", primary_window, use_color),
+                    _render_rate_window("week", secondary_window, use_color),
                 ],
                 use_color=use_color,
                 width=140,
@@ -441,8 +479,8 @@ def build_snapshot_text(state: MonitorState, mode: str = "brief") -> str:
             _render_compact_line(
                 "limits",
                 [
-                    _render_rate_window_brief("day", rate_limits.primary if rate_limits else None, use_color),
-                    _render_rate_window_brief("week", rate_limits.secondary if rate_limits else None, use_color),
+                    _render_rate_window_brief("day", primary_window, use_color),
+                    _render_rate_window_brief("week", secondary_window, use_color),
                 ],
                 use_color=use_color,
                 width=80,

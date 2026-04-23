@@ -149,3 +149,9 @@ Field contract:
 - `time.upd/min`: rolling update frequency
 
 Keep the display read-only. This skill is for observability, not for altering Codex state.
+
+Rate-limit freshness rule:
+
+- `rate_limits` arrive only with `token_count`
+- if a window reset has already passed and no newer `token_count` exists yet, do not keep rendering the expired percentage with `r 0m`
+- instead, roll the reset forward to the next interval and clear stale usage until the next authoritative update arrives
