@@ -213,6 +213,12 @@ For knowledge-base notes, keep section design additive rather than repetitive:
 - examples and cases should usually live next to the recommendation, lesson, or claim they support instead of being copied into a second standalone section
 - after restoring examples or late-editing a structured note, explicitly re-check section boundaries; preserving a useful example is not a reason to repeat the same example or claim across multiple sections
 - optional sections should be omitted when they do not add a distinct layer of value
+- tags should describe a specific retrieval axis rather than a broad topic "in general"
+- when an existing narrower tag already fits, prefer it over a broader umbrella tag
+- if a broad tag keeps covering several different retrieval intents, treat it as a candidate for a constrained family or for restricted-use rules rather than continuing to apply it by default
+- when a workflow already has constrained tag families or restricted-use tags, reapply those family rules during the final save pass instead of letting late edits reintroduce umbrella tags
+- creating a new tag should be harder than reusing an existing one: admit a new tag only when no existing canonical tag or family member is close enough and the new tag is likely to be reused across multiple future notes
+- if one or two existing tags already describe the note accurately enough, prefer that combination over inventing a new tag
 - when creating concepts, taxonomy nodes, or other durable knowledge entities, run a canonical-entity check before creating anything new
 - if a nearby existing entity already captures the same meaning, update the canonical existing entity instead of creating a synonym or near-duplicate
 - title differences, translations, word-order variants, and small framing changes are not enough to justify a new knowledge node

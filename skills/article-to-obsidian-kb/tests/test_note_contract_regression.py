@@ -1,6 +1,7 @@
 import importlib.util
 from pathlib import Path
 import sys
+import tempfile
 import unittest
 
 
@@ -146,6 +147,56 @@ class CheckNoteContractTests(unittest.TestCase):
             allow_latin_terms=["Additional", "insights", "AI", "DX", "DevEx"],
         )
         self.assertEqual([], violations)
+
+    def test_management_tag_is_rejected(self) -> None:
+        content = """---
+title: Test concept
+type: concept
+tags:
+  - management
+---
+Тестовая заметка.
+## Additional insights
+- 2026-04-23: Наблюдение.
+# Связанные заметки
+[[Test link]]
+"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            fixture = Path(tmpdir) / "Test concept.md"
+            fixture.write_text(content, encoding="utf-8")
+            violations = collect_violations(
+                fixture,
+                expect="concept",
+                chronology_headings=["## Additional insights"],
+                allow_latin_terms=["Additional", "insights"],
+            )
+        codes = {violation.code for violation in violations}
+        self.assertIn("frontmatter.forbidden-tag:management", codes)
+
+    def test_ai_tag_is_rejected(self) -> None:
+        content = """---
+title: Test ai concept
+type: concept
+tags:
+  - ai
+---
+Тестовая заметка.
+## Additional insights
+- 2026-04-23: Наблюдение.
+# Связанные заметки
+[[Test link]]
+"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            fixture = Path(tmpdir) / "Test ai concept.md"
+            fixture.write_text(content, encoding="utf-8")
+            violations = collect_violations(
+                fixture,
+                expect="concept",
+                chronology_headings=["## Additional insights"],
+                allow_latin_terms=["Additional", "insights"],
+            )
+        codes = {violation.code for violation in violations}
+        self.assertIn("frontmatter.forbidden-tag:ai", codes)
 
 
 if __name__ == "__main__":

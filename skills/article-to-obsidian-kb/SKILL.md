@@ -69,9 +69,30 @@ python3 scripts/detect_source_route.py --source-file "[SOURCE_FILE]"
    - normalize every candidate tag into English before comparing or writing it
    - search the configured note roots for the same tags and for close semantic variants
    - reuse an existing English vault tag when the meaning is the same and the difference is only wording, hyphenation, singular/plural, abbreviation, Russian/English variant, or word order
+   - treat `career`, `job-search`, and `hiring` as a constrained tag family and choose the narrowest accurate member instead of using them as broad overlapping umbrellas
+   - default to only one of those three tags on a note
+   - allow `career + hiring` only when the note truly combines long-horizon role-value logic with employer-side hiring thresholds or market filters
+   - allow `hiring + job-search` only when the note truly bridges employer-side evaluation mechanics and candidate-side preparation for that same mechanism
+   - do not use `career + job-search`
+   - never assign all three together
+   - treat `ai`, `ai-adoption`, `ai-tools`, `ai-agents`, and `prompts` as a constrained AI tag family and choose the narrowest accurate subset instead of using broad umbrella tagging
+   - do not use `ai` at all; replace it with one or more narrower AI-family tags
+   - default to the narrowest single AI-family tag
+   - allow multiple narrower AI-family tags only when each one adds an independently useful retrieval angle
+   - prefer `ai-adoption` for AI rollout, workflow change, ROI, quality, metrics, labor-market effects, and role transformation
+   - prefer `ai-tools` for models, tool stacks, inference infrastructure, RAG, embeddings, model comparison, and tool-level usage patterns
+   - prefer `ai-agents` for agentic workflows, delegation, autonomous execution loops, and long-context agent operating patterns
+   - prefer `prompts` for prompt collections, prompt design, and prompt-pattern notes
+   - treat `workflow` as a restricted-use tag rather than a default process-related umbrella
+   - keep `workflow` only for notes whose main retrieval value is the sequence of work, handoff chain, operating flow, task progression, or end-to-end operational pipeline itself
+   - do not use `workflow` for notes that are really about `organization`, `project-management`, `process-improvement`, `decision-making`, `productivity`, `learning`, `prompts`, or broad `ai-adoption` unless the flow itself is the note's main object
+   - do not use `management` at all; replace it with narrower existing tags or with a stable narrower tag admitted through the new-tag gate
    - avoid introducing a new tag when a nearby existing concept note or source-derived note already uses the canonical form
    - treat creation of a brand-new tag as a last resort
-   - create a new tag only when you are fully confident that no existing vault tag matches the meaning closely enough and that the new tag is clearly necessary for future retrieval
+   - before creating a new tag, compare the candidate against the nearest 3-5 existing vault tags or constrained-family members and explicitly try to reuse one of them first
+   - create a new tag only when you are fully confident that no existing vault tag or constrained-family member matches the meaning closely enough and that the new tag is clearly necessary for future retrieval
+   - a new tag must represent a durable retrieval axis likely to be reused across multiple future notes, not just a nicer wording for one current note
+   - if a note can be tagged accurately enough by one or two existing canonical tags, prefer that over inventing a new one
    - if you are not fully confident, choose the closest existing canonical vault tag instead of inventing a new one
 9. Re-check final titles, tags, links, and duplicate risk before saving.
 10. When you add or tighten a mechanically checkable note-contract rule in this skill, update the local contract harness in the same change.
@@ -358,6 +379,12 @@ python3 -m unittest skills/article-to-obsidian-kb/tests/test_note_contract_regre
   - deduplicate draft tags against the existing vault
   - prefer the exact canonical English tag already used in overlapping notes
   - collapse near-duplicates before writing frontmatter
+  - re-apply the constrained-family rules for `career` / `job-search` / `hiring`
+  - re-apply the constrained-family rules for `ai` / `ai-adoption` / `ai-tools` / `ai-agents` / `prompts`
+  - re-check that `workflow` is still justified as a flow-oriented retrieval tag and was not left behind as a broad process umbrella
+  - verify that `ai` does not appear in the final frontmatter
+  - verify that `management` does not appear in the final frontmatter
+  - verify that the final frontmatter still uses the narrowest accurate tag subset and did not regress to a broader umbrella tag during late edits
 - Run a final output-synthesis pass before replying:
   - build an explicit touched-file ledger from the actual side effects of the run, not from memory
   - keep separate buckets for newly created source-derived notes, newly created concept notes, updated source-derived notes, and updated concept notes

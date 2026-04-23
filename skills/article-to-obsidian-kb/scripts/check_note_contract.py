@@ -198,6 +198,22 @@ def _check_tag_rules(frontmatter: dict[str, object], expect: str) -> list[Violat
                     1,
                 )
             )
+        if tag == "management":
+            violations.append(
+                Violation(
+                    "frontmatter.forbidden-tag:management",
+                    "Тег `management` запрещен; используйте более узкий существующий тег или заранее согласованный новый tag family member.",
+                    1,
+                )
+            )
+        if tag == "ai":
+            violations.append(
+                Violation(
+                    "frontmatter.forbidden-tag:ai",
+                    "Тег `ai` запрещен; используйте более узкий AI-family tag вроде `ai-adoption`, `ai-tools`, `ai-agents` или `prompts`.",
+                    1,
+                )
+            )
     return violations
 
 

@@ -2,7 +2,7 @@
 title: Когнитивный долг
 type: concept
 tags:
-  - ai
+  - ai-adoption
   - developer-experience
   - workflow
 ---
