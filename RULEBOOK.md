@@ -1,16 +1,16 @@
-# Telegram Integration Rulebook
+# Rulebook
 
-This rulebook captures the operational and security conventions used in this project so they can be reused when building other Telegram-based tools.
+This rulebook captures the operational and security conventions used in this project so they can be reused when building other tools.
 
 ## Purpose
 
-Use this document as a default template for local Telegram automations, bots, bridge daemons, and history-ingestion tools.
+Use this document as a default template for local software, automations, skills, bots, bridge daemons, schedulers, and ingestion tools.
 
 The goal is to standardize:
 
 - secure handling of secrets
 - project-local runtime data and logs
-- safe bot command execution
+- safe command and operator-surface execution
 - reproducible local service setup
 - test expectations before changes ship
 
@@ -40,31 +40,40 @@ Rules:
 - when a workflow produces structured documents with formatting and schema rules, run one final holistic compliance pass after any late manual edit or merge instead of validating only the one thing that was just changed; re-check the whole document contract in its final form because small late fixes often regress unrelated rules
 - when those structured-document workflows are especially prone to late manual edits, formatting repairs, link cleanup, or language rewrites, add a second final regression sweep with the same coverage as the first compliance pass so the document survives two identical whole-note checks before it is considered done
 - when such a workflow updates an already existing structured document, apply both final whole-note passes to the fully merged saved artifact rather than only to the appended delta; touching a legacy document is an opportunity to bring the whole document up to the current contract instead of preserving stale violations outside the latest edit
+- when documenting a workflow rule, prefer concrete behavioral requirements over vague verbs such as `append`, `clean up`, `normalize`, `improve`, `update`, or `fix` when more than one exact operation is plausible
+- if a rule depends on position, ordering, insertion point, stop condition, or fallback behavior, spell that out explicitly instead of relying on implication or common sense
 - when a workflow also maintains a local contract checker or regression harness for those structured outputs, keep that harness focused on mechanically checkable constraints such as schema, formatting, links, and explicit preservation rules; do not pretend it can prove the full semantic quality of AI interpretation
 - when a new mechanically checkable output rule is added to such a workflow, update the checker or regression fixtures in the same change so the documented contract and the executable contract do not drift apart
 - when a workflow already has a local contract harness, any change to that workflow's output contract, checker, or contract-facing documentation should trigger the harness before the change is considered complete, even if the edit looks like "docs only"
 - when a workflow saves structured knowledge notes, the final prose should read as standalone knowledge rather than as commentary on source order, draft history, or merge mechanics; keep provenance in structured metadata and only mention the source in the body when it is itself a useful case or comparison
 
+The rulebook is intentionally broader than Telegram projects. When a rule names Telegram, bot commands, channels, Telethon, or Bot API specifics, treat that as a domain-specific specialization of the broader engineering rule rather than as the only supported scope.
+
 ## 1. Architecture Rules
 
 Use a split architecture instead of a single monolith:
 
-- `bot bridge`: receives Telegram commands and sends responses
-- `history/data client`: performs actual business operations
+- `interaction bridge`: receives operator input from chat, CLI, webhook, UI, or another thin interface layer and returns results
+- `worker/data client`: performs actual business operations
 - `runtime config`: local-only machine config
 - `project data`: SQLite, offsets, exports, media, logs
 - `service wrapper`: background daemon runner
 
 Recommended pattern:
 
-- keep Telegram Bot API logic in one script
-- keep Telethon or other heavy data logic in a separate script
-- let the bridge invoke the data client as a subprocess
-- keep command syntax stable between CLI and bot usage
+- keep transport- or surface-specific API logic in one script or module
+- keep heavy business, data, or history logic in a separate script or module
+- let the thin interface layer invoke the worker/data client through a stable contract
+- keep command syntax stable across the user-facing surfaces that intentionally expose the same action
 - separate data ingestion from downstream enrichment, AI analysis, export, or delivery whenever possible
 - treat persisted raw data as the system of record and run expensive analysis as a second stage over stored data
 - if multiple sources are processed in one run, keep source-level work units isolated so failures and summaries can be reported per source
 - when outputs are independently useful, prefer progressive delivery per source over waiting for one final all-or-nothing payload
+
+Telegram-specific example:
+
+- keep Telegram Bot API logic in one script
+- keep Telethon or other heavy Telegram data logic in a separate script
 
 ## 2. Config Rules
 
@@ -82,13 +91,18 @@ Local config:
 Rules:
 
 - command-line explicit values override config
-- if a command omits a channel, use configured defaults
-- if a command includes a channel or channel list, ignore config defaults
+- if an operator omits an input target, source, profile, or scope selector, use configured defaults
+- if an operator explicitly provides a target, source, profile, or scope selector, ignore conflicting config defaults for that run
 - for local Codex skills, keep exactly one editable `config/runtime.local.toml` in the repository skill folder
 - if the skill is also installed under `~/.codex/skills`, the installed copy should point to that same repo file instead of keeping a second divergent local config
 - if a skill is only an orchestration layer over other local skills, prefer pointing at the sibling skills' local configs instead of copying the same machine-specific values into another file
 
-Recommended default channels format:
+Telegram-specific example:
+
+- if a command omits a channel, use configured defaults
+- if a command includes a channel or channel list, ignore config defaults
+
+Telegram-specific default channels format:
 
 ```toml
 [channels]
@@ -130,7 +144,7 @@ Preferred resolution order:
 Rules:
 
 - never print secret values to stdout/stderr
-- never send secret values back to Telegram
+- never send secret values back to any operator-facing surface
 - never include secrets in tests
 - never include secrets in committed examples
 - if a secret was pasted into chat or logs, rotate it
@@ -151,8 +165,12 @@ Recommended daemon pattern:
 1. read config
 2. resolve secrets once
 3. keep them in an in-memory cache owned by the main daemon process
-4. reuse the cached bot token for Telegram polling and replies
+4. reuse cached secrets from the in-memory runtime bundle instead of re-resolving them on each handled action
 5. pass only the minimum secret subset to child workers through an allowlisted env
+
+Telegram-specific example:
+
+- reuse the cached bot token for Telegram polling and replies
 
 Implementation checklist for daemon code review:
 
@@ -199,6 +217,8 @@ For knowledge-base notes, keep section design additive rather than repetitive:
 - if a nearby existing entity already captures the same meaning, update the canonical existing entity instead of creating a synonym or near-duplicate
 - title differences, translations, word-order variants, and small framing changes are not enough to justify a new knowledge node
 - links, tags, and later references should point to the canonical existing entity rather than to a local duplicate name
+- when a knowledge workflow keeps dated log sections such as `Additional insights`, `Evidence`, or `Observed practices`, treat them as chronological append-only logs by default: older entries first, newer entries last
+- for such dated log sections, define the exact insertion point for new entries; `append` should mean after the last existing dated bullet and before the next heading or end-of-file unless latest-first ordering was explicitly requested
 - when one note explicitly mentions another existing note, concept, or durable knowledge node in the prose, write it as a wikilink instead of plain text
 - when the canonical target title is longer, broader, translated, or otherwise less natural than the wording that appears in the prose, keep the canonical target but link through an alias instead of leaving the shorter wording as plain text
 - run this alias-link pass after final create-vs-update decisions so terms like abbreviations, English source labels, shortened metric names, or compact phrases still resolve to the canonical knowledge node
@@ -210,7 +230,8 @@ For knowledge-base notes, keep section design additive rather than repetitive:
 
 Recommended env override:
 
-- `TELEGRAM_CONNECTOR_PROJECT_ROOT`
+- prefer a project-specific `*_PROJECT_ROOT` variable name
+- Telegram example: `TELEGRAM_CONNECTOR_PROJECT_ROOT`
 
 Use project-local directories:
 
@@ -221,6 +242,8 @@ Use project-local directories:
 - `data/launchd/`
 - `data/inbox.jsonl`
 - `data/offset.local.json`
+
+The concrete paths above are Telegram-oriented examples. Preserve the same principle for other projects: one project-local `data/` root with predictable subpaths for databases, exports, sessions, scheduler logs, and cached inputs.
 
 Git rule:
 
@@ -236,11 +259,13 @@ Recommended logs:
 - `data/launchd/bridge.stdout.log`
 - `data/launchd/bridge.stderr.log`
 
+The concrete filenames above are a Telegram service example. Reuse the same pattern for any local daemon, scheduler, skill, or automation: keep logs project-local, predictable, and separate from opaque launcher-owned directories.
+
 Rules:
 
 - logs must not contain secrets
 - logs must not contain absolute private file paths when avoidable
-- logs must not contain raw Telegram updates in full
+- logs must not contain raw external-provider updates or full sensitive request payloads
 - log command metadata, not full sensitive payloads
 - for local tools and skills, prefer one append-only log file per tool unless per-run log separation is operationally necessary
 - when a tool supports multiple execution engines or many available variants, log the chosen engine and selected result by default; emit the full variant list only on explicit request or in a dedicated diagnostic mode
@@ -255,6 +280,8 @@ For inbox/update storage:
 - keep `chat_id`, `command`, timestamps, and text length if needed
 - avoid storing full message text unless there is a deliberate product need
 
+These field names are a Telegram example. For other integrations, keep only the minimum operator, command, timestamp, and payload-size metadata needed for support and auditing.
+
 ## 6. Bot Command Rules
 
 The bot bridge should accept:
@@ -268,6 +295,8 @@ Rules:
 - only recognized commands should be normalized from bare text
 - regular non-command chat text must not trigger execution
 - only allow command execution from whitelisted chats
+
+This section is Telegram-specific. Apply the same intent to any other command surface: normalize only deliberately supported invocations, reject ambiguous free-form input, and restrict execution to explicitly authorized callers or contexts.
 
 Recommended commands:
 
@@ -305,6 +334,8 @@ Remember:
 - Bot API and bot-auth are not enough for full history access
 - full historical reads of Telegram channels usually require user auth
 
+This section is Telegram-specific. The general rule is to separate auth modes by capability and choose the least-privileged mode that can actually perform the requested operation.
+
 ## 8. Data Ingestion Rules
 
 For message sync:
@@ -333,6 +364,8 @@ Recommended database keys:
 - messages: `(channel_id, message_id)`
 - media assets: `(channel_id, message_id, ordinal)`
 - sync state: one row per channel
+
+The examples in this section are phrased for Telegram history sync, but the same rules apply to any ingestion pipeline: clear incremental modes, no duplicate persistence, explicit shared-vs-per-source budgets, and predictable source ordering.
 
 ## 9. Media and OCR Rules
 
@@ -368,6 +401,8 @@ AI processing guidance:
 - optimize batch sizes using measured token usage and latency from real runs, not only record counts
 - when batching large inputs, preserve quality by keeping the batch format and rubric stable while varying only the content payload
 
+This section also applies to any workflow that downloads attachments, extracts text, or runs AI enrichment over stored artifacts.
+
 ## 10. Export Rules
 
 For CSV exports:
@@ -389,22 +424,24 @@ Avoid exporting:
 - secrets
 - internal debug paths
 
+If the export target is not Telegram, preserve the same rule: generated artifacts should be delivered through the intended operator channel, not by leaking local machine paths.
+
 ## 11. Security Hardening Rules
 
-Never send raw subprocess `stdout/stderr` directly to Telegram.
+Never send raw subprocess `stdout/stderr` directly to an operator-facing surface such as Telegram, CLI passthrough, webhook response, or UI error panel.
 
 Rules:
 
-- build Telegram bot replies from a whitelist of safe fields
+- build user-facing replies from a whitelist of safe fields
 - redact file paths where possible
 - redact bot tokens and similar credentials in error output
 - sanitize OCR errors before storing or returning them
-- sanitize Telegram API errors before returning them to chat
-- when Telegram formatting matters, set `parse_mode` explicitly instead of relying on plain-text rendering
+- sanitize transport- or API-specific errors before returning them to an operator surface
+- when transport formatting matters, set the formatting mode explicitly instead of relying on plain-text rendering
 - prefer one formatting mode per program path, usually HTML or MarkdownV2, and use it consistently
-- escape or sanitize user- and model-generated text before wrapping it in Telegram formatting markup
-- do not rely on prompts alone for Telegram readability; apply post-processing when message structure must be stable
-- keep Telegram-specific presentation rules in post-processing code when possible, and keep prompts focused on semantic structure
+- escape or sanitize user- and model-generated text before wrapping it in transport-specific formatting markup
+- do not rely on prompts alone for transport readability; apply post-processing when message structure must be stable
+- keep transport-specific presentation rules in post-processing code when possible, and keep prompts focused on semantic structure
 - if a reply mixes generated prose and structured blocks, enforce spacing, headings, and list density in code rather than expecting the model to reproduce them exactly
 
 Database safety:
@@ -424,9 +461,13 @@ Explicit exception:
 - this is intentional because `""` means “the message has no text”, while `NULL` would suggest “text was not loaded or is unknown”
 - keeping `messages.text` non-null also simplifies exports, filtering, length checks, and downstream text-processing code
 
+Telegram-specific note:
+
+- the `messages.text = ""` exception is specific to Telegram ingestion semantics and should not be copied blindly into unrelated schemas
+
 Stored data minimization:
 
-- store minimized metadata instead of full raw Telegram payloads when possible
+- store minimized metadata instead of full raw provider payloads when possible
 - avoid storing full raw update bodies in logs
 - store only what is operationally needed
 
@@ -472,6 +513,8 @@ After code changes:
 - reinstall or redeploy the service bundle
 - then restart or bootstrap the daemon
 
+The macOS `launchd` bullets are platform-specific examples. The broader rule is to use a real system scheduler or service manager, keep deployed runtime verification explicit, and treat redeploy and restart as separate lifecycle steps when they are not the same operation.
+
 ## 13. Test Rules
 
 Before shipping changes, run automated tests.
@@ -487,6 +530,8 @@ Minimum expectations:
 - launchd installer/restart script tests
 - multi-channel behavior tests
 
+Use the subset that matches the project. For example, a local skill may not need CSV export tests, while a daemonless automation may not need service-manager tests; but every listed capability that does exist should have corresponding tests.
+
 Rules:
 
 - every new command nuance should have a parser test
@@ -498,10 +543,17 @@ Rules:
 README must explicitly document:
 
 - how to configure secrets
-- how to run the listener
-- that bot commands require the listener daemon
-- how to install and restart the daemon
+- how to run the main entrypoint or service
+- whether a listener, daemon, scheduler, or one-shot runner is required
+- how to install, redeploy, restart, or rerun the relevant runtime path
 - where logs live
+- the supported invocation forms on the exposed operator surface
+- the default target or source config format when the project has one
+- the differences between adjacent modes that could be confused by operators
+
+Telegram-specific additions:
+
+- that bot commands require the listener daemon
 - whether `/command`, `command`, and `/command@botname` are supported
 - the default channels config format
 - the difference between `media` and `ocr`
@@ -538,30 +590,42 @@ Before pushing:
 
 ## 16. Operational Checklist
 
-When creating a new Telegram-based program, verify:
+When creating a new local program, skill, automation, or service, verify:
 
 1. secrets are outside tracked files
 2. logs are sanitized
-3. bot replies are sanitized
+3. operator-facing replies or outputs are sanitized
 4. SQL is parameterized
 5. runtime data stays in project-local `data/`
-6. daemon install/restart scripts exist
+6. service-manager or rerun scripts exist when the runtime model needs them
 7. README explains real startup and runtime behavior
 8. tests cover parser, config, security, and export behavior
 9. explicit command args override config defaults
-10. daemon has been redeployed after code changes
+10. the real deployed or scheduled runtime path has been refreshed after code changes
+
+Telegram-specific additions:
+
+- bot replies are sanitized
+- daemon install/restart scripts exist
+- the daemon has been redeployed after code changes
 
 ## 17. Reuse Guidance
 
-If you bootstrap a new Telegram project from this one, copy these ideas first:
+If you bootstrap a new project, skill, or automation from this repository, copy these ideas first:
 
 - local `runtime.example.toml` + ignored `runtime.local.toml`
 - Keychain-backed secret resolution
 - project-root env override
+- sanitized operator-surface responses
+- redacted inbound-event logging
+- system-scheduler or service-manager install and restart scripts when the runtime model needs them
+- whole-`data/` gitignore rule
+- parser tests for every user-facing command nuance
+
+Telegram-specific examples:
+
 - sanitized bridge responses
 - redacted inbox logging
 - launchd installer and restart scripts
-- whole-`data/` gitignore rule
-- parser tests for every user-facing command nuance
 
 This rulebook is intended to be stricter than convenience defaults. If a future project needs to relax a rule, document why.

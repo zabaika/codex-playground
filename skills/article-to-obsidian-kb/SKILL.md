@@ -169,6 +169,7 @@ python3 -m unittest skills/article-to-obsidian-kb/tests/test_note_contract_regre
 - If two lesson bullets would mostly say the same thing, merge them into one stronger lesson.
 - Title the note with the substantive topic and context, not with the literal word `Lessons`.
 - Treat `type: lessons` in frontmatter as the place that encodes the note class, so the title should not repeat it unless the source itself uses `Lessons` as a canonical name.
+- Preserve surviving `source` provenance when converting, renaming, or restructuring any existing note into `lessons`; normalization is not a reason to drop old source links.
 
 ### Operating Model Note
 
@@ -187,6 +188,7 @@ python3 -m unittest skills/article-to-obsidian-kb/tests/test_note_contract_regre
   - `## Внедрение AI`
   - `## Покупать или строить`
 - If a standalone lessons note would mostly repeat the operating model, merge the lessons into the operating-model note and add `## Key lessons`.
+- Preserve surviving `source` provenance when converting, renaming, or restructuring any existing note into `operating-model`; do not reset frontmatter provenance during a structural rewrite.
 
 ### General Note
 
@@ -217,6 +219,7 @@ python3 -m unittest skills/article-to-obsidian-kb/tests/test_note_contract_regre
   - `## Подводные камни и антипаттерны` appears only when the source discusses at least three distinct mistakes or false approaches with their own consequences, not just the inverse wording of `## Практика`
   - `## Что можно применить сразу` captures a short prioritized starter subset and should be omitted if it would just restate `## Практика`
 - Title the note with the main topic and context, using the same inverted-pyramid rule as other source-derived notes.
+- Preserve surviving `source` provenance when converting, renaming, or restructuring any existing note into `general`; keep old source links even when the body and title are substantially rewritten.
 
 ### Concept Notes
 
@@ -242,6 +245,9 @@ python3 -m unittest skills/article-to-obsidian-kb/tests/test_note_contract_regre
 - When one concept note is expanded mainly to distinguish it from a nearby concept, update the neighboring concept note enough that the distinction is visible from both sides, even if the neighbor remains compact.
 - If a source only reinforces an existing concept, prefer updating the existing note instead of creating a near-duplicate concept note.
 - Do not let title generation hide a semantic duplicate. A cleaner title is still a duplicate if the underlying concept is the same.
+- `source` is allowed in concept-note frontmatter when it preserves useful provenance from the originating article, transcript, migrated legacy note, or a later reinforcing source.
+- When upgrading an older concept note into the current format, keep its surviving `source` field instead of stripping it only because `type: concept` does not require `source`.
+- More generally, when any legacy note is migrated into the current note schema, preserve surviving `source` provenance regardless of the final note type.
 
 ## Write Notes
 
@@ -249,6 +255,9 @@ python3 -m unittest skills/article-to-obsidian-kb/tests/test_note_contract_regre
 - Follow [references/vault-conventions.md](references/vault-conventions.md) for paths, frontmatter, title rules, tags, and markdown formatting.
 - Follow [references/language-normalization.md](references/language-normalization.md) for when to keep English terms and when to translate them into Russian.
 - Follow [references/update-patterns.md](references/update-patterns.md) for how to append dated updates to existing notes.
+- Treat verbs like `append`, `merge`, `normalize`, `clean up`, and `update` as insufficient on their own when the operation has more than one plausible interpretation.
+- When the intended behavior depends on exact position or ordering, define the insertion point and order explicitly and follow the stricter rule from the references instead of improvising.
+- When migrating a legacy note into the current schema, preserve surviving frontmatter provenance such as `source` across the rewrite regardless of whether the final note is source-derived or `concept`.
 - Use the chosen analysis reference only to extract signal from the source:
   - [references/source-analysis-engineering.md](references/source-analysis-engineering.md)
   - [references/source-analysis-general.md](references/source-analysis-general.md)
@@ -285,11 +294,18 @@ python3 -m unittest skills/article-to-obsidian-kb/tests/test_note_contract_regre
 - Run a final frontmatter-validation pass before saving:
   - treat frontmatter as required structured metadata, not as optional decoration
   - for every source-derived note, verify that `title`, `source`, `type`, `tags`, and `date` are all present and match the final note state
-  - for every concept note, verify that `title`, `type: concept`, and `tags` are present
+  - for every concept note, verify that `title`, `type: concept`, and `tags` are present, and preserve `source` when the touched note already has valid source provenance or the current run adds real source provenance worth keeping
   - if a note was manually rewritten, merged, or heavily restructured late in the run, re-validate frontmatter after that rewrite instead of trusting the earlier draft
   - if a new canonical source-derived note absorbs, renames, or replaces an older source-derived note, merge the older note's surviving provenance into the new frontmatter instead of dropping it
+  - if any legacy note, including a concept note, is migrated into the current schema, carry forward surviving `source` values instead of dropping them during normalization
   - preserve the absorbed note's `source` entries and any still-valid canonical tags in the new note's frontmatter unless they were clearly wrong noise
   - do not consider a note complete until its frontmatter passes this check
+- Run a final chronology-order pass before saving any updated note:
+  - treat `## Additional insights`, `## Evidence`, `## Observed practices`, and other dated log sections as chronological append-only logs by default
+  - keep dated bullets in ascending chronological order unless the user explicitly asked for latest-first ordering
+  - insert each new dated bullet after the last existing dated bullet in that section and before the next heading or end-of-file
+  - do not prepend a fresh dated entry to the top of an existing log section unless latest-first ordering was explicitly requested
+  - if a late backfill uses an older date than the current last entry, insert it by date rather than forcing it to the bottom mechanically
 - Apply the additive-structure rule to every note type:
   - each next section or bullet should add net-new knowledge
   - do not duplicate, invert, or paraphrase the previous section or bullet just to fill structure

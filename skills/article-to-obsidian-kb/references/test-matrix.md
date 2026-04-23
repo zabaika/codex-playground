@@ -32,6 +32,7 @@ Those remain judgment tasks for the skill itself and for human review.
 | Required examples retained | `SKILL.md`, `vault-conventions.md` | `examples.missing:*` | `after-first-pass-regression.md` | `clean-general-note.md` |
 | Bold-leading scanability | `SKILL.md`, `vault-conventions.md` | `emphasis.missing-leading-bold:*` | `after-first-pass-regression.md` | `clean-general-note.md` |
 | Closing related-notes section | `SKILL.md`, `vault-conventions.md` | `closing.*` | `after-first-pass-regression.md`, `empty-related-section.md` | `clean-general-note.md` |
+| Chronological dated log sections | `SKILL.md`, `update-patterns.md`, `vault-conventions.md` | `chronology.*` | `dated-log-prepend-regression.md` | `dated-log-clean.md` |
 
 ## Gaps To Keep In Mind
 

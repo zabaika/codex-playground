@@ -122,6 +122,31 @@ class CheckNoteContractTests(unittest.TestCase):
         )
         self.assertEqual([], violations)
 
+    def test_prepended_dated_log_entry_is_rejected(self) -> None:
+        fixture = (
+            Path(__file__).resolve().parent
+            / "fixtures"
+            / "dated-log-prepend-regression.md"
+        )
+        violations = collect_violations(
+            fixture,
+            expect="concept",
+            chronology_headings=["## Additional insights"],
+            allow_latin_terms=["Additional", "insights", "AI", "DX", "DevEx"],
+        )
+        codes = {violation.code for violation in violations}
+        self.assertIn("chronology.out-of-order:## Additional insights", codes)
+
+    def test_clean_dated_log_order_passes(self) -> None:
+        fixture = Path(__file__).resolve().parent / "fixtures" / "dated-log-clean.md"
+        violations = collect_violations(
+            fixture,
+            expect="concept",
+            chronology_headings=["## Additional insights"],
+            allow_latin_terms=["Additional", "insights", "AI", "DX", "DevEx"],
+        )
+        self.assertEqual([], violations)
+
 
 if __name__ == "__main__":
     unittest.main()

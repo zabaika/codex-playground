@@ -18,6 +18,7 @@ INLINE_CODE_RE = re.compile(r"`[^`]*`")
 LATIN_TOKEN_RE = re.compile(
     r"[A-Za-z]+(?:[/-][A-Za-z0-9]+)*|[A-Za-z]+(?:[/-][A-Za-z0-9]+)*-[А-Яа-яЁё]+|[А-Яа-яЁё]+-[A-Za-z]+(?:[/-][A-Za-z0-9]+)*"
 )
+DATED_BULLET_RE = re.compile(r"^-\s+(\d{4}-\d{2}-\d{2}):")
 
 
 @dataclass(frozen=True)
@@ -519,6 +520,41 @@ def _check_closing_section(
     return violations
 
 
+def _check_dated_log_order(
+    body: str,
+    chronology_headings: list[str],
+) -> list[Violation]:
+    violations: list[Violation] = []
+    headings = _extract_headings(body)
+    lines = body.splitlines()
+    targets = set(chronology_headings)
+    for idx, (line_no, heading, _level) in enumerate(headings):
+        if heading not in targets:
+            continue
+        end_line = headings[idx + 1][0] - 1 if idx + 1 < len(headings) else len(lines)
+        dated_entries: list[tuple[str, int]] = []
+        for current_line in range(line_no + 1, end_line + 1):
+            line = lines[current_line - 1]
+            match = DATED_BULLET_RE.match(line)
+            if match:
+                dated_entries.append((match.group(1), current_line))
+        if len(dated_entries) < 2:
+            continue
+        last_date = dated_entries[0][0]
+        for current_date, current_line in dated_entries[1:]:
+            if current_date < last_date:
+                violations.append(
+                    Violation(
+                        f"chronology.out-of-order:{heading}",
+                        f"Датированные bullet-ы под `{heading}` должны идти по возрастанию даты от старых к новым.",
+                        current_line,
+                    )
+                )
+                break
+            last_date = current_date
+    return violations
+
+
 def collect_violations(
     path: Path,
     *,
@@ -536,6 +572,7 @@ def collect_violations(
     require_related_section_final: bool = True,
     required_related_links: list[str] | None = None,
     check_title_matches_filename: bool = False,
+    chronology_headings: list[str] | None = None,
 ) -> list[Violation]:
     forbidden_terms = forbidden_terms or []
     required_linked_phrases = required_linked_phrases or []
@@ -545,6 +582,7 @@ def collect_violations(
     forbidden_headings = forbidden_headings or []
     enforce_leading_bold_under = enforce_leading_bold_under or []
     required_related_links = required_related_links or []
+    chronology_headings = chronology_headings or []
 
     text = path.read_text(encoding="utf-8")
     frontmatter_block, body, body_line_offset = _split_frontmatter(text)
@@ -584,6 +622,7 @@ def collect_violations(
             required_related_links,
         )
     )
+    body_violations.extend(_check_dated_log_order(body, chronology_headings))
     violations.extend(_offset_violations(body_violations, body_line_offset))
     return violations
 
@@ -602,6 +641,7 @@ def main() -> int:
     parser.add_argument("--enforce-leading-bold-under", action="append", default=[])
     parser.add_argument("--leading-bold-threshold", type=int, default=40)
     parser.add_argument("--require-related-link", action="append", default=[])
+    parser.add_argument("--chronology-heading", action="append", default=[])
     parser.add_argument("--skip-intro-check", action="store_true")
     parser.add_argument("--allow-related-section-not-final", action="store_true")
     parser.add_argument("--check-title-filename-match", action="store_true")
@@ -623,6 +663,7 @@ def main() -> int:
         require_related_section_final=not args.allow_related_section_not_final,
         required_related_links=args.require_related_link,
         check_title_matches_filename=args.check_title_filename_match,
+        chronology_headings=args.chronology_heading,
     )
     for violation in violations:
         if violation.line is None:

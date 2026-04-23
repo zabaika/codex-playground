@@ -11,16 +11,25 @@
 
 - Preserve the existing title unless it is clearly wrong or much less searchable than the new canonical title.
 - Preserve useful existing content.
+- Preserve surviving frontmatter provenance, especially `source`, when rewriting a note into the current format.
+- Do not drop a valid old `source` field just because the note type, title, or section structure changed during normalization.
 - Add new information without duplicating prior statements.
 - Do not replace specific existing detail with a shorter but more generic rewrite.
 - Append a dated entry that links the touched note to the new article and related concepts.
 - Use the current insertion date in `YYYY-MM-DD` format.
+- Treat dated update sections as chronological append-only logs by default.
+- Keep dated bullets in ascending chronological order: oldest entries first, newest entries last.
+- Insert a new dated bullet after the last existing dated bullet in that section, not at the top.
+- Do not silently reorder older entries during a normal update unless their current order is already broken.
+- If an older source is being backfilled later, insert its bullet by date instead of mechanically pushing it to the end.
+- When appending into `## Additional insights`, `## Evidence`, or `## Observed practices`, place the new bullet immediately before the next heading or the end of the note.
 
 ## Lessons Notes
 
 - Keep or improve the existing lesson wording only when the new article adds a clearer mechanism or trade-off.
 - If the note has no evidence section, add `## Evidence`.
 - Append one bullet per processed article.
+- Keep `## Evidence` chronological unless the user explicitly asked for latest-first ordering.
 
 Bullet format:
 
@@ -34,6 +43,7 @@ Bullet format:
 - Append only the new signal that the source adds, rather than rewriting the whole note into a different structure.
 - If the note has no evidence section, add `## Evidence`.
 - Append one bullet per processed source.
+- Keep `## Evidence` chronological unless the user explicitly asked for latest-first ordering.
 
 Bullet format:
 
@@ -48,6 +58,7 @@ Bullet format:
 - When a section contains several distinct observations, keep them as separate bullets instead of merging them into one summary line.
 - If the note has no practice log, add `## Observed practices`.
 - Append one bullet per processed article with the date and links.
+- Keep `## Observed practices` chronological unless the user explicitly asked for latest-first ordering.
 
 Bullet format:
 
@@ -58,8 +69,11 @@ Bullet format:
 ## Concept Notes
 
 - Do not rewrite the concept definition unless the existing definition is clearly incomplete or inaccurate.
+- `source` is allowed in concept-note frontmatter when it preserves useful provenance from the originating source or a migrated legacy note.
+- When updating or normalizing an older concept note, keep surviving `source` values instead of stripping them only because `type: concept` does not require `source`.
 - If the note has no insight log, add `## Additional insights`.
 - Append one dated bullet that references the source-derived note and nearby concepts.
+- Keep `## Additional insights` chronological unless the user explicitly asked for latest-first ordering.
 - Keep concept notes `compact` by default, but promote them to an `expanded` shape when the compact form would still leave the concept easy to confuse, too compressed, or too opaque.
 - Use `expanded` especially for contrastive concepts, abbreviation-based metric names, and concepts that need an explicit distinction from a neighboring note.
 - In an `expanded` concept note, add only the minimum clarifying section set needed to close the gap.

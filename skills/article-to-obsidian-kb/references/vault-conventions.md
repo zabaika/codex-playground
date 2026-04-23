@@ -75,6 +75,8 @@ date: <year>
 ```yaml
 ---
 title: <concept name>
+source:
+  - <url>
 type: concept
 tags:
   - <tag>
@@ -96,7 +98,10 @@ Frontmatter is part of the note schema, not optional decoration.
 - When a source-derived note is manually reworked, merged with an older note, or restructured late in the run, re-check that `title`, `source`, `type`, `tags`, and `date` still exist and still match the saved note.
 - When a new canonical source-derived note absorbs, renames, or replaces an older source-derived note, carry forward the older note's surviving frontmatter provenance into the new one instead of resetting it from scratch.
 - Merge the absorbed note's `source` values into the new note's `source` list and keep any still-valid canonical tags from the absorbed note rather than silently dropping them.
-- When a concept note is manually reworked, re-check that `title`, `type: concept`, and `tags` are still present.
+- In `concept` notes, `source` is allowed when the concept note preserves useful provenance from an originating article, transcript, migrated legacy note, or later reinforcing source.
+- When a concept note is manually reworked, re-check that `title`, `type: concept`, and `tags` are still present, and preserve `source` when the note already has it.
+- When migrating or restructuring any legacy note into the current format, preserve surviving `source` provenance regardless of note type; do not drop `source` just because the note became `concept`, `lessons`, `general`, or `operating-model`.
+- When a touched legacy note already contains a valid `source` field, carry it forward into the rewritten frontmatter instead of silently removing it during normalization.
 - Do not save a note with partial frontmatter just because the body already looks finished.
 
 ## Tags
@@ -133,6 +138,8 @@ Frontmatter is part of the note schema, not optional decoration.
 - On first mention, use the Russian form and add the English term in parentheses only when the English wording materially helps recognition or search.
 - Use only information supported by the source.
 - Keep the structure compact, but do not over-compress the content.
+- Prefer concrete behavioral requirements over vague words like `append`, `clean up`, `improve`, or `normalize` when the workflow depends on one exact operation.
+- When a rule can be interpreted in more than one plausible way, spell out the intended insertion point, ordering, and stopping condition instead of relying on implication.
 - Preserve concrete mechanisms when the source states them explicitly, especially team scope, owned systems, partner teams, named metrics, prioritization logic, AI/platform details, and major constraints.
 - Preserve concrete examples, mini-cases, numbers, and before/after transitions when they materially improve understanding of the idea instead of merely decorating it.
 - If an example is the shortest path to making a recommendation, claim, or anti-pattern understandable, keep a compact version of that example in the note.
@@ -155,6 +162,10 @@ Frontmatter is part of the note schema, not optional decoration.
 - In `general` notes, do not strip useful examples out of `## Ключевые тезисы` or `## Практика` if that would leave only abstract restatements.
 - In `general` notes, do not let `## Практика` restate the same source case that already sits in `## Ключевые тезисы`; if the case is needed in both places, keep the concrete example in the stronger section and rewrite the other bullet so it adds a new action or a different implication.
 - In `general` notes, after restoring examples, explicitly compare `## Ключевые тезисы` and `## Практика` for near-duplicate bullets or repeated mini-cases.
+- Treat dated log sections such as `## Additional insights`, `## Evidence`, and `## Observed practices` as chronological append-only logs by default.
+- Keep dated bullets in ascending chronological order unless the user explicitly asks for latest-first ordering.
+- Insert a new dated bullet after the last existing dated bullet in that section and before the next heading or end-of-file.
+- Do not prepend a new dated bullet to the top of a log section unless latest-first ordering was explicitly requested.
 - Add `## Инструменты и фреймворки` only when it contributes a clearly separate layer of knowledge beyond `## Практика`.
 - Add `## Подводные камни и антипаттерны` only when the source discusses distinct mistakes with their own consequences; do not use it for negative rewrites of recommendations.
 - Omit `## Что можно применить сразу` when it would only repeat the same actions from `## Практика`.
