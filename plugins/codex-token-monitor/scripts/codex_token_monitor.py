@@ -565,6 +565,34 @@ def read_session_cwd(path: Path) -> str | None:
     return None
 
 
+def read_session_name(codex_home: Path, session_id: str | None) -> str | None:
+    if not session_id:
+        return None
+    session_index = codex_home / "session_index.jsonl"
+    if not session_index.exists():
+        return None
+    latest_name: str | None = None
+    try:
+        with session_index.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(event, dict) or event.get("id") != session_id:
+                    continue
+                latest_name = _optional_str(event.get("thread_name")) or latest_name
+    except OSError:
+        return None
+    return latest_name
+
+
+def hydrate_thread_name(state: MonitorState, codex_home: Path) -> None:
+    if state.thread_name:
+        return
+    state.thread_name = read_session_name(codex_home, state.session_id)
+
+
 def _cwd_matches(session_cwd: str | None, selected_cwd: Path) -> bool:
     if not session_cwd:
         return False
@@ -630,6 +658,7 @@ def build_follower(args: argparse.Namespace) -> RolloutFollower | None:
         return None
     follower = RolloutFollower(target, history_limit=args.history_limit)
     follower.load_initial()
+    hydrate_thread_name(follower.state, args.codex_home)
     return follower
 
 
@@ -664,7 +693,9 @@ def run_follow(args: argparse.Namespace) -> int:
             if latest is not None and latest != follower.path:
                 follower = RolloutFollower(latest, history_limit=args.history_limit)
                 follower.load_initial()
+                hydrate_thread_name(follower.state, args.codex_home)
         follower.poll()
+        hydrate_thread_name(follower.state, args.codex_home)
         if sys.stdout.isatty():
             sys.stdout.write(ANSI_CLEAR)
         sys.stdout.write(build_snapshot_text(follower.state, mode=args.mode))

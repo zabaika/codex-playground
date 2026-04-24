@@ -364,6 +364,68 @@ class CodexTokenMonitorTests(unittest.TestCase):
 
             self.assertEqual(session_cwd, "/tmp/project")
 
+    def test_build_follower_falls_back_to_session_index_thread_name(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            codex_home = pathlib.Path(tmpdir)
+            sessions_root = codex_home / "sessions" / "2026" / "04" / "24"
+            sessions_root.mkdir(parents=True)
+            rollout = sessions_root / "rollout-2026-04-24T09-32-20-session-1.jsonl"
+            rollout.write_text(
+                "\n".join(
+                    [
+                        json.dumps(
+                            {
+                                "timestamp": "2026-04-24T09:32:20.330Z",
+                                "type": "session_meta",
+                                "payload": {"id": "session-1", "cwd": "/tmp/project"},
+                            }
+                        ),
+                        json.dumps(
+                            {
+                                "timestamp": "2026-04-24T09:32:20.637Z",
+                                "type": "event_msg",
+                                "payload": {
+                                    "type": "token_count",
+                                    "info": {
+                                        "total_token_usage": {"total_tokens": 123},
+                                        "last_token_usage": {"total_tokens": 23},
+                                    },
+                                },
+                            }
+                        ),
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            (codex_home / "session_index.jsonl").write_text(
+                json.dumps(
+                    {
+                        "id": "session-1",
+                        "thread_name": "Fallback thread",
+                        "updated_at": "2026-04-24T09:32:21.000Z",
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            args = MODULE.parse_args(
+                [
+                    "--codex-home",
+                    str(codex_home),
+                    "--cwd",
+                    "/tmp/project",
+                    "--once",
+                ]
+            )
+
+            follower = MODULE.build_follower(args)
+
+            self.assertIsNotNone(follower)
+            assert follower is not None
+            self.assertEqual(follower.state.thread_name, "Fallback thread")
+
     def test_build_snapshot_text_brief_contains_expected_blocks(self) -> None:
         sample = self._make_sample(
             primary_used_percent=48.0,
