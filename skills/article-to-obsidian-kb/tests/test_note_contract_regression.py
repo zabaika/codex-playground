@@ -198,6 +198,34 @@ tags:
         codes = {violation.code for violation in violations}
         self.assertIn("frontmatter.forbidden-tag:ai", codes)
 
+    def test_more_than_three_tags_is_rejected(self) -> None:
+        content = """---
+title: Test tag count concept
+type: concept
+tags:
+  - metrics
+  - developer-productivity
+  - developer-experience
+  - business-impact
+---
+Тестовая заметка.
+## Additional insights
+- 2026-04-23: Наблюдение.
+# Связанные заметки
+[[Test link]]
+"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            fixture = Path(tmpdir) / "Test tag count concept.md"
+            fixture.write_text(content, encoding="utf-8")
+            violations = collect_violations(
+                fixture,
+                expect="concept",
+                chronology_headings=["## Additional insights"],
+                allow_latin_terms=["Additional", "insights"],
+            )
+        codes = {violation.code for violation in violations}
+        self.assertIn("frontmatter.invalid-tag-count", codes)
+
 
 if __name__ == "__main__":
     unittest.main()

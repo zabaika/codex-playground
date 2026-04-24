@@ -22,17 +22,17 @@ Those remain judgment tasks for the skill itself and for human review.
 
 | Rule family | Canonical docs | Checker coverage | Broken fixture | Clean fixture |
 | --- | --- | --- | --- | --- |
-| Frontmatter required fields | `SKILL.md`, `vault-conventions.md` | `frontmatter.missing-*`, `frontmatter.invalid-type` | `after-first-pass-regression.md` | `clean-general-note.md` |
-| Tag format and count | `SKILL.md`, `vault-conventions.md` | `frontmatter.invalid-tag*`, `frontmatter.invalid-tag-count` | add when needed | `clean-general-note.md` |
-| Required headings and forbidden headings | `SKILL.md`, `vault-conventions.md` | `structure.missing-heading:*`, `structure.forbidden-heading:*`, `structure.duplicate-heading:*` | `after-first-pass-regression.md` | `clean-general-note.md` |
-| Intro before first heading | `SKILL.md`, `vault-conventions.md` | `structure.missing-intro-before-first-heading` | add when needed | `clean-general-note.md` |
-| Spacing rules | `SKILL.md`, `vault-conventions.md` | `spacing.*` | `after-first-pass-regression.md` | `clean-general-note.md` |
-| Forbidden anglicisms and latin residue | `SKILL.md`, `language-normalization.md`, `vault-conventions.md` | `language.forbidden-term:*`, `language.unexpected-latin:*` | `after-first-pass-regression.md` | `clean-general-note.md` |
-| Required wikilinks | `SKILL.md`, `vault-conventions.md` | `links.unlinked-phrase:*` | `after-first-pass-regression.md` | `clean-general-note.md` |
-| Required examples retained | `SKILL.md`, `vault-conventions.md` | `examples.missing:*` | `after-first-pass-regression.md` | `clean-general-note.md` |
-| Bold-leading scanability | `SKILL.md`, `vault-conventions.md` | `emphasis.missing-leading-bold:*` | `after-first-pass-regression.md` | `clean-general-note.md` |
-| Closing related-notes section | `SKILL.md`, `vault-conventions.md` | `closing.*` | `after-first-pass-regression.md`, `empty-related-section.md` | `clean-general-note.md` |
-| Chronological dated log sections | `SKILL.md`, `update-patterns.md`, `vault-conventions.md` | `chronology.*` | `dated-log-prepend-regression.md` | `dated-log-clean.md` |
+| Frontmatter required fields | `vault-conventions.md` | `frontmatter.missing-*`, `frontmatter.invalid-type` | `after-first-pass-regression.md` | `clean-general-note.md` |
+| Tag format and count | `vault-conventions.md` | `frontmatter.invalid-tag*`, `frontmatter.invalid-tag-count` | add when needed | `clean-general-note.md` |
+| Required headings and forbidden headings | `vault-conventions.md` | `structure.missing-heading:*`, `structure.forbidden-heading:*`, `structure.duplicate-heading:*` | `after-first-pass-regression.md` | `clean-general-note.md` |
+| Intro before first heading | `vault-conventions.md` | `structure.missing-intro-before-first-heading` | add when needed | `clean-general-note.md` |
+| Spacing rules | `vault-conventions.md` | `spacing.*` | `after-first-pass-regression.md` | `clean-general-note.md` |
+| Forbidden anglicisms and latin residue | `language-normalization.md`, `vault-conventions.md` | `language.forbidden-term:*`, `language.unexpected-latin:*` | `after-first-pass-regression.md` | `clean-general-note.md` |
+| Required wikilinks | `vault-conventions.md` | `links.unlinked-phrase:*` | `after-first-pass-regression.md` | `clean-general-note.md` |
+| Required examples retained | `vault-conventions.md` | `examples.missing:*` | `after-first-pass-regression.md` | `clean-general-note.md` |
+| Bold-leading scanability | `vault-conventions.md` | `emphasis.missing-leading-bold:*` | `after-first-pass-regression.md` | `clean-general-note.md` |
+| Closing related-notes section | `vault-conventions.md` | `closing.*` | `after-first-pass-regression.md`, `empty-related-section.md` | `clean-general-note.md` |
+| Chronological dated log sections | `update-patterns.md`, `vault-conventions.md` | `chronology.*` | `dated-log-prepend-regression.md` | `dated-log-clean.md` |
 
 ## Gaps To Keep In Mind
 

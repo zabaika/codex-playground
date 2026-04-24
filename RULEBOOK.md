@@ -32,6 +32,9 @@ Rules:
 - if a wrapper or orchestration layer needs to expose upstream metadata, pass through or parse the canonical upstream artifact instead of reconstructing it with local placeholders or guessed values
 - for user-facing output contracts such as final summaries, created-vs-updated reports, or section ordering, keep one canonical definition in the deepest owning workflow and make wrappers inherit it instead of restating the same format in multiple places
 - apply the same inheritance rule to final validation layers: if a wrapper delegates note creation, document rendering, or another structured-output workflow to a deeper canonical owner, the wrapper must inherit that owner's final compliance passes and quality gates instead of silently shortening the validation path
+- when a workflow grows beyond a few pages of rules, split it into one thin entrypoint plus canonical reference docs; keep the entrypoint focused on sequencing and keep detailed policy in the deepest owning reference file
+- for each major rule family such as formatting, tag policy, update semantics, or test coverage, keep exactly one canonical documentation owner and make every other file point to it instead of restating the same contract in full
+- if an entrypoint file still repeats a rule family in short form, keep it as a brief guardrail summary only; the detailed wording, examples, and edge cases must still live in the canonical owner
 - when creating links between knowledge objects, prefer topical identity over lexical similarity; a shared author, podcast series, brand shell, or similar title is not enough to establish a durable relation on its own
 - when creating top-level knowledge objects, do not promote a narrow source-local decision filter or one-off heuristic into its own durable node unless it is likely to be reused across multiple future notes; if its best role is to sharpen one recommendation inside one source note, keep it there
 - when deciding whether to create a top-level knowledge object, prefer keeping material inside the source-derived note if it mainly restates that note's own thesis, reads like a detachable subsection, or would realistically have no meaningful backlinks beyond the current source and a couple of sibling nodes from the same run
@@ -216,9 +219,12 @@ For knowledge-base notes, keep section design additive rather than repetitive:
 - tags should describe a specific retrieval axis rather than a broad topic "in general"
 - when an existing narrower tag already fits, prefer it over a broader umbrella tag
 - if a broad tag keeps covering several different retrieval intents, treat it as a candidate for a constrained family or for restricted-use rules rather than continuing to apply it by default
+- if a tag starts collecting notes from several different retrieval intents, stop treating it as a harmless default: narrow its meaning, move it into a constrained family, or split off one stable narrower tag before the umbrella meaning spreads further
 - when a workflow already has constrained tag families or restricted-use tags, reapply those family rules during the final save pass instead of letting late edits reintroduce umbrella tags
 - creating a new tag should be harder than reusing an existing one: admit a new tag only when no existing canonical tag or family member is close enough and the new tag is likely to be reused across multiple future notes
 - if one or two existing tags already describe the note accurately enough, prefer that combination over inventing a new tag
+- keep note tags sparse: use `1-3` tags per note and never more than `3`
+- prefer `2-3` tags by default and allow a single tag only when the note truly has one dominant retrieval axis and any second tag would be filler
 - when creating concepts, taxonomy nodes, or other durable knowledge entities, run a canonical-entity check before creating anything new
 - if a nearby existing entity already captures the same meaning, update the canonical existing entity instead of creating a synonym or near-duplicate
 - title differences, translations, word-order variants, and small framing changes are not enough to justify a new knowledge node

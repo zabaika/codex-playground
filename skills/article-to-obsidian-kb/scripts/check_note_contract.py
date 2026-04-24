@@ -179,8 +179,8 @@ def _check_tag_rules(frontmatter: dict[str, object], expect: str) -> list[Violat
     tags = frontmatter.get("tags")
     if not isinstance(tags, list):
         return violations
-    min_tags = 4 if expect == "source" else 1
-    max_tags = 8
+    min_tags = 1
+    max_tags = 3
     if not (min_tags <= len(tags) <= max_tags):
         violations.append(
             Violation(

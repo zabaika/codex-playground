@@ -6,7 +6,6 @@ type: general
 tags:
   - strategy
   - workflow
-  - ai-adoption
   - product-management
 date: 2026
 ---

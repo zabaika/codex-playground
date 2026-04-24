@@ -7,7 +7,6 @@ type: general
 tags:
   - career
   - hiring
-  - ai-adoption
   - product-management
 date: 2026
 ---

@@ -1,5 +1,7 @@
 # Vault Conventions
 
+This file is the single source of truth for the final note contract used by `article-to-obsidian-kb`.
+
 ## Scope
 
 - These conventions apply to every saved note regardless of whether the source was processed through the engineering analysis path or the general analysis path.
@@ -138,22 +140,26 @@ Frontmatter is part of the note schema, not optional decoration.
 - Do not use `career + job-search`; if both seem plausible, choose the narrower dominant meaning instead of keeping both.
 - Never assign `career + hiring + job-search` to one note.
 - When one of these tags is proposed, compare the note against nearby vault notes already using the same family and keep the narrowest accurate tag set instead of inheriting a broad umbrella label.
-- Treat `ai`, `ai-adoption`, `ai-tools`, `ai-agents`, and `prompts` as a constrained AI tag family rather than as interchangeable labels.
+- Treat `ai`, `ai-adoption`, `ai-tools`, `ai-agents`, `ai-governance`, and `prompts` as a constrained AI tag family rather than as interchangeable labels.
 - Treat `ai` as an over-broad umbrella member of that family, not as a default frontmatter tag.
 - Do not use `ai` at all; replace it with one or more narrower AI-family tags.
 - Default to the narrowest single AI-family tag.
 - Allow multiple narrower AI-family tags only when each one adds an independently useful retrieval angle.
 - Prefer:
-  - `ai-adoption` for AI rollout, organizational use, workflow change, ROI, quality, metrics, labor-market effects, and role transformation
+  - `ai-adoption` only for organizational rollout, operating model, enablement, and transition of real work onto AI at team or company level
   - `ai-tools` for models, tooling, inference stacks, RAG, embeddings, model comparison, and tool-level usage patterns
   - `ai-agents` for agentic workflows, delegation, multi-step autonomous execution, and long-context agent operating patterns
+  - `ai-governance` for trust, provenance, verification, human-in-the-loop control, usage guardrails, and accountability around AI outputs or agent behavior
   - `prompts` for prompt collections, prompt design, prompt patterns, and prompt-centric how-to notes
 - If several of those AI tags seem plausible, choose the narrowest combination that still reflects independent retrieval value instead of falling back to `ai`.
-- Before saving any note with an AI-related tag, re-check whether `ai` can be removed entirely in favor of one or more existing narrower AI tags.
+- Before saving any note with an AI-related tag, re-check whether `ai` can be removed entirely in favor of one or more existing narrower AI tags and whether `ai-adoption` is still truly about rollout or operating-model change rather than a broader AI theme.
 - Treat `workflow` as a restricted-use tag rather than as a generic process umbrella.
 - Keep `workflow` only when the note is mainly about sequence of work, handoff chain, operating flow, task progression, or an end-to-end operational pipeline.
 - Do not use `workflow` for notes whose sharper retrieval axis is already captured by tags such as `organization`, `project-management`, `process-improvement`, `decision-making`, `productivity`, `learning`, `prompts`, or broad `ai-adoption`.
 - Do not use `management` at all; replace it with narrower existing tags or with a stable narrower tag admitted through the new-tag gate.
+- Treat any tag that starts collecting notes from several different retrieval intents as suspicious; narrow its meaning, convert it into a constrained family, or split off one stable narrower tag before it becomes a new umbrella default.
+- Keep note tags sparse: use `1-3` tags per note and never more than `3`.
+- Prefer `2-3` tags by default and allow a single tag only when the note truly has one dominant retrieval axis and any second tag would be filler.
 - Before creating a new tag, compare the candidate against the nearest 3-5 existing vault tags or constrained-family members and try to reuse those first.
 - Create a new tag only when no existing canonical tag or constrained-family member is close enough in meaning and the new tag represents a durable retrieval axis likely to be reused across multiple future notes.
 - If one or two existing tags describe the note accurately enough, prefer that combination over inventing a new tag.

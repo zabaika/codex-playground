@@ -1,5 +1,7 @@
 # Update Patterns
 
+This file is the single source of truth for how existing notes are updated, merged, appended, and kept chronological.
+
 ## Decide Update Vs Create
 
 - Update an existing note when the main mechanism, principle, or operating pattern matches semantically.

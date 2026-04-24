@@ -9,6 +9,19 @@ description: Analyze an article, transcript, or long-form source from a provided
 
 Turn a source article, transcript, or other long-form text into compact, Russian-language Obsidian notes in a user-configured vault. Store source-derived notes and concept notes in the local roots from the runtime config, while preferring updates over duplicates and keeping the knowledge graph connected with wikilinks. Treat `compact` as a formatting rule, not as permission to collapse concrete mechanisms into vague summaries.
 
+## File Responsibilities
+
+| File | Canonical responsibility |
+| --- | --- |
+| [SKILL.md](SKILL.md) | Workflow entrypoint: load config, choose route, search vault, decide `update vs create`, apply canonical contracts, run final passes, and format the final user-facing report. |
+| [references/vault-conventions.md](references/vault-conventions.md) | Single source of truth for final note contract: frontmatter, titles, tags, language, links, spacing, closing section, and final note-shape rules. |
+| [references/update-patterns.md](references/update-patterns.md) | Single source of truth for update behavior: `update vs create`, merge rules, chronology, dated logs, and provenance preservation during rewrites. |
+| [references/source-analysis-engineering.md](references/source-analysis-engineering.md) | Extraction contract for engineering-heavy sources. |
+| [references/source-analysis-general.md](references/source-analysis-general.md) | Extraction contract for general sources. |
+| [references/test-matrix.md](references/test-matrix.md) | Documentation for what the harness is expected to catch mechanically and which rule families must stay test-covered. |
+| [scripts/check_note_contract.py](scripts/check_note_contract.py) | Executable checker for mechanically verifiable note rules. |
+| [tests/test_note_contract_regression.py](tests/test_note_contract_regression.py) | Regression coverage for the executable contract. |
+
 ## Local Runtime Config
 
 1. Load [references/local-config.md](references/local-config.md) before touching the vault.
@@ -62,39 +75,15 @@ python3 scripts/detect_source_route.py --source-file "[SOURCE_FILE]"
 7. Draft or update only the necessary notes.
    - Treat the analysis reference as an internal extraction step, not as the final Obsidian format.
    - Map the extracted signal into vault note types instead of copying the analysis headings verbatim.
-   - Keep one shared set of vault rules for every source regardless of the chosen route: search the vault first, deduplicate tags against existing notes, apply the same title rules, apply the same language-normalization rules, remove unnecessary anglicisms, and reuse or update existing notes when the meaning already exists.
+   - Apply the canonical final-note contract from [references/vault-conventions.md](references/vault-conventions.md) instead of restating those rules locally.
+   - Apply the canonical update contract from [references/update-patterns.md](references/update-patterns.md) whenever an existing note is touched.
    - If you need intermediate files, previews, or staged markdown, store them only under the resolved scratch root and never under repo-local `tmp/`.
-8. Run tag deduplication against the vault before saving:
-   - collect the draft note's candidate tags
-   - normalize every candidate tag into English before comparing or writing it
-   - search the configured note roots for the same tags and for close semantic variants
-   - reuse an existing English vault tag when the meaning is the same and the difference is only wording, hyphenation, singular/plural, abbreviation, Russian/English variant, or word order
-   - treat `career`, `job-search`, and `hiring` as a constrained tag family and choose the narrowest accurate member instead of using them as broad overlapping umbrellas
-   - default to only one of those three tags on a note
-   - allow `career + hiring` only when the note truly combines long-horizon role-value logic with employer-side hiring thresholds or market filters
-   - allow `hiring + job-search` only when the note truly bridges employer-side evaluation mechanics and candidate-side preparation for that same mechanism
-   - do not use `career + job-search`
-   - never assign all three together
-   - treat `ai`, `ai-adoption`, `ai-tools`, `ai-agents`, and `prompts` as a constrained AI tag family and choose the narrowest accurate subset instead of using broad umbrella tagging
-   - do not use `ai` at all; replace it with one or more narrower AI-family tags
-   - default to the narrowest single AI-family tag
-   - allow multiple narrower AI-family tags only when each one adds an independently useful retrieval angle
-   - prefer `ai-adoption` for AI rollout, workflow change, ROI, quality, metrics, labor-market effects, and role transformation
-   - prefer `ai-tools` for models, tool stacks, inference infrastructure, RAG, embeddings, model comparison, and tool-level usage patterns
-   - prefer `ai-agents` for agentic workflows, delegation, autonomous execution loops, and long-context agent operating patterns
-   - prefer `prompts` for prompt collections, prompt design, and prompt-pattern notes
-   - treat `workflow` as a restricted-use tag rather than a default process-related umbrella
-   - keep `workflow` only for notes whose main retrieval value is the sequence of work, handoff chain, operating flow, task progression, or end-to-end operational pipeline itself
-   - do not use `workflow` for notes that are really about `organization`, `project-management`, `process-improvement`, `decision-making`, `productivity`, `learning`, `prompts`, or broad `ai-adoption` unless the flow itself is the note's main object
-   - do not use `management` at all; replace it with narrower existing tags or with a stable narrower tag admitted through the new-tag gate
-   - avoid introducing a new tag when a nearby existing concept note or source-derived note already uses the canonical form
-   - treat creation of a brand-new tag as a last resort
-   - before creating a new tag, compare the candidate against the nearest 3-5 existing vault tags or constrained-family members and explicitly try to reuse one of them first
-   - create a new tag only when you are fully confident that no existing vault tag or constrained-family member matches the meaning closely enough and that the new tag is clearly necessary for future retrieval
-   - a new tag must represent a durable retrieval axis likely to be reused across multiple future notes, not just a nicer wording for one current note
-   - if a note can be tagged accurately enough by one or two existing canonical tags, prefer that over inventing a new one
-   - if you are not fully confident, choose the closest existing canonical vault tag instead of inventing a new one
-9. Re-check final titles, tags, links, and duplicate risk before saving.
+8. Before saving, run the canonical tag pass from [references/vault-conventions.md](references/vault-conventions.md).
+   - Keep tags in English only.
+   - Use `1-3` tags total.
+   - Do not use forbidden umbrella tags such as `ai` or `management`.
+   - Reuse canonical existing vault tags before inventing new ones.
+9. Re-check final titles, tags, links, duplicate risk, and chronology against the canonical contracts before saving.
 10. When you add or tighten a mechanically checkable note-contract rule in this skill, update the local contract harness in the same change.
    - This applies to rules about frontmatter, tags, headings, spacing, closing sections, wikilinks, language cleanup, emphasis, or preservation of explicitly required examples.
    - Update at least one of:
@@ -289,102 +278,24 @@ python3 -m unittest skills/article-to-obsidian-kb/tests/test_note_contract_regre
 - Keep enough concrete detail that a reader can recover how the operating model actually works without reopening the source.
 - Use selective bold emphasis for key mechanisms, labels, or constraints so dense notes stay scannable, but never bold an entire list item.
 - Run one final note-compliance pass before saving any touched note:
-  - treat this as a holistic re-check of the entire note, not as a narrow validator for only one recent edit
-  - if the note was manually rewritten, merged, structurally reorganized, or otherwise changed late in the run, re-run all relevant note rules after that late edit
-  - if you updated an already existing note, run this pass against the final merged note as a whole rather than only against the newly appended or rewritten fragment
-  - treat touched legacy notes as upgrade candidates: if the update reveals old violations in untouched sections, clean the whole note before considering the run complete
-  - re-check frontmatter, title consistency, note type, tags, required closing section, wikilinks, language normalization, spacing, bold emphasis, and section-shape rules together
-  - do not assume that a late fix for one thing, such as links or frontmatter, preserved the rest of the note formatting
-  - do not mark a note complete until it passes this full-note compliance pass in its final saved form
+  - apply the full final-note contract from [references/vault-conventions.md](references/vault-conventions.md) to the final saved artifact
+  - treat that file as the single source of truth for frontmatter, titles, tags, language, links, spacing, emphasis, and section-shape rules
+  - if the note was manually rewritten, merged, or changed late in the run, re-run the full contract after that late edit
+  - if you updated an existing note, run this pass against the whole merged note rather than only the latest fragment
+  - do not mark a note complete until it passes this full-note contract in its final saved form
 - Run one final regression-sweep pass immediately after the note-compliance pass:
-  - treat this as a second large pass with the same coverage as the note-compliance pass, not as a smaller spot check
-  - re-run the full final-note checklist again after all late edits, merges, link fixes, language cleanup, and formatting cleanup are done
-  - if the note already existed before the current run, apply this second pass to the whole saved note again, not only to the section that was just updated
-  - use touched old notes as an opportunity to bring pre-rule content up to the current contract instead of preserving stale violations outside the latest diff
-  - verify the same contract again: frontmatter, title consistency, note type, tags, required closing section, wikilinks, language normalization, spacing, bold emphasis, section-shape rules, and preservation of concrete examples
-  - use this second pass specifically to catch regressions introduced by the first compliance fixes themselves, such as restored links that break scanability, translated phrases that drop aliases, or frontmatter repairs that disturb section layout
-  - the two passes should be identical in coverage; the second exists for reliability, not because it checks a narrower subset
-  - do not mark a note complete until it survives both the note-compliance pass and the regression-sweep pass in its final saved form
-- Run one final source-to-prose de-meta pass immediately after the regression-sweep pass:
-  - make the saved note read as a standalone knowledge object rather than as a commentary on how it was assembled
-  - remove process-language from the prose, including phrases such as `в этом выпуске`, `во втором видео`, `исходная заметка`, `старый материал`, `новый выпуск`, `в этом разговоре`, or similar references to the assembly process
-  - keep provenance in frontmatter `source` and, when needed, in compact evidence-style sections; do not narrate provenance inside the main explanatory prose
-  - keep a source reference inside the body only when the source itself is a useful case, scenario, or comparison that materially clarifies the idea
-  - rewrite procedural provenance into final knowledge, recommendation, or example wording before saving
-  - do not mark a note complete until this de-meta pass is done on the final saved prose
-- Run a final frontmatter-validation pass before saving:
-  - treat frontmatter as required structured metadata, not as optional decoration
-  - for every source-derived note, verify that `title`, `source`, `type`, `tags`, and `date` are all present and match the final note state
-  - for every concept note, verify that `title`, `type: concept`, and `tags` are present, and preserve `source` when the touched note already has valid source provenance or the current run adds real source provenance worth keeping
-  - if a note was manually rewritten, merged, or heavily restructured late in the run, re-validate frontmatter after that rewrite instead of trusting the earlier draft
-  - if a new canonical source-derived note absorbs, renames, or replaces an older source-derived note, merge the older note's surviving provenance into the new frontmatter instead of dropping it
-  - if any legacy note, including a concept note, is migrated into the current schema, carry forward surviving `source` values instead of dropping them during normalization
-  - preserve the absorbed note's `source` entries and any still-valid canonical tags in the new note's frontmatter unless they were clearly wrong noise
-  - do not consider a note complete until its frontmatter passes this check
-- Run a final chronology-order pass before saving any updated note:
-  - treat `## Additional insights`, `## Evidence`, `## Observed practices`, and other dated log sections as chronological append-only logs by default
-  - keep dated bullets in ascending chronological order unless the user explicitly asked for latest-first ordering
-  - insert each new dated bullet after the last existing dated bullet in that section and before the next heading or end-of-file
-  - do not prepend a fresh dated entry to the top of an existing log section unless latest-first ordering was explicitly requested
-  - if a late backfill uses an older date than the current last entry, insert it by date rather than forcing it to the bottom mechanically
-- Apply the additive-structure rule to every note type:
-  - each next section or bullet should add net-new knowledge
-  - do not duplicate, invert, or paraphrase the previous section or bullet just to fill structure
-  - if two sections or bullets overlap heavily, keep the stronger one and remove or merge the weaker one
-- Run a final section-distinctness pass for source-derived notes:
-  - compare `## Ключевые тезисы`, `## Практика`, and `## Подводные камни и антипаттерны` against each other after examples have already been restored
-  - keep `## Ключевые тезисы` for claims, patterns, and observations from the source
-  - keep `## Практика` for reusable user actions derived from those claims, not for restating the same example with an imperative verb
-  - keep `## Подводные камни и антипаттерны` for distinct failure modes, not as a negative rewrite of either `## Ключевые тезисы` or `## Практика`
-  - if the same source example appears in two sections, keep it only where it adds the most explanatory value and replace the weaker copy with a more general action, a different example, or nothing
-  - do not let the example-retention pass justify semantic duplication across sections
-- Run a final link-normalization pass before saving:
-  - whenever the prose explicitly mentions another existing note, concept, or durable knowledge node, convert that mention into an Obsidian wikilink
-  - reuse the exact canonical existing title in the wikilink
-  - do not leave plain-text mentions of an existing note when the mention is actually a reference to that note
-  - run this pass after the final concept create-or-update decisions are complete, not before
-  - for each concept note touched in the current run, do one exact-title sweep through the source-derived note body and replace remaining plain-text or inline-code mentions with wikilinks
-  - after the exact-title sweep, run one semantic-alias sweep for each touched concept note whose canonical title is broader, longer, translated, or more explicit than the wording used in the source-derived note
-  - build a small alias map from the actual source wording and the final canonical concept title, especially for abbreviations, English source terms, shortened metric names, and compact phrases like `AI evaluation`, `LOC`, `PR throughput`, or `AI-assisted`
-  - when that shorter wording clearly refers to the touched concept, replace it with a wikilink that keeps the canonical target and preserves the source wording through an alias
-  - if the prose needs a shorter visible label, keep the canonical target and use an alias rather than leaving the mention unlinked
-- Run a final related-links dedup pass before saving:
-  - treat inline wikilinks in the body as the primary knowledge links
-  - remove from `# Связанные заметки` every note that is already mentioned as a wikilink in the body
-  - keep in `# Связанные заметки` only net-new navigation links that broaden the reader's path through the cluster
-  - if the closing block becomes shorter after deduplication, prefer a shorter non-duplicative block over a longer repetitive one
-  - if deduplication removes every useful net-new navigation link, delete the `# Связанные заметки` heading entirely instead of leaving an empty block
-  - do not add weak or filler links just to keep the closing block non-empty
-  - allow a rare exception only when one especially important hub note needs to be highlighted both inline and in the closing block on purpose
-- Run a final language-normalization pass before saving:
-  - translate non-essential English management and business vocabulary into Russian
-  - keep English only for canonical framework names, metric names, tool names, code-level terms, established product/discovery method names, or when the English form is the stable industry term
-  - if the English term matters, explain it on first mention and then prefer the Russian form afterward
-  - rewrite sentences that stack several untranslated English nouns and become hard to read in Russian
-  - aggressively translate finance, labor-market, and business-operation nouns such as `output`, `white-collar`, `in-house`, `headcount`, `recurring revenue`, and similar phrases when a natural Russian equivalent exists
-- Run a final scannability-emphasis pass before saving:
-  - after the last manual rewrite, merge, or structural cleanup, re-check that the note still has enough bold emphasis to remain easy to scan
-  - restore bold on key mechanisms, labels, contrasts, or the leading clause of dense bullets when that emphasis was lost during rewriting
-  - in dense `general`, `lessons`, and `operating-model` notes, prefer bolded leading clauses for high-signal bullets instead of leaving long uniform text blocks
-  - do not bold entire list items, whole sentences, or random quoted words just to increase visual weight
-  - if a rewrite changed structure from bullets to paragraphs or vice versa, re-balance emphasis for the final structure rather than inheriting the old pattern mechanically
-- Run a final example-retention pass before saving:
-  - check whether the source contained concrete examples, scenarios, mini-cases, numbers, or worked transitions that materially clarified the main ideas
-  - verify that those examples were either preserved in the note or consciously dropped only because they were redundant, trivial, or pure source-local noise
-  - if removing an example made a recommendation, anti-pattern, or thesis more abstract, more vague, or harder to operationalize, restore a compact version of that example
-  - prefer one strong clarifying example per dense idea over several abstract bullets with no grounding
-- Run a final tag-normalization pass before saving:
-  - keep all frontmatter tags strictly in English
-  - avoid Cyrillic tags and mixed Russian-English tag variants
-  - deduplicate draft tags against the existing vault
-  - prefer the exact canonical English tag already used in overlapping notes
-  - collapse near-duplicates before writing frontmatter
-  - re-apply the constrained-family rules for `career` / `job-search` / `hiring`
-  - re-apply the constrained-family rules for `ai` / `ai-adoption` / `ai-tools` / `ai-agents` / `prompts`
-  - re-check that `workflow` is still justified as a flow-oriented retrieval tag and was not left behind as a broad process umbrella
-  - verify that `ai` does not appear in the final frontmatter
-  - verify that `management` does not appear in the final frontmatter
-  - verify that the final frontmatter still uses the narrowest accurate tag subset and did not regress to a broader umbrella tag during late edits
+  - re-run the same full final-note contract a second time with identical coverage after all fixes are done
+  - if the note already existed before the current run, apply the second pass to the whole saved note again
+  - do not mark a note complete until it survives both whole-note passes
+- Run one final update-contract pass for every touched existing note:
+  - apply the full update contract from [references/update-patterns.md](references/update-patterns.md) after the note body is already final
+  - treat that file as the single source of truth for chronology, append points, merge behavior, and provenance preservation
+  - verify chronology and provenance on the final saved artifact, not on an earlier draft
+- Keep these high-risk reminders visible even though the canonical rules live in the reference docs:
+  - preserve surviving `source` provenance when rewriting, merging, or renaming notes
+  - keep tags within `1-3` total and prefer `2-3` unless the note is genuinely single-axis
+  - do not allow `ai` or `management` back into final frontmatter
+  - do not let late edits reintroduce umbrella tags, duplicate sections, duplicate related links, or de-meta prose
 - Run a final output-synthesis pass before replying:
   - build an explicit touched-file ledger from the actual side effects of the run, not from memory
   - keep separate buckets for newly created source-derived notes, newly created concept notes, updated source-derived notes, and updated concept notes
@@ -403,8 +314,11 @@ python3 -m unittest skills/article-to-obsidian-kb/tests/test_note_contract_regre
   - `Созданы` for all new source-derived notes
   - `Новые концепты` for all new concept notes
   - `Обновлены` for updated source-derived notes and updated concept notes
+  - `Новые теги` for genuinely new frontmatter tags introduced in this run
 - In `Созданы` and `Новые концепты`, give each file a one-line explanation of what it is about.
 - In `Обновлены`, group updated files together and briefly say what changed or what new signal was appended.
+- In `Новые теги`, list only tags that did not already exist in the vault before this run and name the created or updated notes where each new tag was introduced.
+- If the run did not create any new tags, still include `Новые теги` and say explicitly that no new tags were introduced.
 - Output only files that were created or updated.
 - Do not list unchanged notes.
 - If the source adds no new knowledge, say so briefly and mention which existing notes already cover it.
