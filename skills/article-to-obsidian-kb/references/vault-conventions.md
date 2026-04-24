@@ -109,7 +109,6 @@ Frontmatter is part of the note schema, not optional decoration.
 ## Tags
 
 - Generate tags only from the source or concept context.
-- Keep 4-8 tags.
 - Keep all tags strictly in English.
 - Use ASCII lowercase kebab-case for new tags unless an established existing vault tag already uses another English form.
 - Prefer short, searchable tags.
