@@ -320,6 +320,47 @@ class CodexTokenMonitorTests(unittest.TestCase):
 
             self.assertEqual(selected, older)
 
+    def test_discover_rollout_prefers_matching_thread_id_over_newer_cwd_match(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            codex_home = pathlib.Path(tmpdir)
+            sessions_root = codex_home / "sessions" / "2026" / "04" / "24"
+            sessions_root.mkdir(parents=True)
+            current = sessions_root / "rollout-2026-04-24T10-00-00-thread-current.jsonl"
+            other = sessions_root / "rollout-2026-04-24T10-05-00-thread-other.jsonl"
+            current.write_text(
+                json.dumps(
+                    {
+                        "type": "session_meta",
+                        "payload": {"id": "thread-current", "cwd": "/tmp/project"},
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            other.write_text(
+                json.dumps(
+                    {
+                        "type": "session_meta",
+                        "payload": {"id": "thread-other", "cwd": "/tmp/project"},
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            current_ts = 1_700_000_000
+            other_ts = current_ts + 10
+            os.utime(current, (current_ts, current_ts))
+            os.utime(other, (other_ts, other_ts))
+
+            selected = MODULE.discover_rollout(
+                codex_home,
+                pathlib.Path("/tmp/project"),
+                "thread-current",
+            )
+
+            self.assertEqual(selected, current)
+
     def test_discover_rollout_falls_back_to_newest_when_no_cwd_match(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             codex_home = pathlib.Path(tmpdir)
@@ -426,6 +467,12 @@ class CodexTokenMonitorTests(unittest.TestCase):
             assert follower is not None
             self.assertEqual(follower.state.thread_name, "Fallback thread")
 
+    def test_parse_args_defaults_thread_id_from_environment(self) -> None:
+        with mock.patch.dict(os.environ, {"CODEX_THREAD_ID": "thread-current"}, clear=False):
+            args = MODULE.parse_args([])
+
+        self.assertEqual(args.thread_id, "thread-current")
+
     def test_build_snapshot_text_brief_contains_expected_blocks(self) -> None:
         sample = self._make_sample(
             primary_used_percent=48.0,
@@ -442,21 +489,60 @@ class CodexTokenMonitorTests(unittest.TestCase):
 
         self.assertTrue(rendered.splitlines()[0].startswith("age"))
         self.assertIn("age     limits ", rendered)
-        self.assertIn("session", rendered)
         self.assertIn("delta", rendered)
         self.assertIn("limits", rendered)
         self.assertIn("day", rendered)
         self.assertIn("week", rendered)
-        self.assertIn("Thread", rendered)
         self.assertIn("day 52% left r 10m", rendered)
         self.assertIn("week 90% left r 30m", rendered)
         self.assertNotIn("time", rendered)
         self.assertNotIn("sid", rendered)
         self.assertNotIn("tokens", rendered)
+        self.assertNotIn("session", rendered)
         self.assertNotIn("cache", rendered)
         self.assertNotIn("rsn", rendered)
         for line in rendered.splitlines():
             self.assertLessEqual(len(line), 80)
+
+    def test_build_snapshot_text_uses_fresher_global_limit_sample(self) -> None:
+        thread_sample = self._make_sample(
+            primary_used_percent=48.0,
+            primary_reset_at=1_776_686_435,
+            primary_window_minutes=300,
+            secondary_used_percent=10.0,
+            secondary_reset_at=1_776_687_635,
+            secondary_window_minutes=10080,
+        )
+        global_sample = MODULE.TokenSample(
+            timestamp=MODULE.datetime(2026, 4, 20, 12, 5, tzinfo=MODULE.timezone.utc),
+            total=None,
+            delta=None,
+            rate_limits=MODULE.RateLimits(
+                primary=MODULE.RateWindow(
+                    used_percent=64.0,
+                    resets_at=1_776_686_435,
+                    window_minutes=300,
+                ),
+                secondary=MODULE.RateWindow(
+                    used_percent=33.0,
+                    resets_at=1_776_687_635,
+                    window_minutes=10080,
+                ),
+                plan_type="plus",
+            ),
+        )
+        state = self._make_state(thread_sample)
+
+        with mock.patch.object(MODULE.time, "time", return_value=1_776_685_835):
+            rendered = MODULE.build_snapshot_text(
+                state,
+                mode="brief",
+                limit_sample=global_sample,
+            )
+
+        self.assertIn("day 36% left r 10m", rendered)
+        self.assertIn("week 67% left r 30m", rendered)
+        self.assertNotIn("day 52% left r 10m", rendered)
 
     def test_build_snapshot_text_full_contains_time(self) -> None:
         sample = self._make_sample(
@@ -547,8 +633,63 @@ class CodexTokenMonitorTests(unittest.TestCase):
     def test_parse_args_defaults_to_brief_and_accepts_full(self) -> None:
         default_args = MODULE.parse_args([])
         full_args = MODULE.parse_args(["--mode", "full", "--once"])
+        list_args = MODULE.parse_args(["--list-sessions"])
 
         self.assertEqual(default_args.mode, "brief")
         self.assertFalse(default_args.once)
         self.assertEqual(full_args.mode, "full")
         self.assertTrue(full_args.once)
+        self.assertTrue(list_args.list_sessions)
+
+    def test_render_session_list_lists_matching_project_sessions_and_marks_thread(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            codex_home = pathlib.Path(tmpdir)
+            sessions_root = codex_home / "sessions" / "2026" / "04" / "24"
+            sessions_root.mkdir(parents=True)
+            current = sessions_root / "rollout-2026-04-24T10-00-00-thread-current.jsonl"
+            other = sessions_root / "rollout-2026-04-24T10-05-00-thread-other.jsonl"
+            foreign = sessions_root / "rollout-2026-04-24T10-06-00-thread-foreign.jsonl"
+
+            for rollout, session_id, cwd in (
+                (current, "thread-current", "/tmp/project"),
+                (other, "thread-other", "/tmp/project"),
+                (foreign, "thread-foreign", "/tmp/other-project"),
+            ):
+                rollout.write_text(
+                    json.dumps(
+                        {
+                            "type": "session_meta",
+                            "payload": {"id": session_id, "cwd": cwd},
+                        }
+                    )
+                    + "\n",
+                    encoding="utf-8",
+                )
+
+            (codex_home / "session_index.jsonl").write_text(
+                "\n".join(
+                    [
+                        json.dumps(
+                            {"id": "thread-current", "thread_name": "Current thread"}
+                        ),
+                        json.dumps({"id": "thread-other", "thread_name": "Other thread"}),
+                        json.dumps(
+                            {"id": "thread-foreign", "thread_name": "Foreign thread"}
+                        ),
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            rendered = MODULE.render_session_list(
+                codex_home,
+                pathlib.Path("/tmp/project"),
+                "thread-current",
+            )
+
+            self.assertIn("thread  thread-current", rendered)
+            self.assertIn("cwd     /tmp/project", rendered)
+            self.assertIn("* thread-current | Current thread | age ", rendered)
+            self.assertIn("  thread-other | Other thread | age ", rendered)
+            self.assertNotIn("Foreign thread", rendered)

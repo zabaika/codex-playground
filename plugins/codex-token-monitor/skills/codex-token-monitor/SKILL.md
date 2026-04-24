@@ -11,7 +11,7 @@ Use this skill when the user wants realtime visibility into Codex token usage wi
 
 The workflow is:
 
-1. resolve the active rollout file, usually by matching the current project path to `session_meta.payload.cwd`
+1. resolve the active rollout file, preferring the current Codex thread via `CODEX_THREAD_ID` and falling back to matching the current project path to `session_meta.payload.cwd`
 2. read `session_meta` plus `event_msg.payload.type == "token_count"`
 3. display:
    - active session file
@@ -28,12 +28,39 @@ The workflow is:
 - Use cumulative totals only for the totals block and throughput calculations.
 - If the first `token_count` event contains only `rate_limits` and no `info`, keep the rate-limit block visible and leave token fields blank until a later event arrives.
 
+Telemetry scope rules:
+
+- `delta` is thread-local and must come from the pinned rollout session
+- `tokens` are thread-local and must come from the pinned rollout session
+- `limits` are account-global in meaning, so they should prefer the freshest known rollout across all sessions rather than blindly using the current thread snapshot
+
+Current practical source mapping:
+
+- pinned rollout:
+  - `session`
+  - `tokens`
+  - `delta`
+- freshest known rollout globally:
+  - `limits`
+
+Known limitation:
+
+- this skill still relies on rollout JSONL rather than the internal Codex UI rate-limit store
+- if the UI receives a newer internal account update before any rollout writes a new `rate_limits` payload, UI values may briefly be fresher
+
 ## Run The Monitor
 
 From the repository checkout:
 
 ```bash
 python3 plugins/codex-token-monitor/scripts/codex_token_monitor.py --cwd "$PWD"
+```
+
+If the terminal already exposes the current thread id, the script will pin to it
+automatically. You can also pass it explicitly:
+
+```bash
+python3 plugins/codex-token-monitor/scripts/codex_token_monitor.py --thread-id "$CODEX_THREAD_ID"
 ```
 
 Inside the Codex app, prefer the built-in integrated terminal for the current
@@ -69,6 +96,12 @@ For a single snapshot instead of live follow mode:
 python3 plugins/codex-token-monitor/scripts/codex_token_monitor.py --cwd "$PWD" --once
 ```
 
+To list candidate sessions when multiple chats share the same project:
+
+```bash
+python3 plugins/codex-token-monitor/scripts/codex_token_monitor.py --list-sessions
+```
+
 To pin an exact rollout file:
 
 ```bash
@@ -88,8 +121,9 @@ python3 plugins/codex-token-monitor/scripts/codex_token_monitor.py --cwd "$PWD" 
 3. If the user asked only for architecture or troubleshooting, inspect:
    - `~/.codex/sessions/**/rollout-*.jsonl`
    - `~/.codex/session_index.jsonl` when it helps map thread names
-4. Prefer project-scoped rollout discovery by matching `session_meta.payload.cwd` to the current working directory.
+4. Prefer thread-scoped rollout discovery via `CODEX_THREAD_ID` when available. Use project-scoped `cwd` matching only as a fallback.
 5. If there is no matching live rollout for the current project, report that clearly instead of guessing.
+6. If rollout selection is ambiguous across multiple chats in one project, use `--list-sessions` before guessing.
 
 ## Output Contract
 
@@ -101,22 +135,26 @@ The monitor has two output modes.
 - Keep width near 80 characters.
 - Show exactly these logical rows:
   - `age`
-  - `session`
   - `delta`
   - `limits`
 
 Field contract:
 
 - `age.limits`: age of the latest `rate_limits` snapshot
-- `session`: thread name only
 - `delta.in`: latest per-update input tokens
 - `delta.out`: latest per-update output tokens
 - `delta.total`: latest per-update total tokens
 - `limits.day`: primary limit remaining percent plus reset in minutes
 - `limits.week`: secondary limit remaining percent plus reset in minutes
 
+Source contract in `brief`:
+
+- `delta.*`: pinned thread rollout
+- `limits.*`: freshest known rollout globally
+
 Omit in `brief`:
 
+- session name
 - session id
 - rollout filename
 - cumulative tokens row
@@ -153,6 +191,18 @@ Field contract:
 - `time.upd/min`: rolling update frequency
 
 Keep the display read-only. This skill is for observability, not for altering Codex state.
+
+Limit source rule:
+
+- `delta` remains thread-local
+- `limits` should prefer the freshest known rollout globally when that sample is newer than the current thread snapshot
+
+Field source contract in `full`:
+
+- `session`: pinned thread rollout
+- `tokens`: pinned thread rollout
+- `delta`: pinned thread rollout
+- `limits`: freshest known rollout globally
 
 Rate-limit freshness rule:
 

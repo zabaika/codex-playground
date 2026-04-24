@@ -2,6 +2,10 @@
 
 `codex-token-monitor` is a local Codex plugin that packages one reusable skill and a helper script for watching rollout token usage in realtime.
 
+When the monitor runs inside the Codex integrated terminal, it first pins itself
+to the current thread via `CODEX_THREAD_ID`. Project `cwd` matching is only a
+fallback for terminals that do not expose a thread id.
+
 ## Why plugin first
 
 According to the official Codex docs:
@@ -23,10 +27,38 @@ This plugin follows that model:
 - rate-limit usage, remaining percentage, and reset time
 - file freshness and rough throughput
 
+## Data Sources
+
+The monitor intentionally combines two scopes of telemetry:
+
+- `delta` is thread-local and comes from the pinned rollout session for the current monitor process
+- `limits` are global-at-account scope and come from the freshest known rollout across all discovered Codex sessions
+
+This split exists because Codex rate limits are shared across chats, while the
+token delta is only meaningful inside one specific thread.
+
+Current source details:
+
+- `delta`: latest `event_msg.payload.type == "token_count"` -> `info.last_token_usage` from the pinned rollout
+- `tokens`: latest `info.total_token_usage` from the pinned rollout
+- `limits`: latest `rate_limits` from the freshest rollout JSONL seen under `~/.codex/sessions/**/rollout-*.jsonl`
+- `session`: thread identity of the pinned rollout only
+
+Important limitation:
+
+- the monitor does not currently read the same internal Codex UI rate-limit store
+- if Codex UI receives a fresher internal account update before it appears in any rollout JSONL, the UI can still lead the monitor briefly
+
 ## Run from the source checkout
 
 ```bash
 python3 plugins/codex-token-monitor/scripts/codex_token_monitor.py --cwd "$PWD"
+```
+
+You can also pin a specific Codex thread manually:
+
+```bash
+python3 plugins/codex-token-monitor/scripts/codex_token_monitor.py --thread-id "$CODEX_THREAD_ID"
 ```
 
 ## Run inside the Codex app terminal
@@ -74,6 +106,12 @@ Print one snapshot:
 python3 plugins/codex-token-monitor/scripts/codex_token_monitor.py --cwd "$PWD" --once
 ```
 
+List candidate sessions for the current project or thread:
+
+```bash
+python3 plugins/codex-token-monitor/scripts/codex_token_monitor.py --list-sessions
+```
+
 Show the detailed format:
 
 ```bash
@@ -93,7 +131,6 @@ Example:
 
 ```text
 age     limits 10m 5s
-session Добавь realtime-статус токенов
 delta   in +210,755 | out +195 | total +210,950
 limits  day 91% left r 282m | week 86% left r 8016m
 ```
@@ -101,7 +138,6 @@ limits  day 91% left r 282m | week 86% left r 8016m
 Field meanings:
 
 - `age.limits`: age of the latest `rate_limits` snapshot
-- `session`: current thread name only
 - `delta.in`: latest per-update `input_tokens`
 - `delta.out`: latest per-update `output_tokens`
 - `delta.total`: latest per-update `total_tokens`
@@ -110,8 +146,14 @@ Field meanings:
 - `left`: remaining percentage before that window is exhausted
 - `r`: time until reset in minutes
 
+Source mapping in `brief`:
+
+- `delta.*`: from the current pinned thread rollout
+- `limits.*`: from the freshest known rollout globally, not necessarily the current thread
+
 Brief mode intentionally omits:
 
+- session name
 - session id
 - rollout filename
 - cumulative tokens row
@@ -119,6 +161,26 @@ Brief mode intentionally omits:
 - reasoning tokens
 - plan name
 - freshness and throughput lines
+
+Brief mode now treats `delta` and `limits` as different scopes on purpose:
+
+- `delta` comes from the current pinned thread
+- `limits` come from the freshest known rollout across all sessions, so they stay as current as possible even if another chat produced the latest rate-limit update
+
+## Session Diagnostics
+
+When several Codex chats share the same project `cwd`, use:
+
+```bash
+python3 plugins/codex-token-monitor/scripts/codex_token_monitor.py --list-sessions
+```
+
+Output format:
+
+- `thread`: current preferred `CODEX_THREAD_ID`, if available
+- `cwd`: current project scope used for fallback matching
+- `*`: the session currently pinned by `--thread-id` or `CODEX_THREAD_ID`
+- each listed row shows `session_id | thread_name | file age | rollout filename`
 
 ### Full mode
 
@@ -157,6 +219,15 @@ Field meanings:
 - `tok_events`: parsed `token_count` events kept in memory
 - `tok/min`: throughput based on the rolling sample window
 - `upd/min`: update frequency based on the rolling sample window
+
+`full` keeps the current thread identity visible, but the rate-limit block still prefers the freshest known rollout globally when that is newer than the current thread snapshot.
+
+Source mapping in `full`:
+
+- `session`: pinned thread rollout
+- `tokens`: pinned thread rollout
+- `delta`: pinned thread rollout
+- `limits`: freshest known rollout globally
 
 ## Color thresholds
 

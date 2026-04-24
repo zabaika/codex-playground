@@ -142,6 +142,17 @@ class MonitorState:
         self.token_samples.append(sample)
 
 
+@dataclass
+class SessionEntry:
+    rollout_path: Path
+    session_id: str | None
+    cwd: str | None
+    thread_name: str | None
+    file_mtime: datetime | None
+    matches_thread: bool
+    matches_cwd: bool
+
+
 class RolloutFollower:
     def __init__(self, path: Path, history_limit: int) -> None:
         self.path = path
@@ -387,12 +398,17 @@ def _render_limit_snapshot_age(sample: TokenSample | None, now: datetime, use_co
     )
 
 
-def build_snapshot_text(state: MonitorState, mode: str = "brief") -> str:
+def build_snapshot_text(
+    state: MonitorState,
+    mode: str = "brief",
+    limit_sample: TokenSample | None = None,
+) -> str:
     now = datetime.now(timezone.utc)
     last_sample = state.last_token_sample
+    selected_limit_sample = limit_sample or last_sample
     total = last_sample.total if last_sample else None
     delta = last_sample.delta if last_sample else None
-    rate_limits = last_sample.rate_limits if last_sample else None
+    rate_limits = selected_limit_sample.rate_limits if selected_limit_sample else None
     primary_window = _effective_rate_window(rate_limits.primary) if rate_limits else None
     secondary_window = _effective_rate_window(rate_limits.secondary) if rate_limits else None
     file_mtime = _safe_stat_mtime(state.rollout_path)
@@ -405,7 +421,7 @@ def build_snapshot_text(state: MonitorState, mode: str = "brief") -> str:
         lines = [
             _render_compact_line(
                 "age",
-                [_render_limit_snapshot_age(last_sample, now, use_color)],
+                [_render_limit_snapshot_age(selected_limit_sample, now, use_color)],
                 use_color=use_color,
                 width=140,
             ),
@@ -479,13 +495,7 @@ def build_snapshot_text(state: MonitorState, mode: str = "brief") -> str:
         lines = [
             _render_compact_line(
                 "age",
-                [_render_limit_snapshot_age(last_sample, now, use_color)],
-                use_color=use_color,
-                width=80,
-            ),
-            _render_compact_line(
-                "session",
-                [state.thread_name or "-"],
+                [_render_limit_snapshot_age(selected_limit_sample, now, use_color)],
                 use_color=use_color,
                 width=80,
             ),
@@ -522,17 +532,41 @@ def _render_compact_line(label: str, parts: list[str], use_color: bool, width: i
     return "\n".join(rendered)
 
 
-def discover_rollout(codex_home: Path, selected_cwd: Path | None) -> Path | None:
+def _rollout_matches_thread_id(path: Path, thread_id: str | None) -> bool:
+    if not thread_id:
+        return False
+    if path.name.endswith(f"-{thread_id}.jsonl"):
+        return True
+    return read_session_id(path) == thread_id
+
+
+def _sorted_rollout_candidates(codex_home: Path) -> list[Path]:
     sessions_root = codex_home / "sessions"
     if not sessions_root.exists():
-        return None
-    candidates = sorted(
+        return []
+    return sorted(
         sessions_root.glob("**/rollout-*.jsonl"),
         key=lambda path: path.stat().st_mtime,
         reverse=True,
     )
+
+
+def discover_rollout(
+    codex_home: Path,
+    selected_cwd: Path | None,
+    selected_thread_id: str | None = None,
+) -> Path | None:
+    candidates = _sorted_rollout_candidates(codex_home)
     if not candidates:
         return None
+    if selected_thread_id is not None:
+        matching_thread = [
+            candidate
+            for candidate in candidates
+            if _rollout_matches_thread_id(candidate, selected_thread_id)
+        ]
+        if matching_thread:
+            return matching_thread[0]
     if selected_cwd is None:
         return candidates[0]
     matching: list[Path] = []
@@ -543,6 +577,26 @@ def discover_rollout(codex_home: Path, selected_cwd: Path | None) -> Path | None
     if matching:
         return matching[0]
     return candidates[0]
+
+
+def read_session_id(path: Path) -> str | None:
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            for _ in range(10):
+                line = handle.readline()
+                if not line:
+                    break
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if event.get("type") != "session_meta":
+                    continue
+                payload = _optional_dict(event.get("payload")) or {}
+                return _optional_str(payload.get("id"))
+    except OSError:
+        return None
+    return None
 
 
 def read_session_cwd(path: Path) -> str | None:
@@ -593,6 +647,71 @@ def hydrate_thread_name(state: MonitorState, codex_home: Path) -> None:
     state.thread_name = read_session_name(codex_home, state.session_id)
 
 
+def collect_session_entries(
+    codex_home: Path,
+    selected_cwd: Path | None,
+    selected_thread_id: str | None,
+) -> list[SessionEntry]:
+    entries: list[SessionEntry] = []
+    for candidate in _sorted_rollout_candidates(codex_home):
+        session_id = read_session_id(candidate)
+        session_cwd = read_session_cwd(candidate)
+        entries.append(
+            SessionEntry(
+                rollout_path=candidate,
+                session_id=session_id,
+                cwd=session_cwd,
+                thread_name=read_session_name(codex_home, session_id),
+                file_mtime=_safe_stat_mtime(candidate),
+                matches_thread=(
+                    selected_thread_id is not None
+                    and (
+                        session_id == selected_thread_id
+                        or candidate.name.endswith(f"-{selected_thread_id}.jsonl")
+                    )
+                ),
+                matches_cwd=(
+                    selected_cwd is not None and _cwd_matches(session_cwd, selected_cwd)
+                ),
+            )
+        )
+    if selected_cwd is None:
+        return entries
+    matching = [entry for entry in entries if entry.matches_cwd]
+    if matching:
+        return matching
+    return entries
+
+
+def render_session_list(
+    codex_home: Path,
+    selected_cwd: Path | None,
+    selected_thread_id: str | None,
+) -> str:
+    entries = collect_session_entries(codex_home, selected_cwd, selected_thread_id)
+    if not entries:
+        return "No rollout sessions found."
+
+    now = datetime.now(timezone.utc)
+    lines: list[str] = []
+    if selected_thread_id:
+        lines.append(f"thread  {selected_thread_id}")
+    if selected_cwd:
+        lines.append(f"cwd     {selected_cwd}")
+    for entry in entries:
+        age_seconds = (
+            max(0.0, (now - entry.file_mtime).total_seconds())
+            if entry.file_mtime is not None
+            else None
+        )
+        marker = "*" if entry.matches_thread else " "
+        lines.append(
+            f"{marker} {entry.session_id or '-'} | {entry.thread_name or '-'} | "
+            f"age {_format_age_seconds(age_seconds)} | {entry.rollout_path.name}"
+        )
+    return "\n".join(lines)
+
+
 def _cwd_matches(session_cwd: str | None, selected_cwd: Path) -> bool:
     if not session_cwd:
         return False
@@ -619,6 +738,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         help="Preferred project cwd used to resolve the active rollout file.",
     )
     parser.add_argument(
+        "--thread-id",
+        default=os.environ.get("CODEX_THREAD_ID"),
+        help="Preferred Codex thread id. Defaults to $CODEX_THREAD_ID when available.",
+    )
+    parser.add_argument(
         "--codex-home",
         type=Path,
         default=Path(os.environ.get("CODEX_HOME", Path.home() / ".codex")),
@@ -642,6 +766,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         help="Print one snapshot and exit.",
     )
     parser.add_argument(
+        "--list-sessions",
+        action="store_true",
+        help="List rollout sessions for the current cwd or thread and exit.",
+    )
+    parser.add_argument(
         "--mode",
         choices=("brief", "full"),
         default="brief",
@@ -653,7 +782,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 def build_follower(args: argparse.Namespace) -> RolloutFollower | None:
     target = args.file
     if target is None:
-        target = discover_rollout(args.codex_home, args.cwd)
+        target = discover_rollout(args.codex_home, args.cwd, args.thread_id)
     if target is None:
         return None
     follower = RolloutFollower(target, history_limit=args.history_limit)
@@ -662,12 +791,44 @@ def build_follower(args: argparse.Namespace) -> RolloutFollower | None:
     return follower
 
 
+def build_limit_follower(args: argparse.Namespace) -> RolloutFollower | None:
+    target = discover_rollout(args.codex_home, None, None)
+    if target is None:
+        return None
+    follower = RolloutFollower(target, history_limit=args.history_limit)
+    follower.load_initial()
+    return follower
+
+
+def resolve_limit_sample(
+    limit_follower: RolloutFollower | None,
+    fallback_sample: TokenSample | None,
+) -> TokenSample | None:
+    if limit_follower is not None:
+        sample = limit_follower.state.last_token_sample
+        if sample is not None and sample.rate_limits is not None:
+            return sample
+    return fallback_sample
+
+
 def run_once(args: argparse.Namespace) -> int:
     follower = build_follower(args)
     if follower is None:
         print("No rollout file found.", file=sys.stderr)
         return 1
-    print(build_snapshot_text(follower.state, mode=args.mode))
+    limit_follower = build_limit_follower(args)
+    print(
+        build_snapshot_text(
+            follower.state,
+            mode=args.mode,
+            limit_sample=resolve_limit_sample(limit_follower, follower.state.last_token_sample),
+        )
+    )
+    return 0
+
+
+def run_list_sessions(args: argparse.Namespace) -> int:
+    print(render_session_list(args.codex_home, args.cwd, args.thread_id))
     return 0
 
 
@@ -686,19 +847,30 @@ def run_follow(args: argparse.Namespace) -> int:
     if follower is None:
         print("No rollout file found for the selected cwd yet.", file=sys.stderr)
         return 1
+    limit_follower = build_limit_follower(args)
+    current_limit_sample = resolve_limit_sample(limit_follower, follower.state.last_token_sample)
 
     while not stop_requested:
         if args.file is None:
-            latest = discover_rollout(args.codex_home, args.cwd)
+            latest = discover_rollout(args.codex_home, args.cwd, args.thread_id)
             if latest is not None and latest != follower.path:
                 follower = RolloutFollower(latest, history_limit=args.history_limit)
                 follower.load_initial()
                 hydrate_thread_name(follower.state, args.codex_home)
+        latest_limit = discover_rollout(args.codex_home, None, None)
+        if latest_limit is not None and (
+            limit_follower is None or latest_limit != limit_follower.path
+        ):
+            limit_follower = RolloutFollower(latest_limit, history_limit=args.history_limit)
+            limit_follower.load_initial()
         follower.poll()
+        if limit_follower is not None:
+            limit_follower.poll()
+            current_limit_sample = resolve_limit_sample(limit_follower, current_limit_sample)
         hydrate_thread_name(follower.state, args.codex_home)
         if sys.stdout.isatty():
             sys.stdout.write(ANSI_CLEAR)
-        sys.stdout.write(build_snapshot_text(follower.state, mode=args.mode))
+        sys.stdout.write(build_snapshot_text(follower.state, mode=args.mode, limit_sample=current_limit_sample))
         sys.stdout.write("\n")
         sys.stdout.flush()
         time.sleep(max(0.1, args.poll_interval))
@@ -707,6 +879,8 @@ def run_follow(args: argparse.Namespace) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv or sys.argv[1:])
+    if args.list_sessions:
+        return run_list_sessions(args)
     if args.once:
         return run_once(args)
     return run_follow(args)
