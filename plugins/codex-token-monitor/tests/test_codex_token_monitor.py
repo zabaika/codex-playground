@@ -378,6 +378,8 @@ class CodexTokenMonitorTests(unittest.TestCase):
         with mock.patch.object(MODULE.time, "time", return_value=1_776_685_835):
             rendered = MODULE.build_snapshot_text(state, mode="brief")
 
+        self.assertTrue(rendered.splitlines()[0].startswith("age"))
+        self.assertIn("age     limits ", rendered)
         self.assertIn("session", rendered)
         self.assertIn("delta", rendered)
         self.assertIn("limits", rendered)
@@ -408,6 +410,8 @@ class CodexTokenMonitorTests(unittest.TestCase):
         with mock.patch.object(MODULE.time, "time", return_value=1_776_685_835):
             rendered = MODULE.build_snapshot_text(state, mode="full")
 
+        self.assertTrue(rendered.splitlines()[0].startswith("age"))
+        self.assertIn("age     limits ", rendered)
         self.assertIn("time", rendered)
         self.assertIn("sid session-1", rendered)
         self.assertIn("plan plus", rendered)
@@ -474,9 +478,9 @@ class CodexTokenMonitorTests(unittest.TestCase):
         self.assertEqual(MODULE._rate_color(60.0), MODULE.ANSI_YELLOW)
         self.assertEqual(MODULE._rate_color(85.0), MODULE.ANSI_RED)
         self.assertEqual(MODULE._lag_color(None), MODULE.ANSI_DIM)
-        self.assertEqual(MODULE._lag_color(4.9), MODULE.ANSI_GREEN)
-        self.assertEqual(MODULE._lag_color(5.0), MODULE.ANSI_YELLOW)
-        self.assertEqual(MODULE._lag_color(30.0), MODULE.ANSI_RED)
+        self.assertEqual(MODULE._lag_color(59.9), MODULE.ANSI_GREEN)
+        self.assertEqual(MODULE._lag_color(60.0), MODULE.ANSI_YELLOW)
+        self.assertEqual(MODULE._lag_color(300.0), MODULE.ANSI_RED)
 
     def test_parse_args_defaults_to_brief_and_accepts_full(self) -> None:
         default_args = MODULE.parse_args([])

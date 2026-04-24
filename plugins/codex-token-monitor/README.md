@@ -92,6 +92,7 @@ The monitor has two render modes:
 Example:
 
 ```text
+age     limits 10m 5s
 session Добавь realtime-статус токенов
 delta   in +210,755 | out +195 | total +210,950
 limits  day 91% left r 282m | week 86% left r 8016m
@@ -99,6 +100,7 @@ limits  day 91% left r 282m | week 86% left r 8016m
 
 Field meanings:
 
+- `age.limits`: age of the latest `rate_limits` snapshot
 - `session`: current thread name only
 - `delta.in`: latest per-update `input_tokens`
 - `delta.out`: latest per-update `output_tokens`
@@ -123,6 +125,7 @@ Brief mode intentionally omits:
 Example:
 
 ```text
+age     limits 10m 5s
 session Добавь realtime-статус токенов | sid 019daacd-d004-77c1-8c43-880e765537ef | rollout-...
 tokens  in 6,689,927 | cache 5,613,056 | out 59,499 | rsn 15,995 | total 6,749,426
 delta   in +209,784 | cache +209,536 | out +322 | rsn +35 | total +210,106
@@ -132,6 +135,7 @@ time    event <1s | file <1s | events 535 | tok_events 20 | 173282 tok/min | 1.1
 
 Field meanings:
 
+- `age.limits`: age of the latest `rate_limits` snapshot
 - `session`: current thread name
 - `sid`: Codex session id from `session_meta.payload.id`
 - `rollout-...jsonl`: active rollout filename

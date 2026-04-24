@@ -100,12 +100,14 @@ The monitor has two output modes.
 - Default mode for постоянного использования.
 - Keep width near 80 characters.
 - Show exactly these logical rows:
+  - `age`
   - `session`
   - `delta`
   - `limits`
 
 Field contract:
 
+- `age.limits`: age of the latest `rate_limits` snapshot
 - `session`: thread name only
 - `delta.in`: latest per-update input tokens
 - `delta.out`: latest per-update output tokens
@@ -127,6 +129,7 @@ Omit in `brief`:
 
 - Inspection mode for debugging and detailed review.
 - Show these logical rows:
+  - `age`
   - `session`
   - `tokens`
   - `delta`
@@ -135,6 +138,7 @@ Omit in `brief`:
 
 Field contract:
 
+- `age.limits`: age of the latest `rate_limits` snapshot
 - `session`: thread name, session id, rollout filename
 - `tokens`: input, cached input, output, reasoning, total
 - `delta`: input, cached input, output, reasoning, total

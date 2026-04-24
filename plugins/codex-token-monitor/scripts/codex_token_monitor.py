@@ -293,9 +293,9 @@ def _rate_color(used_percent: float) -> str:
 def _lag_color(seconds: float | None) -> str:
     if seconds is None:
         return ANSI_DIM
-    if seconds >= 30.0:
+    if seconds >= 300.0:
         return ANSI_RED
-    if seconds >= 5.0:
+    if seconds >= 60.0:
         return ANSI_YELLOW
     return ANSI_GREEN
 
@@ -376,6 +376,17 @@ def compute_throughput(samples: deque[TokenSample]) -> tuple[str, str]:
     return f"{total_tokens_per_min:.0f} tok/min", f"{updates_per_min:.1f} upd/min"
 
 
+def _render_limit_snapshot_age(sample: TokenSample | None, now: datetime, use_color: bool) -> str:
+    if sample is None or sample.rate_limits is None:
+        return "limits -"
+    age_seconds = max(0.0, (now - sample.timestamp).total_seconds())
+    return _colorize(
+        f"limits {_format_age_seconds(age_seconds)}",
+        _lag_color(age_seconds),
+        use_color,
+    )
+
+
 def build_snapshot_text(state: MonitorState, mode: str = "brief") -> str:
     now = datetime.now(timezone.utc)
     last_sample = state.last_token_sample
@@ -392,6 +403,12 @@ def build_snapshot_text(state: MonitorState, mode: str = "brief") -> str:
 
     if mode == "full":
         lines = [
+            _render_compact_line(
+                "age",
+                [_render_limit_snapshot_age(last_sample, now, use_color)],
+                use_color=use_color,
+                width=140,
+            ),
             _render_compact_line(
                 "session",
                 [
@@ -460,6 +477,12 @@ def build_snapshot_text(state: MonitorState, mode: str = "brief") -> str:
         ]
     else:
         lines = [
+            _render_compact_line(
+                "age",
+                [_render_limit_snapshot_age(last_sample, now, use_color)],
+                use_color=use_color,
+                width=80,
+            ),
             _render_compact_line(
                 "session",
                 [state.thread_name or "-"],
