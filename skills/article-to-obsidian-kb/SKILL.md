@@ -79,11 +79,8 @@ python3 scripts/detect_source_route.py --source-file "[SOURCE_FILE]"
    - Apply the canonical update contract from [references/update-patterns.md](references/update-patterns.md) whenever an existing note is touched.
    - If you need intermediate files, previews, or staged markdown, store them only under the resolved scratch root and never under repo-local `tmp/`.
 8. Before saving, run the canonical tag pass from [references/vault-conventions.md](references/vault-conventions.md).
-   - Keep tags in English only.
-   - Use `1-3` tags total.
-   - Do not use forbidden umbrella tags such as `ai` or `management`.
-   - Reuse canonical existing vault tags before inventing new ones.
 9. Re-check final titles, tags, links, duplicate risk, and chronology against the canonical contracts before saving.
+   - Re-run the canonical closing-section deduplication pass after inline wikilinks are finalized.
 10. When you add or tighten a mechanically checkable note-contract rule in this skill, update the local contract harness in the same change.
    - This applies to rules about frontmatter, tags, headings, spacing, closing sections, wikilinks, language cleanup, emphasis, or preservation of explicitly required examples.
    - Update at least one of:
@@ -262,24 +259,18 @@ python3 -m unittest skills/article-to-obsidian-kb/tests/test_note_contract_regre
 ## Write Notes
 
 - Resolve the local roots through [references/local-config.md](references/local-config.md) before reading or writing files.
-- Follow [references/vault-conventions.md](references/vault-conventions.md) for paths, frontmatter, title rules, tags, and markdown formatting.
-- Follow [references/language-normalization.md](references/language-normalization.md) for when to keep English terms and when to translate them into Russian.
-- Follow [references/update-patterns.md](references/update-patterns.md) for how to append dated updates to existing notes.
+- Apply the canonical final-note contract from [references/vault-conventions.md](references/vault-conventions.md).
+- Apply the canonical language rules from [references/language-normalization.md](references/language-normalization.md).
+- Apply the canonical update contract from [references/update-patterns.md](references/update-patterns.md) whenever an existing note is touched.
 - Treat verbs like `append`, `merge`, `normalize`, `clean up`, and `update` as insufficient on their own when the operation has more than one plausible interpretation.
 - When the intended behavior depends on exact position or ordering, define the insertion point and order explicitly and follow the stricter rule from the references instead of improvising.
 - When migrating a legacy note into the current schema, preserve surviving frontmatter provenance such as `source` across the rewrite regardless of whether the final note is source-derived or `concept`.
 - Use the chosen analysis reference only to extract signal from the source:
   - [references/source-analysis-engineering.md](references/source-analysis-engineering.md)
   - [references/source-analysis-general.md](references/source-analysis-general.md)
-- Keep all prose in Russian.
-- Keep technical terms in English only inside Russian sentences.
-- Use only information that is directly supported by the source.
-- Keep the markdown compact and ready to save without cleanup.
-- Keep enough concrete detail that a reader can recover how the operating model actually works without reopening the source.
-- Use selective bold emphasis for key mechanisms, labels, or constraints so dense notes stay scannable, but never bold an entire list item.
 - Run one final note-compliance pass before saving any touched note:
   - apply the full final-note contract from [references/vault-conventions.md](references/vault-conventions.md) to the final saved artifact
-  - treat that file as the single source of truth for frontmatter, titles, tags, language, links, spacing, emphasis, and section-shape rules
+  - this pass is mandatory for every major rule family in that canonical contract, not just for the family you touched most recently
   - if the note was manually rewritten, merged, or changed late in the run, re-run the full contract after that late edit
   - if you updated an existing note, run this pass against the whole merged note rather than only the latest fragment
   - do not mark a note complete until it passes this full-note contract in its final saved form
@@ -289,13 +280,12 @@ python3 -m unittest skills/article-to-obsidian-kb/tests/test_note_contract_regre
   - do not mark a note complete until it survives both whole-note passes
 - Run one final update-contract pass for every touched existing note:
   - apply the full update contract from [references/update-patterns.md](references/update-patterns.md) after the note body is already final
-  - treat that file as the single source of truth for chronology, append points, merge behavior, and provenance preservation
   - verify chronology and provenance on the final saved artifact, not on an earlier draft
 - Keep these high-risk reminders visible even though the canonical rules live in the reference docs:
   - preserve surviving `source` provenance when rewriting, merging, or renaming notes
   - keep tags within `1-3` total and prefer `2-3` unless the note is genuinely single-axis
   - do not allow `ai` or `management` back into final frontmatter
-  - do not let late edits reintroduce umbrella tags, duplicate sections, duplicate related links, or de-meta prose
+  - do not let late edits reintroduce known high-risk regressions
 - Run a final output-synthesis pass before replying:
   - build an explicit touched-file ledger from the actual side effects of the run, not from memory
   - keep separate buckets for newly created source-derived notes, newly created concept notes, updated source-derived notes, and updated concept notes

@@ -91,6 +91,8 @@ Bullet format:
 
 - Update `# Связанные заметки` after every create or update.
 - Remove obvious duplicate wikilinks.
+- After inline wikilinks are finalized, remove from `# Связанные заметки` any note that is already linked inline in the body.
+- If the closing section becomes empty after that deduplication, delete the heading instead of leaving an empty or mechanically duplicated block.
 - Prefer the touched notes over loosely related older links when the closing section becomes too long.
 - After concept titles are finalized, run one more exact-title sweep through the source-derived note and convert remaining plain-text or inline-code mentions of those touched concepts into wikilinks.
 - After the exact-title sweep, run one more semantic-alias sweep for touched concepts whose canonical title differs from the wording that naturally appears in the prose.

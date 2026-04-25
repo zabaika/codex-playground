@@ -38,4 +38,4 @@ Those remain judgment tasks for the skill itself and for human review.
 
 - The checker does not prove that the chosen examples are the best examples, only that explicitly required examples were not dropped.
 - The checker does not prove that a concept should exist, only that once a rule requires a link or section shape, the saved note respects it.
-- The checker does not replace manual review for routing, deduplication quality, or concept selection.
+- The checker does not replace manual review for routing, semantic deduplication quality, or concept selection.

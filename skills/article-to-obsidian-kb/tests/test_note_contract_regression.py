@@ -89,6 +89,49 @@ class CheckNoteContractTests(unittest.TestCase):
         codes = {violation.code for violation in violations}
         self.assertIn("closing.empty-related-section", codes)
 
+    def test_related_section_must_not_repeat_inline_wikilinks(self) -> None:
+        content = """---
+title: Test related dedup
+source:
+  - https://example.com
+type: general
+tags:
+  - metrics
+date: 2026
+---
+Короткая заметка со ссылкой на [[DX Core 4]] прямо в теле.
+## Ключевые тезисы
+- **Тезис.** Связь с [[Human-equivalent hours]] уже дана inline.
+## Практика
+- **Практика.** Дедуплицируйте closing section после вставки inline wikilinks.
+## Подводные камки и антипаттерны
+- **Ошибка.** Механически дублировать те же ссылки в closing block.
+# Связанные заметки
+[[DX Core 4]]
+[[Human-equivalent hours]]
+"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            fixture = Path(tmpdir) / "Test related dedup.md"
+            fixture.write_text(content, encoding="utf-8")
+            violations = collect_violations(
+                fixture,
+                expect="source",
+                required_headings=[
+                    "## Ключевые тезисы",
+                    "## Практика",
+                    "## Подводные камки и антипаттерны",
+                ],
+                enforce_leading_bold_under=[
+                    "## Ключевые тезисы",
+                    "## Практика",
+                    "## Подводные камки и антипаттерны",
+                ],
+                allow_latin_terms=["DX"],
+            )
+        codes = {violation.code for violation in violations}
+        self.assertIn("closing.duplicate-inline-link:DX Core 4", codes)
+        self.assertIn("closing.duplicate-inline-link:Human-equivalent hours", codes)
+
     def test_clean_note_passes_full_contract(self) -> None:
         fixture = Path(__file__).resolve().parent / "fixtures" / "clean-general-note.md"
         violations = collect_violations(

@@ -172,6 +172,7 @@ Frontmatter is part of the note schema, not optional decoration.
 - On first mention, use the Russian form and add the English term in parentheses only when the English wording materially helps recognition or search.
 - Use only information supported by the source.
 - Keep the structure compact, but do not over-compress the content.
+- The final markdown must be save-ready and must not require an extra cleanup pass for spacing, headings, or section hygiene.
 - Prefer concrete behavioral requirements over vague words like `append`, `clean up`, `improve`, or `normalize` when the workflow depends on one exact operation.
 - When a rule can be interpreted in more than one plausible way, spell out the intended insertion point, ordering, and stopping condition instead of relying on implication.
 - Preserve concrete mechanisms when the source states them explicitly, especially team scope, owned systems, partner teams, named metrics, prioritization logic, AI/platform details, and major constraints.
