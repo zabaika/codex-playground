@@ -224,15 +224,15 @@ For knowledge-base notes, keep section design additive rather than repetitive:
 - when a workflow already has constrained tag families or restricted-use tags, reapply those family rules during the final save pass instead of letting late edits reintroduce umbrella tags
 - creating a new tag should be harder than reusing an existing one: admit a new tag only when no existing canonical tag or family member is close enough and the new tag is likely to be reused across multiple future notes
 - if one or two existing tags already describe the note accurately enough, prefer that combination over inventing a new tag
-- keep note tags sparse: use `1-3` tags per note and never more than `3`
-- prefer `2-3` tags by default and allow a single tag only when the note truly has one dominant retrieval axis and any second tag would be filler
+- keep note tags sparse
+- default to the smallest tag set that still captures the note's independent retrieval value
 - when creating concepts, taxonomy nodes, or other durable knowledge entities, run a canonical-entity check before creating anything new
 - if a nearby existing entity already captures the same meaning, update the canonical existing entity instead of creating a synonym or near-duplicate
 - title differences, translations, word-order variants, and small framing changes are not enough to justify a new knowledge node
 - links, tags, and later references should point to the canonical existing entity rather than to a local duplicate name
-- when a knowledge workflow keeps dated log sections such as `Additional insights`, `Evidence`, or `Observed practices`, treat them as chronological append-only logs by default: older entries first, newer entries last
-- for such dated log sections, define the exact insertion point for new entries; `append` should mean after the last existing dated bullet and before the next heading or end-of-file unless latest-first ordering was explicitly requested
+- when a knowledge workflow uses dated append-only log sections, define one canonical ordering policy and one canonical insertion point in the workflow-local contract instead of improvising append behavior during updates
 - when one note explicitly mentions another existing note, concept, or durable knowledge node in the prose, write it as a wikilink instead of plain text
+- for file-producing workflows that save into external, synced, or otherwise race-prone storage, finalize the artifact in staging, perform one destination write, then immediately read the destination back and verify the saved state before continuing; do not burn retries on blind rewrites against an unverified write result
 - when the canonical target title is longer, broader, translated, or otherwise less natural than the wording that appears in the prose, keep the canonical target but link through an alias instead of leaving the shorter wording as plain text
 - run this alias-link pass after final create-vs-update decisions so terms like abbreviations, English source labels, shortened metric names, or compact phrases still resolve to the canonical knowledge node
 - when a note already links to another knowledge object inline in the body, do not repeat the same link mechanically in a closing related-notes section; keep the closing block for net-new navigation context instead of duplicating already established graph edges

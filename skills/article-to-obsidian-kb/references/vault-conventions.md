@@ -158,7 +158,9 @@ Frontmatter is part of the note schema, not optional decoration.
 - Do not use `management` at all; replace it with narrower existing tags or with a stable narrower tag admitted through the new-tag gate.
 - Treat any tag that starts collecting notes from several different retrieval intents as suspicious; narrow its meaning, convert it into a constrained family, or split off one stable narrower tag before it becomes a new umbrella default.
 - Keep note tags sparse: use `1-3` tags per note and never more than `3`.
-- Prefer `2-3` tags by default and allow a single tag only when the note truly has one dominant retrieval axis and any second tag would be filler.
+- Default to the smallest tag set that still captures the note's independent retrieval value.
+- Prefer `1-2` tags when they already describe the note precisely enough.
+- Add a third tag only when it contributes a clearly separate retrieval angle rather than just making the tag set feel more complete.
 - Before creating a new tag, compare the candidate against the nearest 3-5 existing vault tags or constrained-family members and try to reuse those first.
 - Create a new tag only when no existing canonical tag or constrained-family member is close enough in meaning and the new tag represents a durable retrieval axis likely to be reused across multiple future notes.
 - If one or two existing tags describe the note accurately enough, prefer that combination over inventing a new tag.

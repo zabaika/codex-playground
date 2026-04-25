@@ -98,3 +98,10 @@ Bullet format:
 - After the exact-title sweep, run one more semantic-alias sweep for touched concepts whose canonical title differs from the wording that naturally appears in the prose.
 - Use that sweep for source terms, abbreviations, English labels, shortened metric names, or compact phrases that should stay visible in the text but now point at a broader canonical concept title.
 - When the visible wording should stay shorter than the canonical title, use an Obsidian alias instead of leaving the mention as plain text.
+
+## Write Path Hygiene
+
+- Finalize the note content in staging first and then perform one destination write for the finished artifact.
+- Prefer a single copy or move of the finalized artifact over several incremental destination rewrites.
+- Immediately read the destination note back after that write and verify the expected final state before running further checks, searches, or user-facing reporting.
+- If the read-back content does not match the intended final artifact, stop and investigate the mismatch before retrying; do not spend repeated attempts on blind rewrites against a stale assumption about what was saved.

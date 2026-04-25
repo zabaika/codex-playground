@@ -81,7 +81,8 @@ python3 scripts/detect_source_route.py --source-file "[SOURCE_FILE]"
 8. Before saving, run the canonical tag pass from [references/vault-conventions.md](references/vault-conventions.md).
 9. Re-check final titles, tags, links, duplicate risk, and chronology against the canonical contracts before saving.
    - Re-run the canonical closing-section deduplication pass after inline wikilinks are finalized.
-10. When you add or tighten a mechanically checkable note-contract rule in this skill, update the local contract harness in the same change.
+10. After each destination write, run the canonical post-write verification from [references/update-patterns.md](references/update-patterns.md) before continuing with more checks, searches, or reporting.
+11. When you add or tighten a mechanically checkable note-contract rule in this skill, update the local contract harness in the same change.
    - This applies to rules about frontmatter, tags, headings, spacing, closing sections, wikilinks, language cleanup, emphasis, or preservation of explicitly required examples.
    - Update at least one of:
      - the checker under `scripts/`
@@ -89,7 +90,7 @@ python3 scripts/detect_source_route.py --source-file "[SOURCE_FILE]"
      - a clean passing fixture
      - a `unittest` that proves the new rule is enforced
    - Do not treat semantic source understanding as testable by this harness. The harness exists to protect deterministic output constraints after note drafting, not to prove that every future source was interpreted perfectly.
-11. When this skill's contract layer changes, run the local note-contract tests before finishing the change.
+12. When this skill's contract layer changes, run the local note-contract tests before finishing the change.
    - Treat changes to any of these files as a required test trigger:
      - `SKILL.md`
      - `references/vault-conventions.md`
@@ -283,7 +284,7 @@ python3 -m unittest skills/article-to-obsidian-kb/tests/test_note_contract_regre
   - verify chronology and provenance on the final saved artifact, not on an earlier draft
 - Keep these high-risk reminders visible even though the canonical rules live in the reference docs:
   - preserve surviving `source` provenance when rewriting, merging, or renaming notes
-  - keep tags within `1-3` total and prefer `2-3` unless the note is genuinely single-axis
+  - keep tags within `1-3` total and default to the smallest accurate tag set
   - do not allow `ai` or `management` back into final frontmatter
   - do not let late edits reintroduce known high-risk regressions
 - Run a final output-synthesis pass before replying:
