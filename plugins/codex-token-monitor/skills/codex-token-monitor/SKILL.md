@@ -144,8 +144,8 @@ Field contract:
 - `delta.in`: latest per-update input tokens
 - `delta.out`: latest per-update output tokens
 - `delta.total`: latest per-update total tokens
-- `limits.day`: primary limit remaining percent plus reset in minutes
-- `limits.week`: secondary limit remaining percent plus reset in minutes
+- `limits.day`: primary limit remaining percent plus reset in hours with one decimal place
+- `limits.week`: secondary limit remaining percent plus reset in hours with one decimal place
 
 Source contract in `brief`:
 
@@ -207,5 +207,5 @@ Field source contract in `full`:
 Rate-limit freshness rule:
 
 - `rate_limits` arrive only with `token_count`
-- if a window reset has already passed and no newer `token_count` exists yet, do not keep rendering the expired percentage with `r 0m`
+- if a window reset has already passed and no newer `token_count` exists yet, do not keep rendering the expired percentage with `r 0.0h`
 - instead, roll the reset forward to the next interval and clear stale usage until the next authoritative update arrives

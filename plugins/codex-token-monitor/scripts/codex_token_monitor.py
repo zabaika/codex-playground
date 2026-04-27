@@ -279,12 +279,12 @@ def _format_reset(epoch_seconds: int | None) -> str:
     return f"{reset_dt.strftime('%H:%M:%S %Z')} ({_format_age_seconds(delta_seconds)})"
 
 
-def _format_reset_minutes(epoch_seconds: int | None) -> str:
+def _format_reset_hours(epoch_seconds: int | None) -> str:
     if epoch_seconds is None:
         return "-"
     delta_seconds = max(0, epoch_seconds - int(time.time()))
-    minutes = delta_seconds // 60
-    return f"{minutes}m"
+    hours = delta_seconds / 3600.0
+    return f"{hours:.1f}h"
 
 
 def _colorize(text: str, color: str, enabled: bool) -> str:
@@ -362,7 +362,7 @@ def _render_rate_window_brief(label: str, window: RateWindow | None, use_color: 
     if window is None:
         return f"{label} -"
     remaining = max(0.0, 100.0 - window.used_percent)
-    status = f"{label} {remaining:.0f}% left r {_format_reset_minutes(window.resets_at)}"
+    status = f"{label} {remaining:.0f}% left r {_format_reset_hours(window.resets_at)}"
     return _colorize(status, _rate_color(window.used_percent), use_color)
 
 

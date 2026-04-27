@@ -132,7 +132,7 @@ Example:
 ```text
 age     limits 10m 5s
 delta   in +210,755 | out +195 | total +210,950
-limits  day 91% left r 282m | week 86% left r 8016m
+limits  day 91% left r 4.7h | week 86% left r 133.6h
 ```
 
 Field meanings:
@@ -144,7 +144,7 @@ Field meanings:
 - `limits.day`: remaining percentage in the primary rate-limit window
 - `limits.week`: remaining percentage in the secondary rate-limit window
 - `left`: remaining percentage before that window is exhausted
-- `r`: time until reset in minutes
+- `r`: time until reset in hours with one decimal place
 
 Source mapping in `brief`:
 
@@ -241,7 +241,7 @@ Colors are enabled only in TTY mode.
 `rate_limits` are only refreshed when Codex emits a new `token_count` event.
 If a reset time has already passed but no newer `token_count` has arrived yet,
 the monitor now rolls that window forward to the next interval and clears the
-stale usage instead of rendering the old percentage with `r 0m`.
+stale usage instead of rendering the old percentage with `r 0.0h`.
 
 ## Repo-local plugin wiring
 

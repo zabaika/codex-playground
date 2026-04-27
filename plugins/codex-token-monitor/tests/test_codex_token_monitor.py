@@ -493,8 +493,8 @@ class CodexTokenMonitorTests(unittest.TestCase):
         self.assertIn("limits", rendered)
         self.assertIn("day", rendered)
         self.assertIn("week", rendered)
-        self.assertIn("day 52% left r 10m", rendered)
-        self.assertIn("week 90% left r 30m", rendered)
+        self.assertIn("day 52% left r 0.2h", rendered)
+        self.assertIn("week 90% left r 0.5h", rendered)
         self.assertNotIn("time", rendered)
         self.assertNotIn("sid", rendered)
         self.assertNotIn("tokens", rendered)
@@ -540,9 +540,9 @@ class CodexTokenMonitorTests(unittest.TestCase):
                 limit_sample=global_sample,
             )
 
-        self.assertIn("day 36% left r 10m", rendered)
-        self.assertIn("week 67% left r 30m", rendered)
-        self.assertNotIn("day 52% left r 10m", rendered)
+        self.assertIn("day 36% left r 0.2h", rendered)
+        self.assertIn("week 67% left r 0.5h", rendered)
+        self.assertNotIn("day 52% left r 0.2h", rendered)
 
     def test_build_snapshot_text_full_contains_time(self) -> None:
         sample = self._make_sample(
@@ -582,9 +582,9 @@ class CodexTokenMonitorTests(unittest.TestCase):
         with mock.patch.object(MODULE.time, "time", return_value=1_776_686_435):
             rendered = MODULE.build_snapshot_text(state, mode="brief")
 
-        self.assertIn("day 100% left r 300m", rendered)
-        self.assertIn("week 86% left r 240m", rendered)
-        self.assertNotIn("day 39% left r 0m", rendered)
+        self.assertIn("day 100% left r 5.0h", rendered)
+        self.assertIn("week 86% left r 4.0h", rendered)
+        self.assertNotIn("day 39% left r 0.0h", rendered)
 
     def test_build_snapshot_text_rolls_expired_rate_window_forward_in_full(self) -> None:
         sample = self._make_sample(
