@@ -154,6 +154,12 @@ class TelegramConnectorTests(unittest.TestCase):
             150,
         )
 
+    def test_resolve_top_models_default_limit_reads_bridge_config(self) -> None:
+        self.assertEqual(
+            telegram_connector.resolve_top_models_default_limit({"bridge": {"top_models_default_limit": "7"}}),
+            7,
+        )
+
     def test_resolve_sync_mode_limit_reads_bridge_config(self) -> None:
         self.assertEqual(
             telegram_connector.resolve_sync_mode_limit({"sync": {"backfill_limit": "120"}}, "backfill"),
@@ -200,6 +206,15 @@ class TelegramConnectorTests(unittest.TestCase):
 
     def test_normalize_bridge_command_text_supports_agent_stats_command(self) -> None:
         self.assertEqual(telegram_connector.normalize_bridge_command_text("agent-stats"), "/agent-stats")
+
+    def test_normalize_bridge_command_text_supports_top_models_command(self) -> None:
+        self.assertEqual(telegram_connector.normalize_bridge_command_text("top-models"), "/top-models")
+
+    def test_parse_top_models_request_supports_debug_flag(self) -> None:
+        self.assertEqual(
+            telegram_connector.parse_top_models_request("/top-models 3 debug", default_limit=5),
+            (3, True),
+        )
 
     def test_normalize_bridge_command_text_strips_bot_suffix(self) -> None:
         self.assertEqual(
@@ -861,6 +876,164 @@ class TelegramConnectorTests(unittest.TestCase):
             telegram_connector.subprocess.run = original_run
         self.assertEqual(captured["chat_id"], 42)
         self.assertIn("Digest stats:", str(captured["text"]))
+
+    def test_handle_history_command_serves_top_models_without_subprocess(self) -> None:
+        update = {
+            "update_id": 4,
+            "message": {
+                "date": 123,
+                "text": "/top-models 2",
+                "chat": {"id": 42, "type": "private"},
+                "from": {"id": 7, "username": "alice"},
+            },
+        }
+        config = {
+            "bridge": {
+                "allowed_chat_ids": "42",
+                "text_chunk_size": "3900",
+                "top_models_api_url": "https://example.invalid/top-models",
+                "top_models_timeout_seconds": "15",
+                "top_models_default_limit": "5",
+                "top_models_cache_ttl_seconds": "300",
+            }
+        }
+        original_fetch = telegram_connector.fetch_top_models_payload
+        original_send_chunks = telegram_connector.send_text_chunks
+        original_run = telegram_connector.subprocess.run
+        captured: dict[str, object] = {}
+
+        telegram_connector.fetch_top_models_payload = lambda **kwargs: {
+            "updatedAt": "2026-04-27T03:17:24.821Z",
+            "source": "openrouter-models-api",
+            "rankingVersion": "2026-04-27.v1",
+            "fallback": {"id": "openrouter/free"},
+            "models": [
+                {
+                    "rank": 1,
+                    "name": "Model One",
+                    "score": 1000,
+                    "contextLength": 262144,
+                    "maxCompletionTokens": 32768,
+                    "supportsTools": True,
+                    "supportsStructuredOutputs": True,
+                    "supportsReasoning": False,
+                    "latencyMs": 1414,
+                    "healthStatus": "passed",
+                    "reason": "Tools, structured outputs",
+                },
+                {
+                    "rank": 2,
+                    "name": "Model Two",
+                    "score": 900,
+                    "contextLength": 131072,
+                    "maxCompletionTokens": 8192,
+                    "supportsTools": False,
+                    "supportsStructuredOutputs": False,
+                    "supportsReasoning": True,
+                    "latencyMs": None,
+                    "healthStatus": "not_probed",
+                    "reason": "Reasoning model",
+                },
+            ],
+        }
+        telegram_connector.send_text_chunks = (
+            lambda token, chat_id, text, chunk_size=3500, parse_mode=None: captured.update({"chat_id": chat_id, "text": text})
+        )
+
+        def fail_run(*args, **kwargs):
+            raise AssertionError("subprocess.run should not be called for /top-models")
+
+        telegram_connector.subprocess.run = fail_run
+        try:
+            telegram_connector.handle_history_command("bot-token", config, update, secret_env={})
+        finally:
+            telegram_connector.fetch_top_models_payload = original_fetch
+            telegram_connector.send_text_chunks = original_send_chunks
+            telegram_connector.subprocess.run = original_run
+
+        self.assertEqual(captured["chat_id"], 42)
+        self.assertIn("Top free LLM models", str(captured["text"]))
+        self.assertIn("1. Model One", str(captured["text"]))
+        self.assertIn("2. Model Two", str(captured["text"]))
+
+    def test_handle_history_command_serves_top_models_debug_without_subprocess(self) -> None:
+        update = {
+            "update_id": 5,
+            "message": {
+                "date": 123,
+                "text": "/top-models 1 debug",
+                "chat": {"id": 42, "type": "private"},
+                "from": {"id": 7, "username": "alice"},
+            },
+        }
+        config = {
+            "bridge": {
+                "allowed_chat_ids": "42",
+                "text_chunk_size": "3900",
+                "top_models_api_url": "https://example.invalid/top-models",
+                "top_models_timeout_seconds": "15",
+                "top_models_default_limit": "5",
+                "top_models_cache_ttl_seconds": "300",
+            }
+        }
+        original_fetch = telegram_connector.fetch_top_models_payload
+        original_send_chunks = telegram_connector.send_text_chunks
+        original_run = telegram_connector.subprocess.run
+        captured: dict[str, object] = {}
+
+        telegram_connector.fetch_top_models_payload = lambda **kwargs: {
+            "updatedAt": "2026-04-27T03:17:24.821Z",
+            "source": "openrouter-models-api",
+            "rankingVersion": "2026-04-27.v1",
+            "fallback": {"id": "openrouter/free"},
+            "models": [
+                {
+                    "rank": 1,
+                    "id": "test/model:free",
+                    "name": "Model One",
+                    "score": 1000,
+                    "metadataScore": 600,
+                    "healthScore": 400,
+                    "latencyScore": 60,
+                    "liteEvalScore": 680,
+                    "contextLength": 262144,
+                    "maxCompletionTokens": 32768,
+                    "supportsTools": True,
+                    "supportsToolChoice": True,
+                    "supportsStructuredOutputs": True,
+                    "supportsResponseFormat": True,
+                    "supportsReasoning": False,
+                    "supportsIncludeReasoning": False,
+                    "supportsSeed": True,
+                    "supportsStop": True,
+                    "latencyMs": 1414,
+                    "healthStatus": "passed",
+                    "evalSuite": "lite-agent-eval-v1",
+                    "evalSummary": {"status": "completed", "passed": 2, "total": 3},
+                    "reason": "Tools, structured outputs",
+                    "instabilityPenalty": 0,
+                }
+            ],
+        }
+        telegram_connector.send_text_chunks = (
+            lambda token, chat_id, text, chunk_size=3500, parse_mode=None: captured.update({"chat_id": chat_id, "text": text})
+        )
+
+        def fail_run(*args, **kwargs):
+            raise AssertionError("subprocess.run should not be called for /top-models debug")
+
+        telegram_connector.subprocess.run = fail_run
+        try:
+            telegram_connector.handle_history_command("bot-token", config, update, secret_env={})
+        finally:
+            telegram_connector.fetch_top_models_payload = original_fetch
+            telegram_connector.send_text_chunks = original_send_chunks
+            telegram_connector.subprocess.run = original_run
+
+        self.assertEqual(captured["chat_id"], 42)
+        self.assertIn("id: test/model:free", str(captured["text"]))
+        self.assertIn("metadataScore: 600", str(captured["text"]))
+        self.assertIn("evalSummary:", str(captured["text"]))
 
 
 if __name__ == "__main__":

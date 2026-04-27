@@ -55,7 +55,7 @@ DIGEST_FILE = APP_DIR / "telegram_digest.py"
 EXPORT_DIR = DATA_DIR / "exports"
 OP_REFERENCE_PREFIX = shared_secrets.OP_REFERENCE_PREFIX
 _SECRET_CACHE = shared_secrets._SECRET_CACHE
-SUPPORTED_BRIDGE_COMMANDS = {"help", "agent-stats", "ocr", "exportcsv", "ocrhistory", "backfill", "tail", "update", "digest"}
+SUPPORTED_BRIDGE_COMMANDS = {"help", "agent-stats", "top-models", "ocr", "exportcsv", "ocrhistory", "backfill", "tail", "update", "digest"}
 HISTORY_CLIENT_SECRET_ENV_MAP = {
     "TELEGRAM_API_ID": ("telethon", "api_id", "Telegram API ID"),
     "TELEGRAM_API_HASH": ("secrets", "api_hash", "Telegram API hash"),
@@ -79,6 +79,20 @@ SAFE_SUBPROCESS_ENV_KEYS = {
     "TMP",
     "TMPDIR",
     "USER",
+}
+TOP_MODELS_DEFAULT_URL = "https://shir-man.com/api/free-llm/top-models"
+TOP_MODELS_DEFAULT_TIMEOUT_SECONDS = 15
+TOP_MODELS_DEFAULT_LIMIT = 5
+TOP_MODELS_DEFAULT_CACHE_TTL_SECONDS = 300
+TOP_MODELS_RETRY_ATTEMPTS = 3
+TOP_MODELS_USER_AGENT = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/135.0.0.0 Safari/537.36"
+)
+_TOP_MODELS_CACHE: dict[str, Any] = {
+    "payload": None,
+    "fetched_at_monotonic": None,
 }
 
 
@@ -183,6 +197,41 @@ def resolve_agent_stats_row_limit(config: dict[str, Any] | None = None) -> int:
     except ValueError:
         value = 200
     return max(20, min(2000, value))
+
+
+def resolve_top_models_api_url(config: dict[str, Any] | None = None) -> str:
+    runtime_config = config if config is not None else load_runtime_config()
+    return get_config_value(runtime_config, "bridge", "top_models_api_url") or TOP_MODELS_DEFAULT_URL
+
+
+def resolve_top_models_timeout_seconds(config: dict[str, Any] | None = None) -> int:
+    runtime_config = config if config is not None else load_runtime_config()
+    raw = get_config_value(runtime_config, "bridge", "top_models_timeout_seconds")
+    try:
+        value = int(raw) if raw else TOP_MODELS_DEFAULT_TIMEOUT_SECONDS
+    except ValueError:
+        value = TOP_MODELS_DEFAULT_TIMEOUT_SECONDS
+    return max(3, min(60, value))
+
+
+def resolve_top_models_default_limit(config: dict[str, Any] | None = None) -> int:
+    runtime_config = config if config is not None else load_runtime_config()
+    raw = get_config_value(runtime_config, "bridge", "top_models_default_limit")
+    try:
+        value = int(raw) if raw else TOP_MODELS_DEFAULT_LIMIT
+    except ValueError:
+        value = TOP_MODELS_DEFAULT_LIMIT
+    return max(1, min(20, value))
+
+
+def resolve_top_models_cache_ttl_seconds(config: dict[str, Any] | None = None) -> int:
+    runtime_config = config if config is not None else load_runtime_config()
+    raw = get_config_value(runtime_config, "bridge", "top_models_cache_ttl_seconds")
+    try:
+        value = int(raw) if raw else TOP_MODELS_DEFAULT_CACHE_TTL_SECONDS
+    except ValueError:
+        value = TOP_MODELS_DEFAULT_CACHE_TTL_SECONDS
+    return max(0, min(3600, value))
 
 
 def is_channel_token(value: str) -> bool:
@@ -494,6 +543,8 @@ def command_help_text() -> str:
         "/help\n"
         "/agent-stats\n"
         "  show local OpenAI usage and prompt-cache summary for digest runs\n"
+        "/top-models [limit] [debug]\n"
+        "  show the current top free models from the configured external ranking API\n"
         "/backfill [channel] [limit] [since=YYYY-MM-DD] [until=YYYY-MM-DD] [media] [bot|user|auto]\n"
         "  historical load into SQLite\n"
         "/tail [channel] [limit] [since=YYYY-MM-DD] [until=YYYY-MM-DD] [media|ocr|read] [bot|user|auto]\n"
@@ -526,9 +577,174 @@ def command_help_text() -> str:
         "/digest since=week\n"
         "/digest @vcnews since=2026-03-15 until=2026-03-16\n"
         "/agent-stats\n"
+        "/top-models\n"
+        "/top-models 10\n"
+        "/top-models 3 debug\n"
         "/exportcsv @vcnews since=2026-03-15\n"
         "/ocr @vcnews since=2026-03-15 until=2026-03-16"
     )
+
+
+def parse_top_models_request(text: str, *, default_limit: int) -> tuple[int, bool]:
+    parts = shlex.split(text)
+    if not parts or parts[0].lower() != "/top-models":
+        raise ValueError("Unsupported command")
+    limit = default_limit
+    debug = False
+    for part in parts[1:]:
+        lowered = part.lower()
+        if part.isdigit():
+            limit = max(1, min(20, int(part)))
+            continue
+        if lowered == "debug":
+            debug = True
+            continue
+        raise ValueError("Usage: /top-models [limit] [debug]")
+    return limit, debug
+
+
+def humanize_token_count(value: Any) -> str:
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return "?"
+    if number >= 1000:
+        rounded = number / 1000
+        if rounded.is_integer():
+            return f"{int(rounded)}k"
+        return f"{rounded:.1f}k"
+    return str(number)
+
+
+def format_top_models_updated_at(value: str) -> str:
+    raw = value.strip()
+    if not raw:
+        return "unknown"
+    try:
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return raw
+    return parsed.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+
+
+def format_top_models_message(payload: dict[str, Any], *, limit: int, debug: bool = False) -> str:
+    models = payload.get("models")
+    if not isinstance(models, list):
+        raise SystemExit("Top-models API returned an unexpected payload.")
+
+    lines = [
+        "Top free LLM models",
+        f"Обновлено: {format_top_models_updated_at(str(payload.get('updatedAt', '')))}",
+        f"Источник: {str(payload.get('source', '')).strip() or 'unknown'}",
+        f"Версия ранжирования: {str(payload.get('rankingVersion', '')).strip() or 'unknown'}",
+    ]
+    fallback = payload.get("fallback") or {}
+    fallback_id = str(fallback.get("id", "")).strip()
+    if fallback_id:
+        lines.append(f"Fallback: {fallback_id}")
+    lines.append("")
+
+    selected_models = models[:limit]
+    if not selected_models:
+        lines.append("Список моделей пуст.")
+        return "\n".join(lines)
+
+    for item in selected_models:
+        if not isinstance(item, dict):
+            continue
+        rank = item.get("rank", "?")
+        name = str(item.get("name", "")).strip() or str(item.get("id", "")).strip() or "unknown model"
+        score = item.get("score", "?")
+        context_length = humanize_token_count(item.get("contextLength"))
+        max_completion_tokens = humanize_token_count(item.get("maxCompletionTokens"))
+        latency_ms = item.get("latencyMs")
+        latency_text = f"{latency_ms} ms" if latency_ms not in {None, ""} else "n/a"
+        health_status = str(item.get("healthStatus", "")).strip() or "unknown"
+        capabilities: list[str] = []
+        if item.get("supportsTools"):
+            capabilities.append("tools")
+        if item.get("supportsStructuredOutputs"):
+            capabilities.append("structured")
+        if item.get("supportsReasoning"):
+            capabilities.append("reasoning")
+        capability_text = ", ".join(capabilities) if capabilities else "basic"
+        reason = str(item.get("reason", "")).strip()
+        lines.append(f"{rank}. {name}")
+        lines.append(
+            f"score {score} | ctx {context_length} | out {max_completion_tokens} | {capability_text} | {latency_text} | {health_status}"
+        )
+        if reason:
+            lines.append(reason)
+        if debug:
+            debug_fields = [
+                ("id", item.get("id")),
+                ("metadataScore", item.get("metadataScore")),
+                ("healthScore", item.get("healthScore")),
+                ("latencyScore", item.get("latencyScore")),
+                ("liteEvalScore", item.get("liteEvalScore")),
+                ("supportsToolChoice", item.get("supportsToolChoice")),
+                ("supportsResponseFormat", item.get("supportsResponseFormat")),
+                ("supportsIncludeReasoning", item.get("supportsIncludeReasoning")),
+                ("supportsSeed", item.get("supportsSeed")),
+                ("supportsStop", item.get("supportsStop")),
+                ("evalSuite", item.get("evalSuite")),
+                ("healthStatus", item.get("healthStatus")),
+                ("latencyMs", item.get("latencyMs")),
+                ("instabilityPenalty", item.get("instabilityPenalty")),
+            ]
+            for key, value in debug_fields:
+                lines.append(f"{key}: {value}")
+            eval_summary = item.get("evalSummary")
+            if isinstance(eval_summary, dict):
+                lines.append(
+                    "evalSummary: "
+                    + json.dumps(eval_summary, ensure_ascii=False, sort_keys=True, separators=(", ", ": "))
+                )
+        lines.append("")
+
+    while lines and not lines[-1]:
+        lines.pop()
+    return "\n".join(lines)
+
+
+def fetch_top_models_payload(*, url: str, timeout_seconds: int, cache_ttl_seconds: int) -> dict[str, Any]:
+    cached_payload = _TOP_MODELS_CACHE.get("payload")
+    fetched_at_monotonic = _TOP_MODELS_CACHE.get("fetched_at_monotonic")
+    now_monotonic = time.monotonic()
+    if (
+        cache_ttl_seconds > 0
+        and isinstance(cached_payload, dict)
+        and isinstance(fetched_at_monotonic, (int, float))
+        and now_monotonic - float(fetched_at_monotonic) <= cache_ttl_seconds
+    ):
+        return cached_payload
+
+    request_obj = request.Request(
+        url,
+        headers={
+            "Accept": "application/json",
+            "User-Agent": TOP_MODELS_USER_AGENT,
+        },
+        method="GET",
+    )
+    last_error: BaseException | None = None
+    for attempt in range(1, TOP_MODELS_RETRY_ATTEMPTS + 1):
+        try:
+            with request.urlopen(request_obj, timeout=timeout_seconds) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+            if not isinstance(payload, dict):
+                raise SystemExit("Top-models API returned an unexpected payload.")
+            _TOP_MODELS_CACHE["payload"] = payload
+            _TOP_MODELS_CACHE["fetched_at_monotonic"] = now_monotonic
+            return payload
+        except error.HTTPError as exc:
+            raise SystemExit(f"Top-models API HTTP {exc.code}.") from exc
+        except (TimeoutError, error.URLError, OSError) as exc:
+            last_error = exc
+            if attempt >= TOP_MODELS_RETRY_ATTEMPTS:
+                break
+            time.sleep(attempt)
+    raise SystemExit(f"Top-models API request failed: {str(last_error) or last_error.__class__.__name__}")
 
 
 def resolve_history_db_path(config: dict[str, Any]) -> Path:
@@ -716,6 +932,24 @@ def handle_history_command(token: str, config: dict[str, Any], update: dict[str,
             send_text_message(token, chat_id, "Digest stats are not available yet. Run at least one /digest request first.")
             return
         send_text_chunks(token, chat_id, format_digest_usage_summary(summary), chunk_size=resolve_text_chunk_size(config))
+        return
+    if text.startswith("/top-models"):
+        try:
+            limit, debug = parse_top_models_request(text, default_limit=resolve_top_models_default_limit(config))
+        except ValueError as exc:
+            send_text_message(token, chat_id, str(exc))
+            return
+        try:
+            payload = fetch_top_models_payload(
+                url=resolve_top_models_api_url(config),
+                timeout_seconds=resolve_top_models_timeout_seconds(config),
+                cache_ttl_seconds=resolve_top_models_cache_ttl_seconds(config),
+            )
+            formatted = format_top_models_message(payload, limit=limit, debug=debug)
+        except SystemExit as exc:
+            send_text_message(token, chat_id, redact_sensitive_text(str(exc)))
+            return
+        send_text_chunks(token, chat_id, formatted, chunk_size=resolve_text_chunk_size(config))
         return
 
     try:

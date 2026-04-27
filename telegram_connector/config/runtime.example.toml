@@ -27,6 +27,14 @@ allowed_usernames = ""
 text_chunk_size = "3900"
 # Maximum number of latest ai_usage_log rows scanned by /agent-stats.
 agent_stats_row_limit = "200"
+# External ranking API used by /top-models.
+top_models_api_url = "https://shir-man.com/api/free-llm/top-models"
+# Network timeout in seconds for one /top-models attempt.
+top_models_timeout_seconds = "15"
+# Default number of rows returned by /top-models when limit is omitted.
+top_models_default_limit = "5"
+# In-memory cache TTL in seconds for /top-models inside the bridge process.
+top_models_cache_ttl_seconds = "300"
 # history_client_path = "/absolute/path/to/telegram_history_client.py"
 
 [channels]

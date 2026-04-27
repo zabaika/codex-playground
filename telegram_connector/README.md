@@ -137,6 +137,10 @@ For the history client:
 - `bridge.allowed_usernames` additionally restricts bot-triggered commands to specific sender usernames; `@name` and `name` are treated the same
 - `bridge.text_chunk_size` controls how long Telegram text replies may grow before the bot splits them into multiple messages
 - `bridge.agent_stats_row_limit` limits `/agent-stats` to the latest N rows from `ai_usage_log`, so the command stays fast as the database grows
+- `bridge.top_models_api_url` configures the external ranking source used by `/top-models`
+- `bridge.top_models_timeout_seconds` bounds one `/top-models` fetch attempt
+- `bridge.top_models_default_limit` controls how many models `/top-models` returns when limit is omitted
+- `bridge.top_models_cache_ttl_seconds` caches the last `/top-models` payload in the running bridge process for a short period
 - `[digest]` stores default daily-digest behavior
 - `digest.separator_text` optionally appends the configured divider twice to the end of each digest message; leave it empty to disable the separator
 - `digest.since` and `digest.until` define the default analysis window; `yesterday` is the recommended morning default
@@ -244,6 +248,8 @@ Bot command quick reference:
 
 - `/agent-stats`
   show local OpenAI usage and prompt-cache summary from recent digest runs
+- `/top-models [limit] [debug]`
+  show the current top free models from the configured external ranking API
 - `/backfill [channel] [limit] [since=...] [until=...] [media] [bot|user|auto]`
   historical load into SQLite
 - `/tail [channel] [limit] [since=...] [until=...] [media|ocr|read] [bot|user|auto]`
@@ -269,6 +275,8 @@ Bot command notes:
 - `/digest` keeps processing defaults, sync behavior, batch size, prompts, and schedule in config; bot parameters only override `channel`, `since`, `until`, and auth mode
 - `/digest -3d` is a shorthand for a one-day digest window with `since=-3d` and `until=-3d`
 - `/agent-stats` is handled locally by the bridge and scans only the latest configured `ai_usage_log` rows
+- `/top-models` is handled locally by the bridge, uses the configured external ranking API, and serves short-term results from in-memory cache inside the running bridge process
+- `/top-models ... debug` switches the formatter into an expanded per-model view and includes the raw ranking/eval fields that are normally hidden in the compact summary
 
 Start the bridge manually:
 
