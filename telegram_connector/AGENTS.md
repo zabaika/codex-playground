@@ -34,10 +34,15 @@ If README, code, and tests disagree, update them together.
 
 ## Project Rules
 
+- Canonical CLI sync entrypoint is `sync --mode <backfill|tail|update>`.
+- Canonical digest CLI entrypoint is `python3 telegram_connector/telegram_digest.py run`.
 - Keep bot UX and CLI internals clearly separated.
 - Preserve config-driven defaults for digest, sync, OCR, and export flows.
+- Keep `digest` config-driven and only override `channel`, `since`, `until`, or auth mode explicitly per run.
+- Keep digest defaults owned by `[processing]`, `[digest]`, and `[digest_limits.*]`; keep non-digest sync limits under `[sync]`.
 - When changing bridge behavior, check both direct CLI usage and Telegram command mapping.
 - Treat SQLite history as the system of record; digest and other analysis flows work over stored data.
+- Keep bridge access-control docs aligned with runtime behavior for `allowed_chat_ids`, `allowed_user_ids`, and `allowed_usernames`.
 - Keep `/agent-stats` local to the bridge and bounded to a recent-window query.
 - Keep digest HTML formatting owned by `telegram_digest.py`; the bridge must not reformat already-prepared HTML payloads.
 
@@ -54,10 +59,12 @@ If README, code, and tests disagree, update them together.
 
 ## Testing
 
-Preferred test command:
+Preferred test workflow:
 
 ```bash
-python3 -m pytest telegram_connector/tests -q
+python3 -m venv .venv-test-gap-detection
+.venv-test-gap-detection/bin/python -m pip install -r telegram_connector/requirements.txt
+.venv-test-gap-detection/bin/python -m pytest telegram_connector/tests -q
 ```
 
 Before finishing changes:

@@ -46,70 +46,13 @@ When working in `telegram_agent_bot`, prefer these sources in this order:
 
 If README, code, and tests disagree, update them together rather than fixing only one layer.
 
-Operational guidance:
+## Repo Rules
+
 - for route selection, engine choice, selected inputs, config resolution, and similar runtime facts, keep exactly one canonical producer and let wrapper layers consume that output instead of rebuilding it
 - do not add parallel summary formats, convenience placeholders, or local stub values when the real metadata already exists in an upstream tool, structured payload, or canonical log
 - when a wrapper replays cached or preexisting artifacts, recover metadata from the original producer's persisted output before introducing any fallback
-
-## Runtime And Secrets
-
-- Never commit machine-specific paths, usernames, home-directory paths, or local workstation identifiers.
-- Never commit plaintext secrets.
-- `runtime.local.toml` is local-only and intentionally ignored.
-- Committed config examples belong in:
-  - [telegram_connector/config/runtime.example.toml](./telegram_connector/config/runtime.example.toml)
-- Project runtime data belongs under:
-  - [telegram_connector/data](./telegram_connector/data)
-
-## Telegram Connector Notes
-
-- Canonical CLI sync entrypoint is `sync --mode <backfill|tail|update>`.
-- Canonical digest CLI entrypoint is `python3 telegram_connector/telegram_digest.py run`; keep `digest` config-driven and only override `channel`, `since`, `until`, or auth mode explicitly per run.
-- Bot aliases may expose a friendlier surface than the CLI; keep bot UX and CLI internals clearly separated.
-- `/agent-stats` is a bridge-local command for recent `ai_usage_log` usage and prompt-cache summaries; it does not invoke the history client.
-- `digest` is config-driven:
-  - model and OCR defaults come from `[processing]`
-  - schedule/window defaults come from `[digest]`
-  - profile-specific digest limits come from `[digest_limits.*]`
-- Non-digest sync limits live under `[sync]`.
-
-## Testing
-
-Preferred test command:
-
-```bash
-python3 -m pytest telegram_connector/tests -q
-```
-
-Use narrower test targets while iterating, then run the full suite before committing changes in `telegram_connector`.
-
-## Background Processes
-
-There are two operational paths to keep in mind:
-- launchd bridge service for Telegram bot command handling
-- launchd digest service for scheduled digest runs
-
-If behavior changes in bridge or digest startup flow, update:
-- code
-- README
-- installer scripts
-- tests
-
-If `digest.time` or other schedule-related config changes, rerun `telegram_connector/scripts/install_launch_agent.sh` so the LaunchAgent plist is regenerated; `restart_launch_agent.sh` is only a reload path.
-
-## Editing Guidance
-
-- Avoid broad refactors unless they simplify both code and command semantics.
-- Prefer config-driven defaults over hardcoded runtime values.
-- Keep user-facing help and README aligned with parser behavior.
-- Avoid "temporary" local shims that duplicate existing behavior unless they clearly reduce complexity and are documented as the new source of truth.
-- When adding logging or diagnostics, extend the canonical producer first; only add wrapper-side logging when it carries distinct value and does not duplicate the same fact in a second schema.
-- When changing sync or digest behavior, check both:
-  - direct CLI usage
-  - Telegram bot command mapping
-
-## Commit Discipline
-
-- Keep local config and generated runtime artifacts out of commits.
-- Before commit, verify relevant tests pass.
-- If behavior changed, update docs in the same change.
+- never commit machine-specific paths, usernames, home-directory paths, or local workstation identifiers
+- never commit plaintext secrets
+- keep local config and generated runtime artifacts out of commits
+- when a project has its own `AGENTS.md`, prefer that file for operational details, commands, runtime semantics, and verification steps
+- before finishing behavior changes, update docs in the same change and verify the relevant tests pass

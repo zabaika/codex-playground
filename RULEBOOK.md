@@ -550,6 +550,7 @@ Rules:
 - every new command nuance should have a parser test
 - every new config nuance should have a config test
 - every security hardening rule should have at least one regression test
+- when a project defines a canonical project-local virtualenv for tests, install dependencies and run the suite through that environment instead of the system Python
 
 ## 14. Documentation Rules
 

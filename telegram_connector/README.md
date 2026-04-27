@@ -100,6 +100,8 @@ final_digest_template = """
 
 [bridge]
 allowed_chat_ids = "<comma-separated chat ids or empty>"
+allowed_user_ids = "<comma-separated Telegram user ids or empty>"
+allowed_usernames = "<comma-separated Telegram usernames or empty>"
 text_chunk_size = "<500..4096>"
 agent_stats_row_limit = "<20..2000>"
 
@@ -130,6 +132,9 @@ For the history client:
 - `[processing]` stores cross-cutting defaults shared by analysis flows
 - `processing.model` is the default OpenAI model used by digest and other analysis commands
 - `processing.ocr` controls whether processing flows should download image media and run OCR by default
+- `bridge.allowed_chat_ids` restricts which Telegram chats may invoke bridge commands; if it is empty, the bridge falls back to `telegram.default_chat_id` when that value is set
+- `bridge.allowed_user_ids` additionally restricts bot-triggered commands to specific sender ids
+- `bridge.allowed_usernames` additionally restricts bot-triggered commands to specific sender usernames; `@name` and `name` are treated the same
 - `bridge.text_chunk_size` controls how long Telegram text replies may grow before the bot splits them into multiple messages
 - `bridge.agent_stats_row_limit` limits `/agent-stats` to the latest N rows from `ai_usage_log`, so the command stays fast as the database grows
 - `[digest]` stores default daily-digest behavior
@@ -231,7 +236,7 @@ Bridge commands are accepted in these forms:
 - `/update@verter_the_bot 10`
 - `/agent-stats`
 
-Only `chat_id` values from `[bridge].allowed_chat_ids` may run bot-triggered commands.
+Bot-triggered commands can be restricted by `[bridge].allowed_chat_ids` and, when configured, by `[bridge].allowed_user_ids` or `[bridge].allowed_usernames`.
 If auth is omitted in a bot command, `user` is used by default.
 The leading `/` is optional for supported bridge commands.
 
@@ -630,7 +635,8 @@ Required for history ingestion:
 Python requirements file:
 
 ```bash
-python3 -m pip install -r telegram_connector/requirements.txt
+python3 -m venv .venv-test-gap-detection
+.venv-test-gap-detection/bin/python -m pip install -r telegram_connector/requirements.txt
 ```
 
 The tracked requirements include both runtime dependencies and the local `pytest`
@@ -641,7 +647,7 @@ test dependency used by the regression suite.
 Run the local regression suite before each code change:
 
 ```bash
-python3 -m pytest telegram_connector/tests -q
+.venv-test-gap-detection/bin/python -m pytest telegram_connector/tests -q
 ```
 
 Current tests cover:
