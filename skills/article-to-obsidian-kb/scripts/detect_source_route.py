@@ -61,12 +61,18 @@ ENGINEERING_RULES = [
             r"\bsla\b",
             r"\bslo\b",
             r"\broadmap\b",
+            r"\bthroughput\b",
+            r"\bslack\b",
+            r"\bsandbox\b",
+            r"\bgovernance\b",
             r"\bметрик\w*\b",
             r"\bпроцесс\w*\b",
             r"\bтул\w*\b",
             r"\bкоманд\w*\b",
             r"\bприоритизац\w*\b",
             r"\bзона ответственности\b",
+            r"\bстендап\w*\b",
+            r"\bобратн\w* связ\w*\b",
             r"\bowned systems\b",
             r"\bа\/б\b",
         ],
@@ -87,11 +93,41 @@ ENGINEERING_RULES = [
             r"\bdevex\b",
             r"\bllm\b",
             r"\bprompt hardening\b",
+            r"\bagent-first\b",
+            r"\bcodex\b",
+            r"\bworktree\b",
             r"\bтехническ\w*\b",
             r"\bплатформенн\w*\b",
             r"\bразработчик\w*\b",
             r"\bcode review\b",
             r"\bдевопс\b",
+        ],
+    ),
+    (
+        "agent_operating_model",
+        1.0,
+        [
+            r"\brepository\b",
+            r"\brepo\b",
+            r"\bdocs\b",
+            r"\bdocumentation\b",
+            r"\bconstraints?\b",
+            r"\blinter\w*\b",
+            r"\bmechanical checks?\b",
+            r"\bquality gates?\b",
+            r"\bfeedback loops?\b",
+            r"\binternal agents?\b",
+            r"\bagent ecosystem\b",
+            r"\bagentic automation\b",
+            r"\bcoordination layer\b",
+            r"\bагент\w*\b",
+            r"\bрепозитор\w*\b",
+            r"\bдокументац\w*\b",
+            r"\bограничител\w*\b",
+            r"\bлинтер\w*\b",
+            r"\bпроверк\w*\b",
+            r"\bоркестрац\w*\b",
+            r"\bстендап\w*\b",
         ],
     ),
 ]
@@ -103,7 +139,6 @@ GENERAL_RULES = [
         [
             r"\bcareer\b",
             r"\bjob\b",
-            r"\bhiring\b",
             r"\binterview\b",
             r"\bresume\b",
             r"\blinkedin\b",
@@ -113,9 +148,7 @@ GENERAL_RULES = [
             r"\brecruit(?:er|ing)\b",
             r"\bnetworking\b",
             r"\bmanager\b",
-            r"\bmanagement\b",
             r"\bcommunication\b",
-            r"\bproductivity\b",
             r"\bрынок труда\b",
             r"\bкарьер\w*\b",
             r"\bпоиск работы\b",
@@ -161,8 +194,6 @@ GENERAL_RULES = [
 GENERAL_PRIORITY_PATTERNS = [
     r"\bcareer\b",
     r"\bjob search\b",
-    r"\bjob\b",
-    r"\bhiring\b",
     r"\binterview\b",
     r"\bresume\b",
     r"\blinkedin\b",
@@ -241,6 +272,15 @@ def detect_route(text: str, title: str) -> tuple[str, str, dict[str, object]]:
     engineering_score = weighted_score(combined, ENGINEERING_RULES)
     general_score = weighted_score(combined, GENERAL_RULES)
     general_priority_hits = sum(1 for pattern in GENERAL_PRIORITY_PATTERNS if re.search(pattern, combined, flags=re.IGNORECASE))
+    has_company_or_system = "company_or_system_context" in engineering_matches
+    has_operating_model_signal = any(
+        rule_name in engineering_matches
+        for rule_name in ("operating_details", "engineering_lessons", "agent_operating_model")
+    )
+    has_strong_engineering_signal = any(
+        rule_name in engineering_matches
+        for rule_name in ("engineering_lessons", "agent_operating_model")
+    )
 
     if general_priority_hits >= 2 and engineering_score < general_score + 2:
         reason = (
@@ -248,7 +288,13 @@ def detect_route(text: str, title: str) -> tuple[str, str, dict[str, object]]:
             "or other general analysis without a concrete engineering operating model"
         )
         route = "general"
-    elif len(engineering_matches) >= 2 and engineering_score > general_score:
+    elif has_company_or_system and has_operating_model_signal and has_strong_engineering_signal:
+        reason = (
+            "source combines a concrete company or system context with operating-model details, "
+            "which makes it an engineering workflow or platform case"
+        )
+        route = "engineering"
+    elif len(engineering_matches) >= 2 and engineering_score >= general_score and has_strong_engineering_signal:
         reason = (
             "source contains multiple engineering signals such as concrete systems, "
             "team/process details, or reusable engineering practices"
