@@ -239,6 +239,7 @@ For knowledge-base notes, keep section design additive rather than repetitive:
 - if the closing related-notes block becomes empty after deduplicating inline links, remove the block entirely instead of leaving an empty heading or padding it with weak filler links
 - when working in a knowledge vault, maintain one canonical navigation index as the default entry point for both humans and agents; prefer auto-updating indexes over manually rebuilt note lists whenever the platform supports them
 - when answering questions against a knowledge vault that has such an index, consult the canonical index first to scope the search and only then open the relevant notes directly for factual verification instead of relying on the index alone
+- when a knowledge-base workflow needs create-vs-update checks, related-note discovery, canonical concept checks, or other search-like steps, use the canonical index as the default retrieval layer and read only the shortlisted notes in full; do not fall back to broad vault scans unless the index is unavailable, broken, or provably stale
 - when writing Obsidian `query` blocks that reference paths or file names containing spaces, wrap the full value in quotes instead of relying on shell-style escaping so expressions like `path:"Ideas/AI prompts"` and `-file:"Индекс заметок"` stay reliable
 
 Recommended env override:

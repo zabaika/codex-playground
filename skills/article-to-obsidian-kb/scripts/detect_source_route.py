@@ -5,7 +5,6 @@ import argparse
 import json
 from pathlib import Path
 import re
-import sys
 
 
 ENGINEERING_RULES = [
@@ -284,9 +283,6 @@ def main() -> int:
         raise SystemExit(f"Source file does not exist: {source_path}")
 
     route, reason, details = detect_route(load_source_text(source_path), args.title)
-
-    print(f"Route used: {route}", file=sys.stderr)
-    print(f"Route reason: {reason}.", file=sys.stderr)
 
     payload = {
         "route_used": route,

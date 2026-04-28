@@ -6,8 +6,9 @@ This file is the single source of truth for how existing notes are updated, merg
 
 - Update an existing note when the main mechanism, principle, or operating pattern matches semantically.
 - Create a new note only when the article introduces a genuinely new lesson cluster, operating model, or concept.
-- Re-check the vault immediately before creating a file.
-- Re-check both configured note roots before creating a concept note.
+- Re-check the indexed candidate pool immediately before creating a file.
+- Re-check both configured note roots through indexed retrieval before creating a concept note.
+- Only fall back to broad direct vault search when the configured index is unavailable, broken, or clearly stale.
 
 ## General Update Rules
 
@@ -90,12 +91,15 @@ Bullet format:
 ## Link Hygiene
 
 - Update `# Связанные заметки` after every create or update.
+- Prefer reusing already opened notes and the existing indexed shortlist before issuing any extra retrieval pass for related links.
+- Build candidate related links through indexed retrieval only when the current candidate pool still does not give enough strong options, and then read only the strongest shortlist that survived scoring.
 - Remove obvious duplicate wikilinks.
 - After inline wikilinks are finalized, remove from `# Связанные заметки` any note that is already linked inline in the body.
 - If the closing section becomes empty after that deduplication, delete the heading instead of leaving an empty or mechanically duplicated block.
 - Prefer the touched notes over loosely related older links when the closing section becomes too long.
 - After concept titles are finalized, run one more exact-title sweep through the source-derived note and convert remaining plain-text or inline-code mentions of those touched concepts into wikilinks.
 - After the exact-title sweep, run one more semantic-alias sweep for touched concepts whose canonical title differs from the wording that naturally appears in the prose.
+- Keep both sweeps constrained to touched concepts and shortlisted indexed candidates; do not trigger a broad vault scan just to hunt for more possible links.
 - Use that sweep for source terms, abbreviations, English labels, shortened metric names, or compact phrases that should stay visible in the text but now point at a broader canonical concept title.
 - When the visible wording should stay shorter than the canonical title, use an Obsidian alias instead of leaving the mention as plain text.
 

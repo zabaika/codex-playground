@@ -8,7 +8,10 @@ concept = "/absolute/path/to/Ideas/Concepts"
 [paths]
 # Keep temporary and staging files for this skill under scratch/, not repo-local tmp/.
 scratch_root = "scratch/article-to-obsidian-kb"
-# Add other local-only paths here when the skill needs them.
+# Point to the canonical kb-index runtime config when indexed note retrieval is available.
+# Prefer a project-root-relative path and keep absolute paths as a local fallback only.
+# kb_index_config = "tools/kb-index/config/runtime.local.toml"
+# Add other local-only absolute paths here when the skill needs them.
 # vault_root = "/absolute/path/to/vault"
 
 [secrets]

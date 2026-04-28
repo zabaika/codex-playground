@@ -30,17 +30,19 @@ Turn a source article, transcript, or other long-form text into compact, Russian
 4. Treat that repo copy as the single editable local config. If an installed Codex copy exists under `~/.codex/skills`, it should point to the same file rather than keeping a second divergent copy.
 5. Use `note_roots.article` and `note_roots.concept` from that file for all search and save operations.
 6. Resolve `paths.scratch_root` from that file when it exists. If it is missing, default to `scratch/article-to-obsidian-kb` relative to the current project root.
-7. If temporary or staging files are needed at any point in the workflow, write them only under `paths.scratch_root`.
-8. Never create repo-local temporary folders under `tmp/` for this skill. Keep temporary artifacts consolidated under `scratch/` so they are easy to inspect and clean.
-9. Do not look for the config relative to the current working directory unless the skill directory itself is the current working directory.
-10. If `<skill-dir>/config/runtime.local.toml` exists and contains both required note roots, do not ask the user for those paths again.
-11. Never commit machine-specific paths, local roots, passwords, or tokens into `SKILL.md`, references, or tracked config files.
-12. If the local config is missing and the roots are not already obvious from the current task, pause and ask the user instead of guessing.
+7. Resolve `paths.kb_index_config` from that file when it exists. Use it as the canonical entry point to `kb-index` for indexed retrieval.
+8. If temporary or staging files are needed at any point in the workflow, write them only under `paths.scratch_root`.
+9. Never create repo-local temporary folders under `tmp/` for this skill. Keep temporary artifacts consolidated under `scratch/` so they are easy to inspect and clean.
+10. Do not look for the config relative to the current working directory unless the skill directory itself is the current working directory.
+11. If `<skill-dir>/config/runtime.local.toml` exists and contains both required note roots, do not ask the user for those paths again.
+12. Never commit machine-specific paths, local roots, passwords, or tokens into `SKILL.md`, references, or tracked config files.
+13. If the local config is missing and the roots are not already obvious from the current task, pause and ask the user instead of guessing.
 
 ## Workflow
 
 1. Load the local runtime config and resolve the note roots.
    - Resolve the scratch staging root too.
+   - Resolve `paths.kb_index_config` too when it exists.
    - If `paths.scratch_root` is absent, use `scratch/article-to-obsidian-kb`.
 2. Read the source from the provided URL or supplied text.
    - Prefer the full article body, transcript, or detailed show notes when they are available.
@@ -68,10 +70,45 @@ python3 scripts/detect_source_route.py --source-file "[SOURCE_FILE]"
    - concrete details worth preserving, such as team scope, owned systems, partner functions, named metrics, examples, AI rollout mechanics, build-vs-buy constraints, recommendations, and anti-patterns
    - useful concrete examples, mini-cases, scenarios, before/after transitions, or worked illustrations from the source
    - for each such example, whether it materially improves understanding of a claim, recommendation, anti-pattern, or metric and therefore should survive into the saved note
-5. Search the configured note roots before drafting any file:
-   - `note_roots.article`
-   - `note_roots.concept`
+5. Search the configured note roots before drafting any file.
+   - If `paths.kb_index_config` is present and the index is healthy, use indexed retrieval first through the canonical external CLI.
+   - Derive `KB_INDEX_ROOT` as the parent directory of the directory that contains `paths.kb_index_config`.
+
+```bash
+[KB_INDEX_ROOT]/bin/search_kb --config-path "[KB_INDEX_CONFIG]" --json "[QUERY]"
+```
+
+   - Treat `search_kb` as a note-level retrieval step. The result is a shortlist of whole notes, not chunk hits.
+   - Each result should be interpreted through `path`, `title`, `score`, `tags`, `lead_summary`, `headings`, and `snippet`.
+   - Let the index-configured `retrieval.default_limit` control the default shortlist size. Override with `--limit` only when the current source clearly needs a broader pass.
+   - Build retrieval queries in a minimal pass set instead of relying on one vague search string:
+     - source-derived article candidate pass:
+       - first query: final proposed article title
+       - second query: `main topic + context`
+       - optional third query only when the first two passes are weak or divergent:
+         - `company/system/person name + mechanism`
+         - or `2-4` core terms from the extraction
+     - concept candidate pass:
+       - first query: exact concept title candidate
+       - optional second query only when needed:
+         - `concept + context`
+         - or alternate Russian/English wording when both are plausible
+   - Prefer `2` article queries and `1` concept query by default. Escalate to an extra query only when the current shortlist is weak, noisy, or contradictory.
+   - Stop early when one note is clearly dominant and the nearby shortlist is coherent enough to support a confident `update vs create` check.
+   - Merge the returned notes into one candidate pool, deduplicate by `path`, and keep the strongest score per note.
+   - Use the index to shortlist candidate notes from both `note_roots.article` and `note_roots.concept`.
+   - Only after that open the most relevant files directly for factual verification.
+   - In the normal path, read the full text of only the top `3-5` candidate notes per decision surface:
+     - top article-like candidates when deciding whether to update or create the source-derived note
+     - top concept-like candidates when deciding whether to update or create each concept note
+   - Reuse the same indexed candidate pool for later tag, concept, related-note, and wikilink decisions whenever it already covers the local topic well enough.
+   - If indexed retrieval returns weak or obviously off-topic notes, broaden once with one extra query or a higher `--limit`. Do not jump straight to a full vault scan.
+   - If the index is unavailable, broken, or clearly stale, fall back to direct filename/content search through `note_roots.article` and `note_roots.concept`.
 6. Read the most relevant matching notes and decide `update` vs `create`.
+   - Treat high-confidence matches as candidates for update, not as automatic updates. Confirm by reading the full note.
+   - Bias toward `update` when the existing note matches the same durable topic, mechanism, and context, even if the new source adds better wording or stronger evidence.
+   - Bias toward `create` when the overlap is only lexical, when the existing note solves a different task, or when merging would produce a muddy topic boundary.
+   - For concept notes, prefer updating an existing reusable node rather than spawning a near-duplicate with slightly different phrasing.
 7. Draft or update only the necessary notes.
    - Treat the analysis reference as an internal extraction step, not as the final Obsidian format.
    - Map the extracted signal into vault note types instead of copying the analysis headings verbatim.
@@ -130,39 +167,16 @@ python3 -m unittest skills/article-to-obsidian-kb/tests/test_note_contract_regre
 
 ## Search Strategy
 
-- Search both configured note roots:
-  - `note_roots.article` for source-derived notes
-  - `note_roots.concept` for concept notes
-- Use both filename and content search with:
-  - company name
-  - main topic
-  - likely lesson titles
-  - concept names
-  - candidate tags
-- Treat semantic overlap as a match even when wording differs.
-- Before creating any new file, run one more targeted search with the final proposed title and 2-4 core terms.
-- Before saving tags, run one more targeted search for each borderline candidate tag and compare it with tags already used by the closest matching notes.
-- Before creating any concept note, run a canonical entity check:
-  - compare the candidate against existing concept notes by meaning, not just by title
-  - treat translations, word-order changes, narrower phrasing, and cosmetic title improvements as possible duplicates
-  - if an existing concept already captures the same durable idea, update that canonical note instead of creating a new file
-  - link the source-derived notes, related concepts, and tags to the canonical concept title rather than to a local synonym
- - After drafting the candidate concept list but before filling any concept note, run one more concept-validity pass:
- - drop or merge candidates that are really examples, brands, sources, sections of the article, or one-off formulations rather than durable reusable concepts
- - drop or merge candidates that only restate another candidate from the same run at a different level of specificity
- - prefer the more universal concept node over a brand-specific or source-specific wording
- - only keep candidates that still look worth linking from multiple future notes, not just from the current article
-  - drop candidates that are only narrow decision filters for one local scenario in the current source, such as a one-off hiring heuristic, one choice criterion, or one risk check whose best home is a bullet inside the source-derived note
-  - if a candidate mainly sharpens one recommendation inside one article and is not likely to earn independent reuse across multiple future notes, merge it back into the source-derived note instead of promoting it to a top-level concept
-  - if a candidate mostly restates one pillar of the current source-derived note's own thesis, one subsection that would naturally live inside that note, or one supporting argument that is not yet useful outside this source, keep it embedded in the source-derived note instead of splitting it out
-  - if the candidate's only realistic backlinks for now would be the current source-derived note and one or two sibling candidates from the same run, treat that as evidence against promotion unless the concept is clearly durable outside this source
-- Before saving `# Связанные заметки`, run one more related-link validation pass:
-  - do not add a related note only because the source comes from the same podcast, channel, author, series, or brand shell
-  - treat lexical overlap, similar titles, or shared career/AI/startup framing as insufficient on their own
-  - add a related source-derived note only when at least two durable topical anchors actually match, such as the same market, the same decision context, the same mechanism, or the same operating constraint
-  - if the candidate note comes from a different source id or a different episode, verify that the dominant topic still overlaps before linking it
-  - if the candidate would send the reader into a different task or scenario than the current source, drop the link even when some vocabulary overlaps
-  - prefer topical identity over surface similarity and treat `same series != same knowledge node` as a hard rule
+- Treat `kb-index` as the canonical retrieval layer for every search-like step in the workflow, not only the first `update vs create` pass.
+- Search coverage must still span both configured note roots, but do that through indexed retrieval first, not by broad direct filesystem scanning.
+- Treat `kb-index` as the canonical first-pass retrieval layer and direct file reads as the second pass.
+- Keep the detailed retrieval plan, query sequencing, and stop conditions in workflow step `5` above.
+- Keep canonical concept-creation, closing-link, and update semantics in:
+  - [references/vault-conventions.md](references/vault-conventions.md)
+  - [references/update-patterns.md](references/update-patterns.md)
+- Reuse the same indexed candidate pool for tag, concept, related-note, and wikilink decisions whenever it already covers the local topic well enough.
+- Only broaden retrieval when the current shortlist is weak, noisy, contradictory, or insufficient for a confident decision.
+- Do not expand into a broad vault scan unless the index is unavailable, broken, or clearly stale.
 
 ## Decide Which Notes To Touch
 

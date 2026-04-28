@@ -194,6 +194,7 @@ Frontmatter is part of the note schema, not optional decoration.
 - If one concept is expanded mostly to contrast it with a nearby concept, make sure the neighboring concept note also exposes that distinction at least briefly instead of leaving the asymmetry invisible from one side.
 - When a source only reinforces an existing concept, update the existing concept note instead of creating a near-duplicate concept file.
 - Before creating a new concept file, run a canonical concept check against the existing vault and reuse the canonical note when the meaning already exists.
+- When indexed retrieval is configured, run that canonical concept check through the shared `kb-index` shortlist first and read only the strongest returned notes before deciding that the concept is new.
 - Do not let a nicer title, a translation, or a local wording variant justify a duplicate concept node when the durable idea is already present.
 - In `general` notes, fold examples and cases into the relevant recommendation inside `## Практика` instead of giving them a standalone section.
 - In `general` notes, do not strip useful examples out of `## Ключевые тезисы` or `## Практика` if that would leave only abstract restatements.
@@ -244,5 +245,6 @@ Frontmatter is part of the note schema, not optional decoration.
 - Remove the closing heading entirely when deduplication leaves it empty.
 - Add 3-10 wikilinks when that many net-new relevant notes exist.
 - Prefer links to touched concept notes, source-derived notes, and the closest existing concepts in the vault.
+- When indexed retrieval is configured, discover those closest existing notes through the shared `kb-index` shortlist first instead of scanning the vault broadly.
 - Remove from the closing section any note that was already linked inline in the body, unless there is a deliberate reason to highlight that one hub note twice.
 - Do not add weak or merely thematic filler links just to satisfy a target count.
