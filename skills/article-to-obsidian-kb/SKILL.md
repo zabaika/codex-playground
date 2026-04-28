@@ -119,7 +119,19 @@ python3 scripts/detect_source_route.py --source-file "[SOURCE_FILE]"
 9. Re-check final titles, tags, links, duplicate risk, and chronology against the canonical contracts before saving.
    - Re-run the canonical closing-section deduplication pass after inline wikilinks are finalized.
 10. After each destination write, run the canonical post-write verification from [references/update-patterns.md](references/update-patterns.md) before continuing with more checks, searches, or reporting.
-11. When you add or tighten a mechanically checkable note-contract rule in this skill, update the local contract harness in the same change.
+11. After all destination writes are complete, refresh `kb-index` once when and only when all of these are true:
+   - the run actually created or updated at least one note
+   - `paths.kb_index_config` is present
+   - the run is not a dry-run or analysis-only pass
+   - Use the canonical external CLI and run it only once per skill run:
+
+```bash
+[KB_INDEX_ROOT]/bin/update_kb_index --config-path "[KB_INDEX_CONFIG]"
+```
+
+   - Treat this as a best-effort post-write sync, not as part of note generation itself.
+   - If the index refresh fails, do not roll back already-saved notes. Report the failure briefly in the final response and let the scheduled auto-update recover later.
+12. When you add or tighten a mechanically checkable note-contract rule in this skill, update the local contract harness in the same change.
    - This applies to rules about frontmatter, tags, headings, spacing, closing sections, wikilinks, language cleanup, emphasis, or preservation of explicitly required examples.
    - Update at least one of:
      - the checker under `scripts/`
@@ -127,7 +139,7 @@ python3 scripts/detect_source_route.py --source-file "[SOURCE_FILE]"
      - a clean passing fixture
      - a `unittest` that proves the new rule is enforced
    - Do not treat semantic source understanding as testable by this harness. The harness exists to protect deterministic output constraints after note drafting, not to prove that every future source was interpreted perfectly.
-12. When this skill's contract layer changes, run the local note-contract tests before finishing the change.
+13. When this skill's contract layer changes, run the local note-contract tests before finishing the change.
    - Treat changes to any of these files as a required test trigger:
      - `SKILL.md`
      - `references/vault-conventions.md`

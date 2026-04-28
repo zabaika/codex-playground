@@ -24,6 +24,7 @@ concept = "/absolute/path/to/concept-notes"
 - `paths.kb_index_config`: path to `kb-index` `runtime.local.toml` when the workflow should prefer indexed retrieval over broad direct vault search.
   Prefer a project-root-relative path such as `tools/kb-index/config/runtime.local.toml`; keep an absolute path only as a machine-local fallback.
   The skill should inherit retrieval defaults, including shortlist size, from that external `kb-index` config instead of duplicating them locally.
+  The same config is also the canonical target for the single post-write `update_kb_index` sync that runs after the skill touches notes.
 - `[secrets]`: tokens, passwords, or other credentials that must stay local.
 
 ## Usage Rules
@@ -35,6 +36,7 @@ concept = "/absolute/path/to/concept-notes"
 - Prefer project-root-relative scratch paths such as `scratch/article-to-obsidian-kb` over repo-local `tmp/` folders or machine-specific absolute temp paths.
 - If `paths.scratch_root` is absent, default to `scratch/article-to-obsidian-kb`.
 - If `paths.kb_index_config` is present and points to a working `kb-index` config, prefer `search_kb` retrieval before any broad direct file search through the vault.
+- If `paths.kb_index_config` is present and the run actually touched notes, use that same config for one best-effort `update_kb_index` call after all writes are finished.
 - Let `kb-index` own retrieval defaults such as shortlist size. Use `search_kb --limit ...` only when the current source needs an explicit broader or narrower pass than the shared default.
 - Keep all temporary and staging artifacts for this skill under the resolved scratch root so cleanup can happen by clearing `scratch/`.
 - Do not resolve `runtime.local.toml` relative to the current working directory unless that is also the skill directory.
