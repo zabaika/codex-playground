@@ -1,0 +1,62 @@
+[vault]
+root = '/absolute/path/to/obsidian-vault'
+
+[paths]
+db_path = '/absolute/path/to/project/data/kb_index.sqlite'
+state_path = '/absolute/path/to/project/data/kb_index_state.json'
+
+[scope]
+include_roots = ['Ideas', 'Daily notes']
+exclude_roots = ['.obsidian', 'Templates', 'Ideas/attachments']
+exclude_globs = ['*.canvas', '*.png', '*.jpg', '*.jpeg', '*.gif', '*.pdf', '*.webp', '*.csv', '*.xlsx']
+
+[retrieval]
+# Default number of note candidates returned when --limit is not provided.
+default_limit = 5
+# Minimum share of meaningful query terms that a note must match to stay in the shortlist.
+min_term_coverage_ratio = 0.5
+# Minimum relative score versus the top hit for tail results kept after the guaranteed top slots.
+min_score_ratio_to_top = 0.45
+# Number of strongest results always kept before applying tail cutoffs.
+always_keep_top_n = 3
+
+
+[ranking.weights]
+# Base keyword retrieval score from SQLite FTS5.
+fts = 0.30
+# Title token overlap boost for note-level matching.
+title = 0.20
+# Extra boost for exact or near-exact title matches.
+title_exact = 0.20
+# Main semantic signal from the lead "Суть" block.
+lead_summary = 0.15
+# Weak fallback when the query matches section headings.
+heading = 0.05
+# Lightweight boost for overlapping frontmatter tags.
+tags = 0.05
+# Existing outgoing wikilinks help related-note discovery and graph reuse.
+links_out = 0.08
+# Small prior based on the note type family.
+note_type = 0.05
+
+[ranking.note_type_weights]
+# Canonical concept notes should rank slightly above regular idea notes.
+concept = 0.8
+# General knowledge-base article or idea note.
+idea = 0.75
+# Job notes are currently excluded from scope, but the weight stays configurable.
+job = 0.65
+# Daily notes are searchable but should be de-prioritized by default.
+daily = 0.35
+# Catch-all fallback for any note outside known buckets.
+other = 0.5
+
+[ranking.exact_title_bonus]
+# Full normalized title equals the normalized query.
+exact_match = 1.0
+# Query is a direct substring of the normalized title.
+substring_match = 0.85
+# All query terms are present in the title in any order.
+all_terms_match = 0.75
+# Fuzzy partial title similarity for close-but-not-exact matches.
+near_match = 0.45

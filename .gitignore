@@ -15,3 +15,4 @@ __pycache__/
 tmp*
 *tmp
 telegram_agent_bot/data/
+tools/kb-index/data/
