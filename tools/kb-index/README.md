@@ -18,7 +18,8 @@
 - построение и обновление локального индекса;
 - хранение note-level метаданных и lead-summary retrieval signals;
 - полнотекстовый retrieval по `FTS5`;
-- CLI-контракт для `build`, `update`, `search`, `status`.
+- CLI-контракт для `build`, `update`, `search`, `status`;
+- `scheduled` auto-update через `launchd` на macOS.
 
 Проект пока не отвечает за:
 
@@ -50,10 +51,21 @@ tools/kb-index/
 
 ## Runtime Files
 
-Текущие runtime-артефакты в `data/`:
+Текущие project-local runtime-артефакты в `data/`:
 
 - `kb_index.sqlite`
 - `kb_index_state.json`
+
+При включенном `launchd` auto-update сервис использует отдельный service root:
+
+- `~/Library/Application Support/kb_index_service`
+
+Там живут:
+
+- runtime-копия `src/kb_index`
+- snapshot `config/runtime.local.toml`
+- shell-runner для `launchd`
+- `launchd` logs (`auto_update.startup.log`, `auto_update.stdout.log`, `auto_update.stderr.log`)
 
 ## CLI Commands
 
@@ -72,16 +84,23 @@ CLI сначала читает `config/runtime.local.toml`, а явные ар�
 - `update_kb_index`
 - `search_kb`
 - `status_kb_index`
+- `install_kb_index_auto_update`
+- `uninstall_kb_index_auto_update`
+- `status_kb_index_auto_update`
 
 Пока не реализованы и остаются roadmap items:
 
 - `read_kb`
 - `watch_kb_index`
-- `scheduled` auto-update
 
 ## Корпус индексации
 
 Корпус индексирования задается в `config/runtime.local.toml` через `include_roots`, `exclude_roots` и `exclude_globs`.
+
+Плановое автообновление тоже задается в `config/runtime.local.toml` через секцию `auto_update`.
+На текущем этапе поддерживается один режим:
+
+- `launchd` на macOS, который по расписанию вызывает тот же канонический `update_kb_index`
 
 Стартовая конфигурация для текущего vault:
 
@@ -98,11 +117,80 @@ CLI сначала читает `config/runtime.local.toml`, а явные ар�
 
 Полный проход по vault допустим только как fallback, если индекс отсутствует, поврежден или явно устарел.
 
-## Ближайшие этапы реализации
+## Auto-Update
 
-1. Реализовать parser заметки и chunking с отдельным блоком `Суть`.
-2. Реализовать schema и базовые команды `build/update/search/status`.
-3. Проверить retrieval на реальных запросах.
-4. Добавить `scheduled` auto-update.
-5. Перевести один skill на новый retrieval path.
-6. Финализировать `README.md`, `AGENTS.md` и обновление `RULEBOOK.md`.
+Автообновление не вводит отдельный daemon с собственной логикой индексации.
+Оно только планово вызывает уже существующий `update_kb_index`, чтобы:
+
+- новые заметки попадали в индекс без ручного rebuild;
+- измененные заметки переиндексировались инкрементально;
+- удаленные заметки удалялись из индекса тем же каноническим путем.
+
+Команды:
+
+- `install_kb_index_auto_update --config-path ...`
+- `status_kb_index_auto_update --config-path ...`
+- `uninstall_kb_index_auto_update --config-path ...`
+
+Installer не запускает код напрямую из `Documents/Playground`.
+Вместо этого он копирует runtime-слой в `~/Library/Application Support/kb_index_service`, генерирует там shell-runner и уже его регистрирует в `launchd`.
+Этот deployment shape совпадает с уже рабочим паттерном `telegram_connector` и обходит проблемы запуска launch agents прямо из пользовательского project tree.
+
+`status_kb_index` показывает и `configured_auto_update`, чтобы runtime-настройки расписания были видны рядом с retrieval-конфигом.
+`status_kb_index_auto_update` показывает уже состояние установленного launch agent и service root.
+
+### Reload After Config Changes
+
+Если меняется `config/runtime.local.toml` и нужно, чтобы `launchd` перечитал:
+
+- новый `auto_update.interval_minutes`
+- новый `launchd_label`
+- новые пути логов
+- или другие runtime-настройки service-root deployment
+
+используй тот же канонический installer повторно:
+
+```bash
+install_kb_index_auto_update --config-path /absolute/path/to/runtime.local.toml
+```
+
+Повторный запуск installer:
+
+- обновляет runtime-копию в `~/Library/Application Support/kb_index_service`
+- переснимает snapshot `runtime.local.toml`
+- перегенерирует shell-runner
+- переустанавливает `launchd` plist
+
+То есть это и есть рекомендуемый способ "перезапустить демон и перечитать конфиг".
+
+Для проверки после reload:
+
+```bash
+status_kb_index_auto_update --config-path /absolute/path/to/runtime.local.toml
+status_kb_index --config-path /absolute/path/to/runtime.local.toml
+```
+
+## Freshness Model
+
+Свежесть индекса теперь обеспечивается двумя путями:
+
+1. `scheduled auto-update`
+   - `launchd` запускает инкрементальный `update_kb_index` по интервалу из `auto_update.interval_minutes`
+2. `post-write sync`
+   - knowledge-base skills, которые реально создали или обновили заметки и знают `paths.kb_index_config`, могут один раз вызвать `update_kb_index` в конце run
+
+Такой split нужен, чтобы:
+
+- новые внешние изменения в vault не ждали ручного rebuild
+- заметки, только что созданные через skill, попадали в индекс сразу, а не ждали следующего расписания
+
+## Дальнейшие улучшения
+
+Текущее `stage 1` ядро уже реализовано и используется skill-ами.
+
+Дальше остаются только необязательные улучшения, например:
+
+1. `watch`-режим поверх текущего `launchd`-расписания, если когда-нибудь понадобится более частая реакция на изменения.
+2. `read_kb` как отдельный CLI для стандартизированного note-read access поверх уже найденного shortlist.
+3. Более глубокий graph expansion по `wikilinks`, если related-note discovery упрётся в текущий `links_out` signal.
+4. Позже, при реальной необходимости, отдельный vector layer или hybrid semantic retrieval поверх текущего `SQLite + FTS5`.

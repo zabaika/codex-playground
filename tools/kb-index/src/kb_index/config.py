@@ -31,6 +31,17 @@ class RetrievalConfig:
 
 
 @dataclass(slots=True)
+class AutoUpdateConfig:
+    enabled: bool
+    mode: str
+    interval_minutes: int
+    launchd_label: str
+    plist_path: Path
+    log_path: Path
+    run_on_load: bool
+
+
+@dataclass(slots=True)
 class RuntimeConfig:
     vault_root: Path
     db_path: Path
@@ -38,6 +49,7 @@ class RuntimeConfig:
     scope: IndexScope
     ranking: RankingConfig
     retrieval: RetrievalConfig
+    auto_update: AutoUpdateConfig
 
 
 def _as_list(value: object) -> list[str]:
@@ -54,6 +66,12 @@ def _as_float_map(value: object) -> dict[str, float]:
 
 def _as_int(value: object) -> int:
     return int(value)
+
+
+def _as_bool(value: object) -> bool:
+    if not isinstance(value, bool):
+        raise TypeError(f'Expected bool value, got: {type(value)!r}')
+    return value
 
 
 def _require_mapping(parent: dict[str, object], key: str) -> dict[str, object]:
@@ -96,6 +114,16 @@ def load_runtime_config(config_path: Path | None = None) -> RuntimeConfig:
         min_score_ratio_to_top=float(_require_value(retrieval_data, 'min_score_ratio_to_top')),
         always_keep_top_n=_as_int(_require_value(retrieval_data, 'always_keep_top_n')),
     )
+    auto_update_data = _require_mapping(data, 'auto_update')
+    auto_update = AutoUpdateConfig(
+        enabled=_as_bool(_require_value(auto_update_data, 'enabled')),
+        mode=str(_require_value(auto_update_data, 'mode')),
+        interval_minutes=_as_int(_require_value(auto_update_data, 'interval_minutes')),
+        launchd_label=str(_require_value(auto_update_data, 'launchd_label')),
+        plist_path=Path(_require_value(auto_update_data, 'plist_path')),
+        log_path=Path(_require_value(auto_update_data, 'log_path')),
+        run_on_load=_as_bool(_require_value(auto_update_data, 'run_on_load')),
+    )
     return RuntimeConfig(
         vault_root=vault_root,
         db_path=db_path,
@@ -103,4 +131,5 @@ def load_runtime_config(config_path: Path | None = None) -> RuntimeConfig:
         scope=scope,
         ranking=ranking,
         retrieval=retrieval,
+        auto_update=auto_update,
     )

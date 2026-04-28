@@ -16,6 +16,9 @@ Workspace for local experiments, tools, and reusable operating conventions.
 - [skills](./skills/README.md)  
   Local Codex skill collection for workspace-specific workflows, including Obsidian knowledge-base generation from engineering articles.
 
+- [tools/kb-index](./tools/kb-index/README.md)  
+  Local retrieval and indexing tool for the Obsidian knowledge base, built around SQLite/FTS note search and launchd-backed scheduled refresh.
+
 - [plugins](./plugins/README.md)  
   Local Codex plugin sources that package reusable skills and, when needed, broader Codex integrations.
 

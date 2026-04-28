@@ -5,6 +5,22 @@ root = '/absolute/path/to/obsidian-vault'
 db_path = '/absolute/path/to/project/data/kb_index.sqlite'
 state_path = '/absolute/path/to/project/data/kb_index_state.json'
 
+[auto_update]
+# Enable scheduled index refreshes for new and modified notes.
+enabled = true
+# Current supported mode for unattended refreshes on macOS.
+mode = 'launchd'
+# Refresh interval used by the launch agent.
+interval_minutes = 15
+# Stable launchd label for the background job.
+launchd_label = 'local.kb-index.auto-update'
+# Path to the generated LaunchAgent plist file.
+plist_path = '/Users/your-user/Library/LaunchAgents/local.kb-index.auto-update.plist'
+# Shared stdout/stderr log file for scheduled runs.
+log_path = '/absolute/path/to/project/data/auto_update.log'
+# Run one refresh immediately after loading the launch agent.
+run_on_load = true
+
 [scope]
 include_roots = ['Ideas', 'Daily notes']
 exclude_roots = ['.obsidian', 'Templates', 'Ideas/attachments']

@@ -13,6 +13,7 @@ Use it as an entry guide. For repository-wide engineering policy, safety rules, 
 - [telegram_agent_bot](./telegram_agent_bot): standalone Telegram task agent project
 - [telegram_shared](./telegram_shared): shared infrastructure primitives for Telegram projects
 - [skills](./skills): local skills and related documentation
+- [tools/kb-index](./tools/kb-index): local retrieval and indexing tool for the Obsidian knowledge base
 
 ## Main Working Area
 
@@ -43,6 +44,12 @@ When working in `telegram_agent_bot`, prefer these sources in this order:
 - [telegram_agent_bot/AGENTS.md](./telegram_agent_bot/AGENTS.md) for project-specific coding boundaries
 - [RULEBOOK.md](./RULEBOOK.md) for cross-project rules
 - tests in [telegram_agent_bot/tests](./telegram_agent_bot/tests) for executable expectations
+
+When working in `tools/kb-index`, prefer these sources in this order:
+- [tools/kb-index/README.md](./tools/kb-index/README.md) for operator behavior and command surface
+- [tools/kb-index/AGENTS.md](./tools/kb-index/AGENTS.md) for project-specific runtime and deployment rules
+- [RULEBOOK.md](./RULEBOOK.md) for cross-project rules
+- tests in [tools/kb-index/tests](./tools/kb-index/tests) for executable expectations
 
 If README, code, and tests disagree, update them together rather than fixing only one layer.
 

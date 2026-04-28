@@ -16,6 +16,14 @@ class ConfigScopeTests(unittest.TestCase):
             config_path.write_text(
                 "[vault]\n"
                 f"root = '{tmp_dir}'\n\n"
+                "[auto_update]\n"
+                "enabled = true\n"
+                "mode = 'launchd'\n"
+                "interval_minutes = 15\n"
+                "launchd_label = 'local.kb-index.auto-update'\n"
+                f"plist_path = '{tmp_dir}/auto-update.plist'\n"
+                f"log_path = '{tmp_dir}/auto-update.log'\n"
+                "run_on_load = true\n\n"
                 "[scope]\n"
                 "include_roots = ['A', 'B']\n"
                 "exclude_roots = ['Templates', 'Ideas/attachments']\n"
@@ -55,6 +63,9 @@ class ConfigScopeTests(unittest.TestCase):
             self.assertEqual(config.retrieval.min_term_coverage_ratio, 0.5)
             self.assertEqual(config.retrieval.min_score_ratio_to_top, 0.45)
             self.assertEqual(config.retrieval.always_keep_top_n, 3)
+            self.assertTrue(config.auto_update.enabled)
+            self.assertEqual(config.auto_update.mode, 'launchd')
+            self.assertEqual(config.auto_update.interval_minutes, 15)
 
     def test_missing_behavioral_settings_fail_fast(self) -> None:
         with TemporaryDirectory() as tmp_dir:
@@ -83,6 +94,14 @@ class ConfigScopeTests(unittest.TestCase):
             config_path.write_text(
                 "[vault]\n"
                 f"root = '{tmp_dir}'\n\n"
+                "[auto_update]\n"
+                "enabled = true\n"
+                "mode = 'launchd'\n"
+                "interval_minutes = 15\n"
+                "launchd_label = 'local.kb-index.auto-update'\n"
+                f"plist_path = '{tmp_dir}/auto-update.plist'\n"
+                f"log_path = '{tmp_dir}/auto-update.log'\n"
+                "run_on_load = true\n\n"
                 "[scope]\n"
                 "include_roots = ['Ideas']\n"
                 "exclude_roots = ['Templates', 'Ideas/attachments']\n"
