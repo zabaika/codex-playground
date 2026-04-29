@@ -37,7 +37,6 @@ class AutoUpdateConfig:
     interval_minutes: int
     launchd_label: str
     plist_path: Path
-    log_path: Path
     run_on_load: bool
 
 
@@ -121,7 +120,6 @@ def load_runtime_config(config_path: Path | None = None) -> RuntimeConfig:
         interval_minutes=_as_int(_require_value(auto_update_data, 'interval_minutes')),
         launchd_label=str(_require_value(auto_update_data, 'launchd_label')),
         plist_path=Path(_require_value(auto_update_data, 'plist_path')),
-        log_path=Path(_require_value(auto_update_data, 'log_path')),
         run_on_load=_as_bool(_require_value(auto_update_data, 'run_on_load')),
     )
     return RuntimeConfig(

@@ -44,6 +44,9 @@ If docs, code, and tests disagree, update them together.
 - Installer-driven deployment copies the runtime layer into:
   - `~/Library/Application Support/kb_index_service`
 - The generated service root is the runtime execution surface for scheduled refreshes.
+- Canonical operational logs for scheduled runs must stay in:
+  - `tools/kb-index/data/launchd`
+  not inside the service root.
 - If config changes must be picked up by `launchd`, rerun:
   - `install_kb_index_auto_update --config-path ...`
 

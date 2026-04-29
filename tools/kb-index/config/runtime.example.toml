@@ -16,8 +16,6 @@ interval_minutes = 15
 launchd_label = 'local.kb-index.auto-update'
 # Path to the generated LaunchAgent plist file.
 plist_path = '/Users/your-user/Library/LaunchAgents/local.kb-index.auto-update.plist'
-# Shared stdout/stderr log file for scheduled runs.
-log_path = '/absolute/path/to/project/data/auto_update.log'
 # Run one refresh immediately after loading the launch agent.
 run_on_load = true
 

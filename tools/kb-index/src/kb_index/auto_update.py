@@ -14,8 +14,16 @@ def _launchctl_domain() -> str:
     return f'gui/{os.getuid()}'
 
 
+def _launchctl_service_target(auto_update: AutoUpdateConfig) -> str:
+    return f'{_launchctl_domain()}/{auto_update.launchd_label}'
+
+
 def service_root_for(_: AutoUpdateConfig) -> Path:
     return Path.home() / 'Library' / 'Application Support' / 'kb_index_service'
+
+
+def project_launchd_log_dir_for(project_root: Path) -> Path:
+    return project_root / 'data' / 'launchd'
 
 
 def service_runner_path_for(auto_update: AutoUpdateConfig) -> Path:
@@ -26,21 +34,16 @@ def service_runtime_config_path_for(auto_update: AutoUpdateConfig) -> Path:
     return service_root_for(auto_update) / 'config' / 'runtime.local.toml'
 
 
-def service_launchd_log_dir_for(auto_update: AutoUpdateConfig) -> Path:
-    return service_root_for(auto_update) / 'data' / 'launchd'
-
-
-def render_runner_script(auto_update: AutoUpdateConfig) -> str:
+def render_runner_script(auto_update: AutoUpdateConfig, project_root: Path) -> str:
     service_root = service_root_for(auto_update)
     runtime_config = service_runtime_config_path_for(auto_update)
-    log_dir = service_launchd_log_dir_for(auto_update)
-    startup_log = log_dir / 'auto_update.startup.log'
     return f"""#!/usr/bin/env bash
 set -euo pipefail
 
 ROOT="$HOME/Library/Application Support/kb_index_service"
 export PATH="/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
-STARTUP_LOG="{startup_log}"
+: "${{KB_INDEX_PROJECT_ROOT:?KB_INDEX_PROJECT_ROOT is required}}"
+STARTUP_LOG="$KB_INDEX_PROJECT_ROOT/data/launchd/auto_update.startup.log"
 
 resolve_python_bin() {{
   local candidates=(
@@ -67,12 +70,13 @@ exec "$PYTHON_BIN" -c "import sys; sys.path.insert(0, {str(service_root / 'src')
 """
 
 
-def render_launchd_plist(auto_update: AutoUpdateConfig) -> str:
+def render_launchd_plist(auto_update: AutoUpdateConfig, project_root: Path) -> str:
     runner_path = service_runner_path_for(auto_update)
     program_arguments = [str(runner_path)]
     xml_arguments = '\n'.join(
         f'      <string>{escape(argument)}</string>' for argument in program_arguments
     )
+    log_dir = project_launchd_log_dir_for(project_root)
     return f"""<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -83,6 +87,11 @@ def render_launchd_plist(auto_update: AutoUpdateConfig) -> str:
   <array>
 {xml_arguments}
   </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>KB_INDEX_PROJECT_ROOT</key>
+    <string>{escape(str(project_root))}</string>
+  </dict>
   <key>RunAtLoad</key>
   <{str(auto_update.run_on_load).lower()}/>
   <key>StartInterval</key>
@@ -90,9 +99,9 @@ def render_launchd_plist(auto_update: AutoUpdateConfig) -> str:
   <key>WorkingDirectory</key>
   <string>{escape(str(service_root_for(auto_update)))}</string>
   <key>StandardOutPath</key>
-  <string>{escape(str(service_launchd_log_dir_for(auto_update) / 'auto_update.stdout.log'))}</string>
+  <string>{escape(str(log_dir / 'auto_update.stdout.log'))}</string>
   <key>StandardErrorPath</key>
-  <string>{escape(str(service_launchd_log_dir_for(auto_update) / 'auto_update.stderr.log'))}</string>
+  <string>{escape(str(log_dir / 'auto_update.stderr.log'))}</string>
   <key>ProcessType</key>
   <string>Background</string>
 </dict>
@@ -106,11 +115,14 @@ def _sync_runtime_copy(auto_update: AutoUpdateConfig, config_path: Path, project
     dst_src_root = service_root / 'src' / 'kb_index'
     config_dir = service_root / 'config'
     scripts_dir = service_root / 'scripts'
-    log_dir = service_launchd_log_dir_for(auto_update)
+    log_dir = project_launchd_log_dir_for(project_root)
 
     config_dir.mkdir(parents=True, exist_ok=True)
     scripts_dir.mkdir(parents=True, exist_ok=True)
     log_dir.mkdir(parents=True, exist_ok=True)
+
+    service_log_dir = service_root / 'data' / 'launchd'
+    service_log_dir.mkdir(parents=True, exist_ok=True)
 
     shutil.copytree(src_root, dst_src_root, dirs_exist_ok=True)
     shutil.copy2(config_path, config_dir / 'runtime.local.toml')
@@ -118,9 +130,25 @@ def _sync_runtime_copy(auto_update: AutoUpdateConfig, config_path: Path, project
     example_config = project_root / 'config' / 'runtime.example.toml'
     if example_config.exists():
         shutil.copy2(example_config, config_dir / 'runtime.example.toml')
+    for doc_name in ('README.md', 'AGENTS.md'):
+        doc_path = project_root / doc_name
+        if doc_path.exists():
+            shutil.copy2(doc_path, service_root / doc_name)
+
+    for stale_log in (
+        log_dir / 'auto_update.startup.log',
+        log_dir / 'auto_update.stdout.log',
+        log_dir / 'auto_update.stderr.log',
+        project_root / 'data' / 'auto_update.log',
+        service_log_dir / 'auto_update.startup.log',
+        service_log_dir / 'auto_update.stdout.log',
+        service_log_dir / 'auto_update.stderr.log',
+    ):
+        if stale_log.exists():
+            stale_log.unlink()
 
     runner_path = service_runner_path_for(auto_update)
-    runner_path.write_text(render_runner_script(auto_update), encoding='utf-8')
+    runner_path.write_text(render_runner_script(auto_update, project_root), encoding='utf-8')
     runner_path.chmod(0o755)
 
     return {
@@ -145,7 +173,7 @@ def install_launchd_auto_update(
 
     runtime_paths = _sync_runtime_copy(auto_update, config_path, project_root)
     auto_update.plist_path.parent.mkdir(parents=True, exist_ok=True)
-    plist_content = render_launchd_plist(auto_update)
+    plist_content = render_launchd_plist(auto_update, project_root)
     auto_update.plist_path.write_text(plist_content, encoding='utf-8')
 
     domain = _launchctl_domain()
@@ -224,7 +252,8 @@ def get_launchd_auto_update_status(auto_update: AutoUpdateConfig) -> dict[str, o
     service_root = service_root_for(auto_update)
     runner_path = service_runner_path_for(auto_update)
     runtime_config_path = service_runtime_config_path_for(auto_update)
-    log_dir = service_launchd_log_dir_for(auto_update)
+    project_root = Path(__file__).resolve().parents[2]
+    log_dir = project_launchd_log_dir_for(project_root)
     status = {
         'enabled': auto_update.enabled,
         'mode': auto_update.mode,
@@ -244,8 +273,9 @@ def get_launchd_auto_update_status(auto_update: AutoUpdateConfig) -> dict[str, o
         status['platform_supported'] = False
         return status
 
+    target = _launchctl_service_target(auto_update)
     result = subprocess.run(
-        ['launchctl', 'list', auto_update.launchd_label],
+        ['launchctl', 'print', target],
         check=False,
         capture_output=True,
         text=True,

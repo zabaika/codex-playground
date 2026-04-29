@@ -65,7 +65,12 @@ tools/kb-index/
 - runtime-копия `src/kb_index`
 - snapshot `config/runtime.local.toml`
 - shell-runner для `launchd`
-- `launchd` logs (`auto_update.startup.log`, `auto_update.stdout.log`, `auto_update.stderr.log`)
+
+Канонические `launchd`-логи при этом пишутся в project root, а не в service root:
+
+- `tools/kb-index/data/launchd/auto_update.startup.log`
+- `tools/kb-index/data/launchd/auto_update.stdout.log`
+- `tools/kb-index/data/launchd/auto_update.stderr.log`
 
 ## CLI Commands
 
@@ -143,9 +148,10 @@ search_kb --mode title-first --note-type concept "Known note title"
 Installer не запускает код напрямую из `Documents/Playground`.
 Вместо этого он копирует runtime-слой в `~/Library/Application Support/kb_index_service`, генерирует там shell-runner и уже его регистрирует в `launchd`.
 Этот deployment shape совпадает с уже рабочим паттерном `telegram_connector` и обходит проблемы запуска launch agents прямо из пользовательского project tree.
+При этом stdout/stderr и startup trace остаются в `tools/kb-index/data/launchd`, чтобы operational logs жили рядом с проектом, а не были размазаны между двумя корнями.
 
 `status_kb_index` показывает и `configured_auto_update`, чтобы runtime-настройки расписания были видны рядом с retrieval-конфигом.
-`status_kb_index_auto_update` показывает уже состояние установленного launch agent и service root.
+`status_kb_index_auto_update` показывает уже состояние установленного launch agent, service root и канонического project-local log directory.
 
 ### Reload After Config Changes
 
@@ -153,7 +159,6 @@ Installer не запускает код напрямую из `Documents/Playgr
 
 - новый `auto_update.interval_minutes`
 - новый `launchd_label`
-- новые пути логов
 - или другие runtime-настройки service-root deployment
 
 используй тот же канонический installer повторно:

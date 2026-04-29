@@ -88,7 +88,6 @@ def cmd_status(args: argparse.Namespace) -> int:
         'interval_minutes': auto_update.interval_minutes,
         'launchd_label': auto_update.launchd_label,
         'plist_path': str(auto_update.plist_path),
-        'log_path': str(auto_update.log_path),
         'run_on_load': auto_update.run_on_load,
     }
     if state_path.exists():

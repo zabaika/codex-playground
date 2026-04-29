@@ -502,6 +502,24 @@ Rules:
 - installer may render runtime-specific paths locally
 - service bundle may live outside the repo
 - but config and data should still point back to the project
+- prefer the same deployment shape used by the repository's working local services:
+  - keep the executable runtime bundle in a copied service root such as `~/Library/Application Support/<service_name>`
+  - keep canonical config, databases, exports, and logs under `project_root/data/` and `project_root/config/`
+  - let the service root execute code, but make it consume project-root data and project-root logs
+- provide one canonical install or redeploy script that:
+  - syncs code into the service root
+  - syncs the effective local config into the service root when needed
+  - regenerates runner scripts and rendered plist files
+  - reloads or bootstraps the launcher
+- keep restart as a narrower operation than redeploy:
+  - restart may reload an already installed plist or process
+  - restart must not be assumed to sync fresh code, fresh config, or regenerated launcher artifacts unless it explicitly does so
+- keep runner scripts thin:
+  - resolve the interpreter explicitly
+  - set only the minimum required environment variables
+  - delegate business behavior to the canonical CLI, module entrypoint, or main script instead of re-encoding defaults in shell
+- when a service root is used, pass the project root explicitly through an environment variable if the launcher needs project-local logs, data, or config-adjacent paths
+- treat project-local scheduler logs as canonical operational evidence and service-root-local logs as disposable staging at most
 - for once-per-day AI analysis on macOS, prefer a scheduler like `launchd` over introducing a second always-on AI daemon
 - keep scheduler command lines thin and config-driven; do not duplicate business defaults in multiple shell scripts
 - scheduled and background jobs must run with an explicit interpreter/runtime path when runtime dependencies are interpreter-specific

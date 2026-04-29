@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import json
 import time
 from pathlib import Path
@@ -38,9 +39,13 @@ def read_state(state_path: Path) -> dict[str, object]:
     return json.loads(state_path.read_text(encoding='utf-8'))
 
 
+def utc_timestamp_text(timestamp: float | int) -> str:
+    return datetime.fromtimestamp(float(timestamp), tz=timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')
+
+
 def build_or_update_index(vault_root: Path, db_path: Path, state_path: Path, scope: IndexScope) -> dict[str, object]:
     started_at = time.time()
-    attempt_at = int(started_at)
+    attempt_at = utc_timestamp_text(started_at)
     previous_state = read_state(state_path)
     conn = connect(db_path)
     scanned = 0
@@ -75,7 +80,7 @@ def build_or_update_index(vault_root: Path, db_path: Path, state_path: Path, sco
         conn.commit()
         duration_ms = int((time.time() - started_at) * 1000)
         payload = {
-            'last_successful_update_at': int(time.time()),
+            'last_successful_update_at': utc_timestamp_text(time.time()),
             'last_attempt_at': attempt_at,
             'last_update_duration_ms': duration_ms,
             'updated_notes_count': updated,
