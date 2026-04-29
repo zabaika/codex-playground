@@ -168,6 +168,35 @@ def fetch_like_rows(conn, field_name: str, query_terms: list[str], limit: int) -
     ).fetchall()
 
 
+def fetch_title_rows(conn, query_terms: list[str], limit: int, note_type: str | None = None) -> list:
+    if not query_terms:
+        return []
+    clauses = " OR ".join("LOWER(title) LIKE ?" for _ in query_terms)
+    params = [f"%{term}%" for term in query_terms]
+    note_type_sql = ""
+    if note_type:
+        note_type_sql = " AND note_type = ?"
+        params.append(note_type)
+    params.append(limit)
+    return conn.execute(
+        f"""
+        SELECT
+          path,
+          title,
+          note_type,
+          lead_summary,
+          headings_json,
+          tags_json,
+          aliases_json,
+          links_out_json
+        FROM notes
+        WHERE ({clauses}){note_type_sql}
+        LIMIT ?
+        """,
+        params,
+    ).fetchall()
+
+
 def should_keep_result(
     result: dict[str, object],
     position: int,
@@ -185,12 +214,27 @@ def should_keep_result(
     )
 
 
+def should_keep_title_lookup_result(
+    result: dict[str, object],
+    query: str,
+    query_terms: list[str],
+    ranking: RankingConfig,
+) -> bool:
+    exact_score = exactish_title_score(query, str(result['title']), ranking)
+    if exact_score > 0:
+        return True
+    title_overlap = overlap_score(query_terms, str(result['title']))
+    return title_overlap > 0
+
+
 def search_index(
     db_path: Path,
     query: str,
     ranking: RankingConfig | None = None,
     retrieval: RetrievalConfig | None = None,
     limit: int | None = None,
+    mode: str = 'default',
+    note_type: str | None = None,
 ) -> list[dict[str, object]]:
     runtime_config = None
     if ranking is None or retrieval is None:
@@ -203,6 +247,11 @@ def search_index(
     init_db(conn)
     query_terms = normalize_query_terms(query)
     match_query = build_match_query(query)
+    note_type_join_filter = ""
+    fts_params: list[object] = [match_query]
+    if note_type:
+        note_type_join_filter = " AND notes.note_type = ?"
+        fts_params.append(note_type)
     fts_rows = conn.execute(
         """
         SELECT
@@ -217,13 +266,17 @@ def search_index(
         FROM note_fts
         JOIN notes ON notes.path = note_fts.path
         WHERE note_fts MATCH ?
+        """ + note_type_join_filter + """
         ORDER BY bm25_score ASC
         LIMIT 50
         """,
-        (match_query,),
+        fts_params,
     ).fetchall()
-    links_rows = fetch_like_rows(conn, 'links_out_json', query_terms, 20)
+    title_rows = fetch_title_rows(conn, query_terms, 50, note_type=note_type) if mode == 'title-first' else []
+    links_rows = [] if mode == 'title-first' else fetch_like_rows(conn, 'links_out_json', query_terms, 20)
     candidates: dict[str, dict[str, object]] = {}
+    for row in title_rows:
+        merge_candidate_row(candidates, row, 'title')
     for rank, row in enumerate(fts_rows, start=1):
         merge_candidate_row(candidates, row, 'fts', rank)
     for row in links_rows:
@@ -281,7 +334,11 @@ def search_index(
     top_score = float(results[0]['score'])
     filtered: list[dict[str, object]] = []
     for position, result in enumerate(results):
-        if should_keep_result(result, position, top_score, retrieval):
+        if mode == 'title-first':
+            keep = should_keep_title_lookup_result(result, query, query_terms, ranking)
+        else:
+            keep = should_keep_result(result, position, top_score, retrieval)
+        if keep:
             filtered.append(result)
         if len(filtered) >= limit:
             break

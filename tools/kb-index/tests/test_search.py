@@ -148,6 +148,48 @@ class SearchTests(unittest.TestCase):
             self.assertIn("Налог недоверия к AI", article["links_out"])
             self.assertIn("links_out", article["candidate_sources"])
 
+    def test_title_first_mode_finds_known_concept_note_without_filesystem_scan(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            (root / "Ideas" / "Concepts").mkdir(parents=True)
+            (root / "Ideas").mkdir(exist_ok=True)
+            (root / "Ideas" / "Concepts" / "Социотехническая продуктивность.md").write_text(
+                "---\n"
+                "type: concept\n"
+                "tags:\n"
+                "  - developer-productivity\n"
+                "---\n"
+                "Социотехническая продуктивность описывает переплетение инженерных и организационных ограничений.\n",
+                encoding="utf-8",
+            )
+            (root / "Ideas" / "AI ускоряет код, но не доставку - узкие места инженерной системы.md").write_text(
+                "---\n"
+                "tags:\n"
+                "  - developer-productivity\n"
+                "---\n"
+                "Эта заметка объясняет, почему локальное ускорение кодинга не снимает ограничения всей системы.\n\n"
+                "## Related\n"
+                "См. также [[Социотехническая продуктивность]].\n",
+                encoding="utf-8",
+            )
+            db_path = root / "index.sqlite"
+            state_path = root / "state.json"
+            scope = IndexScope(include_roots=['Ideas'], exclude_roots=['Templates'], exclude_globs=[])
+            build_or_update_index(root, db_path, state_path, scope)
+            results = search_index(
+                db_path,
+                "Социотехническая продуктивность",
+                ranking=self.make_ranking(),
+                retrieval=self.make_retrieval(),
+                limit=5,
+                mode='title-first',
+                note_type='concept',
+            )
+            self.assertTrue(results)
+            self.assertEqual(results[0]["path"], "Ideas/Concepts/Социотехническая продуктивность.md")
+            self.assertIn("title", results[0]["candidate_sources"])
+            self.assertEqual(len(results), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

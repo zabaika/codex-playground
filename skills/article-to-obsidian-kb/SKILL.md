@@ -81,6 +81,12 @@ python3 scripts/detect_source_route.py --source-file "[SOURCE_FILE]"
    - Treat `search_kb` as a note-level retrieval step. The result is a shortlist of whole notes, not chunk hits.
    - Each result should be interpreted through `path`, `title`, `score`, `tags`, `lead_summary`, `headings`, and `snippet`.
    - Let the index-configured `retrieval.default_limit` control the default shortlist size. Override with `--limit` only when the current source clearly needs a broader pass.
+   - When the workflow already knows or strongly suspects the exact note title, prefer an index-backed title lookup instead of a filesystem name scan:
+
+```bash
+[KB_INDEX_ROOT]/bin/search_kb --config-path "[KB_INDEX_CONFIG]" --mode title-first --note-type concept --json "[KNOWN_NOTE_TITLE]"
+```
+
    - Build retrieval queries in a minimal pass set instead of relying on one vague search string:
      - source-derived article candidate pass:
        - first query: final proposed article title

@@ -88,6 +88,14 @@ CLI сначала читает `config/runtime.local.toml`, а явные ар�
 - `uninstall_kb_index_auto_update`
 - `status_kb_index_auto_update`
 
+Для known-note lookup есть отдельный title-oriented режим:
+
+```bash
+search_kb --mode title-first --note-type concept "Known note title"
+```
+
+Его стоит использовать вместо прямого `rg` по именам файлов, когда workflow уже знает или почти знает имя нужной заметки и хочет найти её через индекс, а не мимо индекса.
+
 Пока не реализованы и остаются roadmap items:
 
 - `read_kb`

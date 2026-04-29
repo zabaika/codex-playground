@@ -44,7 +44,15 @@ def cmd_update(args: argparse.Namespace) -> int:
 def cmd_search(args: argparse.Namespace) -> int:
     _, db_path, _, _, ranking, retrieval, _ = resolve_runtime(args)
     limit = args.limit if args.limit is not None else retrieval.default_limit
-    results = search_index(db_path, args.query, ranking, retrieval, limit=limit)
+    results = search_index(
+        db_path,
+        args.query,
+        ranking,
+        retrieval,
+        limit=limit,
+        mode=args.mode,
+        note_type=args.note_type,
+    )
     if args.json:
         print(json.dumps(results, ensure_ascii=False, indent=2))
     else:
@@ -130,6 +138,17 @@ def build_parser() -> argparse.ArgumentParser:
     add_common_paths(search_parser_cmd)
     search_parser_cmd.add_argument('query')
     search_parser_cmd.add_argument('--limit', type=int, help='Maximum number of notes to return')
+    search_parser_cmd.add_argument(
+        '--mode',
+        choices=['default', 'title-first'],
+        default='default',
+        help='Retrieval mode: generic note search or title-oriented known-note lookup',
+    )
+    search_parser_cmd.add_argument(
+        '--note-type',
+        choices=['concept', 'idea', 'job', 'daily', 'other'],
+        help='Optional note_type filter for known-note lookup or targeted retrieval',
+    )
     search_parser_cmd.add_argument('--json', action='store_true')
     search_parser_cmd.set_defaults(func=cmd_search)
 
