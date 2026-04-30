@@ -5,6 +5,7 @@ import json
 import os
 import re
 import sys
+import tomllib
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -27,57 +28,13 @@ from telegram_shared.openai_usage import log_openai_usage as shared_log_openai_u
 APP_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = Path(os.environ.get("TELEGRAM_CONNECTOR_PROJECT_ROOT", "")).expanduser() if os.environ.get("TELEGRAM_CONNECTOR_PROJECT_ROOT") else APP_DIR
 
-DEFAULT_SYSTEM_INSTRUCTIONS = (
-    "You are a concise Telegram channel analyst. Return compact, high-signal Russian summaries."
-)
-DEFAULT_SHARED_PROMPT_PREFIX = """Ты готовишь читаемый Telegram-дайджест на русском языке.
-Используй только факты из входных данных.
-Не выдумывай детали, оценки или причины без опоры на текст.
-Не используй markdown-таблицы.
-Не упоминай слова 'батч', 'часть сообщений', 'чанк' или внутреннюю механику обработки.
-Ссылки на сообщения оставляй в формате '<ссылка> - короткий заголовок'.
-При выборе самого важного и популярного учитывай replies и forwards как сигналы приоритета.
-Блок 'Связки вопрос-ответ/развитие темы' добавляй только если он реально объясняет развитие обсуждения и не дублирует основные темы.
-
-Общие метаданные анализа:
-- Канал: {channel_name}
-- Период UTC: {since} .. {until}
-"""
-DEFAULT_BATCH_DIGEST_TEMPLATE = """Тип шага: промежуточная сводка по части сообщений.
-
-Формат ответа:
-1. Одна короткая строка с главным выводом.
-2. 3-4 коротких пункта с темами и событиями.
-3. Блок 'Наиболее популярное' с 1-5 пунктами в формате '<ссылка> - короткий заголовок'.
-4. Блок 'Незакрытые вопросы/продолжения', если они есть.
-
-Метаданные текущей части:
-- Порядковый номер части: {batch_index}
-- Сообщений в части: {message_count}
-
-Сырые сообщения:
-{message_block}
-
-Короткий контекст предыдущей промежуточной сводки:
-{previous_batch_summary}
-"""
-DEFAULT_FINAL_DIGEST_TEMPLATE = """Тип шага: финальный дайджест канала по промежуточным сводкам.
-
-Формат ответа:
-1. Одна короткая строка с главным выводом.
-2. 3-5 коротких пунктов с основными темами и событиями.
-3. Блок 'Наиболее популярное' с 1-10 пунктами в формате '<ссылка> - короткий заголовок'.
-4. Блок 'Связки вопрос-ответ/развитие темы' только если он добавляет важный контекст сверх тем и блока популярного.
-
-Метаданные итоговой сборки:
-- Всего сообщений в анализе: {message_count}
-- Число промежуточных сводок: {batch_count}
-
-Промежуточные сводки:
-{batch_summary_block}
-"""
-
 OPENAI_DIGEST_RETRY_ATTEMPTS = 3
+DIGEST_PROMPT_REQUIRED_KEYS = (
+    "system_instructions",
+    "shared_prompt_prefix",
+    "batch_digest_template",
+    "final_digest_template",
+)
 
 
 @dataclass
@@ -137,7 +94,38 @@ def parse_bool(value: str, default: bool = False) -> bool:
     return default
 
 
+def resolve_digest_prompt_file(config: dict[str, Any], *, base_dir: Path | None = None) -> Path:
+    raw_path = history_client.get_config_value(config, "digest_prompts", "file")
+    if not raw_path:
+        raise SystemExit(
+            "Missing digest_prompts.file in runtime config. Point it to the version-controlled digest prompt TOML file."
+        )
+    prompt_file = Path(raw_path).expanduser()
+    if not prompt_file.is_absolute():
+        prompt_file = (base_dir or history_client.RUNTIME_LOCAL_FILE.parent) / prompt_file
+    return prompt_file
+
+
+def load_digest_prompts(config: dict[str, Any], *, base_dir: Path | None = None) -> dict[str, str]:
+    prompt_file = resolve_digest_prompt_file(config, base_dir=base_dir)
+    if not prompt_file.exists():
+        raise SystemExit(f"Digest prompt file not found: {prompt_file}")
+    with prompt_file.open("rb") as fh:
+        data = tomllib.load(fh)
+    if not isinstance(data, dict):
+        raise SystemExit(f"Digest prompt file must contain a TOML object: {prompt_file}")
+    missing = [key for key in DIGEST_PROMPT_REQUIRED_KEYS if not history_client.get_config_value(data, "digest_prompts", key)]
+    if missing:
+        missing_keys = ", ".join(f"digest_prompts.{key}" for key in missing)
+        raise SystemExit(f"Missing {missing_keys} in digest prompt file: {prompt_file}")
+    return {
+        key: history_client.get_config_value(data, "digest_prompts", key)
+        for key in DIGEST_PROMPT_REQUIRED_KEYS
+    }
+
+
 def resolve_digest_config(config: dict[str, Any]) -> DigestConfig:
+    prompts = load_digest_prompts(config)
     model = history_client.get_config_value(config, "processing", "model")
     if not model:
         raise SystemExit(
@@ -165,11 +153,10 @@ def resolve_digest_config(config: dict[str, Any]) -> DigestConfig:
             history_client.get_config_value(config, "processing", "ocr"),
             default=True,
         ),
-        system_instructions=history_client.get_config_value(config, "digest_prompts", "system_instructions") or DEFAULT_SYSTEM_INSTRUCTIONS,
-        shared_prompt_prefix=history_client.get_config_value(config, "digest_prompts", "shared_prompt_prefix") or DEFAULT_SHARED_PROMPT_PREFIX,
-        batch_prompt_template=history_client.get_config_value(config, "digest_prompts", "batch_digest_template")
-        or DEFAULT_BATCH_DIGEST_TEMPLATE,
-        final_prompt_template=history_client.get_config_value(config, "digest_prompts", "final_digest_template") or DEFAULT_FINAL_DIGEST_TEMPLATE,
+        system_instructions=prompts["system_instructions"],
+        shared_prompt_prefix=prompts["shared_prompt_prefix"],
+        batch_prompt_template=prompts["batch_digest_template"],
+        final_prompt_template=prompts["final_digest_template"],
         openai_api_key=os.environ.get("OPENAI_API_KEY", "").strip() or history_client.get_config_value(config, "secrets", "openai_api_key"),
     )
 

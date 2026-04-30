@@ -1,6 +1,7 @@
 import importlib.util
 import sqlite3
 import sys
+import tempfile
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
@@ -14,34 +15,45 @@ telegram_digest = importlib.util.module_from_spec(SPEC)
 assert SPEC.loader is not None
 SPEC.loader.exec_module(telegram_digest)
 
+TEST_DIGEST_PROMPTS = """[digest_prompts]
+system_instructions = "system prompt"
+shared_prompt_prefix = "Shared {channel_name} {since} {until}"
+batch_digest_template = "Batch={batch_index}; Count={message_count}; Prev={previous_batch_summary}; {message_block}"
+final_digest_template = "Final={channel_name}; Total={message_count}; Batches={batch_count}; {batch_summary_block}"
+"""
+
 
 class TelegramDigestTests(unittest.TestCase):
-    def test_resolve_digest_config_reads_defaults_and_prompt_templates(self) -> None:
-        config = {
-            "processing": {
-                "model": "test-model",
-                "ocr": "false",
-            },
-            "digest": {
-                "time": "09:30",
-                "since": "yesterday",
-                "until": "today",
-                "sync_mode": "tail",
-                "min_messages_for_ai": "7",
-                "separator_text": "────────",
-            },
-            "digest_prompts": {
-                "system_instructions": "system prompt",
-                "shared_prompt_prefix": "Shared {channel_name} {since} {until}",
-                "batch_digest_template": "Batch={batch_index}; Count={message_count}; Prev={previous_batch_summary}; {message_block}",
-                "final_digest_template": "Final={channel_name}; Total={message_count}; Batches={batch_count}; {batch_summary_block}",
-            },
-            "secrets": {
-                "openai_api_key": "op://Personal/item/openai_api_key",
-            },
-        }
+    def write_prompt_bundle(self, directory: Path, content: str = TEST_DIGEST_PROMPTS) -> Path:
+        prompt_file = directory / "digest_prompts.toml"
+        prompt_file.write_text(content, encoding="utf-8")
+        return prompt_file
 
-        result = telegram_digest.resolve_digest_config(config)
+    def test_resolve_digest_config_reads_prompt_templates_from_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            prompt_file = self.write_prompt_bundle(Path(tmp_dir))
+            config = {
+                "processing": {
+                    "model": "test-model",
+                    "ocr": "false",
+                },
+                "digest": {
+                    "time": "09:30",
+                    "since": "yesterday",
+                    "until": "today",
+                    "sync_mode": "tail",
+                    "min_messages_for_ai": "7",
+                    "separator_text": "────────",
+                },
+                "digest_prompts": {
+                    "file": str(prompt_file),
+                },
+                "secrets": {
+                    "openai_api_key": "op://Personal/item/openai_api_key",
+                },
+            }
+
+            result = telegram_digest.resolve_digest_config(config)
 
         self.assertEqual(result.time, "09:30")
         self.assertEqual(result.model, "test-model")
@@ -56,6 +68,42 @@ class TelegramDigestTests(unittest.TestCase):
         self.assertEqual(result.batch_prompt_template, "Batch={batch_index}; Count={message_count}; Prev={previous_batch_summary}; {message_block}")
         self.assertEqual(result.final_prompt_template, "Final={channel_name}; Total={message_count}; Batches={batch_count}; {batch_summary_block}")
         self.assertEqual(result.openai_api_key, "op://Personal/item/openai_api_key")
+
+    def test_load_digest_prompts_resolves_relative_path_from_runtime_config_dir(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            config_dir = Path(tmp_dir)
+            self.write_prompt_bundle(config_dir)
+            original_runtime_local_file = telegram_digest.history_client.RUNTIME_LOCAL_FILE
+            try:
+                telegram_digest.history_client.RUNTIME_LOCAL_FILE = config_dir / "runtime.local.toml"
+                prompts = telegram_digest.load_digest_prompts({"digest_prompts": {"file": "digest_prompts.toml"}})
+            finally:
+                telegram_digest.history_client.RUNTIME_LOCAL_FILE = original_runtime_local_file
+
+        self.assertEqual(prompts["system_instructions"], "system prompt")
+        self.assertEqual(prompts["shared_prompt_prefix"], "Shared {channel_name} {since} {until}")
+
+    def test_resolve_digest_config_requires_digest_prompt_file_reference(self) -> None:
+        with self.assertRaises(SystemExit) as context:
+            telegram_digest.resolve_digest_config({"processing": {"model": "test-model"}})
+
+        self.assertIn("Missing digest_prompts.file", str(context.exception))
+
+    def test_load_digest_prompts_requires_all_prompt_keys(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            prompt_file = self.write_prompt_bundle(
+                Path(tmp_dir),
+                content="""[digest_prompts]
+system_instructions = "system prompt"
+shared_prompt_prefix = "Shared {channel_name} {since} {until}"
+batch_digest_template = "Batch={batch_index}"
+""",
+            )
+
+            with self.assertRaises(SystemExit) as context:
+                telegram_digest.load_digest_prompts({"digest_prompts": {"file": str(prompt_file)}})
+
+        self.assertIn("digest_prompts.final_digest_template", str(context.exception))
 
     def test_resolve_digest_window_uses_relative_defaults(self) -> None:
         config = telegram_digest.DigestConfig(
@@ -432,6 +480,8 @@ class TelegramDigestTests(unittest.TestCase):
         self.assertEqual((month.profile, month.sync_limit, month.ai_batch_size), ("month", 181000, 241))
 
     def test_cmd_run_sends_per_channel_messages_and_final_error_only_when_needed(self) -> None:
+        temp_dir = tempfile.TemporaryDirectory()
+        prompt_file = self.write_prompt_bundle(Path(temp_dir.name))
         original_resolve_runtime = telegram_digest.history_client.resolve_runtime
         original_load_runtime_config = telegram_digest.history_client.load_runtime_config
         original_connect_db = telegram_digest.history_client.connect_db
@@ -449,6 +499,7 @@ class TelegramDigestTests(unittest.TestCase):
             telegram_digest.history_client.load_runtime_config = lambda: {
                 "telegram": {"default_chat_id": "1"},
                 "processing": {"model": "test-model"},
+                "digest_prompts": {"file": str(prompt_file)},
                 "digest_limits": {
                     "day": {"sync_limit": "6100", "ai_batch_size": "111"},
                 },
@@ -537,6 +588,7 @@ class TelegramDigestTests(unittest.TestCase):
             telegram_digest.summarize_channel_batches = original_summarize_channel_batches
             telegram_digest.bridge.require_token = original_require_token
             telegram_digest.bridge.send_text_chunks = original_send_text_chunks
+            temp_dir.cleanup()
 
         self.assertEqual(exit_code, 0)
         self.assertEqual(len(sent), 2)
@@ -546,6 +598,8 @@ class TelegramDigestTests(unittest.TestCase):
         self.assertIn("analysis failed: boom", sent[1])
 
     def test_cmd_run_skips_ai_when_channel_has_too_few_messages(self) -> None:
+        temp_dir = tempfile.TemporaryDirectory()
+        prompt_file = self.write_prompt_bundle(Path(temp_dir.name))
         original_resolve_runtime = telegram_digest.history_client.resolve_runtime
         original_load_runtime_config = telegram_digest.history_client.load_runtime_config
         original_connect_db = telegram_digest.history_client.connect_db
@@ -564,6 +618,7 @@ class TelegramDigestTests(unittest.TestCase):
                 "telegram": {"default_chat_id": "1"},
                 "processing": {"model": "test-model"},
                 "digest": {"min_messages_for_ai": "5"},
+                "digest_prompts": {"file": str(prompt_file)},
                 "digest_limits": {
                     "day": {"sync_limit": "6100", "ai_batch_size": "111"},
                 },
@@ -653,6 +708,7 @@ class TelegramDigestTests(unittest.TestCase):
             telegram_digest.summarize_channel_batches = original_summarize_channel_batches
             telegram_digest.bridge.require_token = original_require_token
             telegram_digest.bridge.send_text_chunks = original_send_text_chunks
+            temp_dir.cleanup()
 
         self.assertEqual(exit_code, 0)
         self.assertEqual(len(sent), 1)
@@ -666,11 +722,19 @@ class TelegramDigestTests(unittest.TestCase):
             "hello",
         )
 
+    def test_resolve_digest_config_requires_processing_model(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            prompt_file = self.write_prompt_bundle(Path(tmp_dir))
+            with self.assertRaises(SystemExit) as context:
+                telegram_digest.resolve_digest_config(
+                    {
+                        "processing": {},
+                        "digest_prompts": {"file": str(prompt_file)},
+                    }
+                )
+
+        self.assertIn("Missing processing.model", str(context.exception))
+
 
 if __name__ == "__main__":
     unittest.main()
-    def test_resolve_digest_config_requires_processing_model(self) -> None:
-        with self.assertRaises(SystemExit) as context:
-            telegram_digest.resolve_digest_config({"processing": {}})
-
-        self.assertIn("Missing processing.model", str(context.exception))

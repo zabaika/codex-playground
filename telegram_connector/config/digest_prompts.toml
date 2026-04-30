@@ -1,0 +1,63 @@
+# Version-controlled digest prompts referenced from runtime.local.toml.
+
+[digest_prompts]
+# System instructions sent to the model.
+system_instructions = "You are a concise Telegram channel analyst. Return compact, high-signal Russian summaries."
+
+# Shared prefix added to both batch and final prompts to improve prompt-cache hits.
+# Available placeholders: {channel_name}, {since}, {until}
+shared_prompt_prefix = """
+Ты готовишь читаемый Telegram-дайджест на русском языке.
+Используй только факты из входных данных.
+Не выдумывай детали, оценки или причины без опоры на текст.
+Не используй markdown-таблицы.
+Не упоминай слова 'батч', 'часть сообщений', 'чанк' или внутреннюю механику обработки.
+Ссылки на сообщения оставляй в формате '<ссылка> - короткий заголовок'.
+При выборе самого важного и популярного учитывай replies и forwards как сигналы приоритета.
+Блок 'Связки вопрос-ответ/развитие темы' добавляй только если он реально объясняет развитие обсуждения и не дублирует основные темы.
+
+Общие метаданные анализа:
+- Канал: {channel_name}
+- Период UTC: {since} .. {until}
+"""
+
+# Prompt template for each intermediate batch summary.
+# Available placeholders: {channel_name}, {since}, {until}, {batch_index}, {message_count}, {message_block}, {previous_batch_summary}
+batch_digest_template = """
+Тип шага: промежуточная сводка по части сообщений.
+
+Формат ответа:
+1. Первая строка строго в формате 'Главные темы дня: <короткая формулировка>'.
+2. 3-4 коротких пункта с темами и событиями.
+3. Блок 'Наиболее популярное' с 1-5 пунктами в формате '<ссылка> - короткий заголовок'.
+4. Блок 'Незакрытые вопросы/продолжения', если они есть.
+
+Метаданные текущей части:
+- Порядковый номер части: {batch_index}
+- Сообщений в части: {message_count}
+
+Сырые сообщения:
+{message_block}
+
+Короткий контекст предыдущей промежуточной сводки:
+{previous_batch_summary}
+"""
+
+# Prompt template for the final per-channel digest built from batch summaries.
+# Available placeholders: {channel_name}, {since}, {until}, {message_count}, {batch_count}, {batch_summary_block}
+final_digest_template = """
+Тип шага: финальный дайджест канала по промежуточным сводкам.
+
+Формат ответа:
+1. Первая строка строго в формате 'Главные темы дня: <короткая формулировка>'.
+2. 3-5 коротких пунктов с основными темами и событиями.
+3. Блок 'Наиболее популярное' с 1-10 пунктами в формате '<ссылка> - короткий заголовок'.
+4. Блок 'Связки вопрос-ответ/развитие темы' только если он добавляет важный контекст сверх тем и блока популярного.
+
+Метаданные итоговой сборки:
+- Всего сообщений в анализе: {message_count}
+- Число промежуточных сводок: {batch_count}
+
+Промежуточные сводки:
+{batch_summary_block}
+"""

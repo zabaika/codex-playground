@@ -84,6 +84,7 @@ rm -rf "$SERVICE_ROOT/telegram_shared"
 cp -R "$SOURCE_ROOT/../telegram_shared" "$SERVICE_ROOT/telegram_shared"
 cp "$SOURCE_ROOT/config/runtime.local.toml" "$SERVICE_ROOT/config/runtime.local.toml"
 cp "$SOURCE_ROOT/config/runtime.example.toml" "$SERVICE_ROOT/config/runtime.example.toml"
+cp "$SOURCE_ROOT/config/digest_prompts.toml" "$SERVICE_ROOT/config/digest_prompts.toml"
 
 if [[ -d "$SOURCE_ROOT/data/sessions" && ! -d "$SERVICE_ROOT/data/sessions" ]]; then
   cp -R "$SOURCE_ROOT/data/sessions" "$SERVICE_ROOT/data/sessions"

@@ -1,9 +1,10 @@
 # Telegram Connector
 
-Telegram toolkit with two local clients:
+Telegram toolkit with three local components:
 
 - `telegram_connector.py`: minimal Bot API bridge for inbound/outbound bot messages
 - `telegram_history_client.py`: channel history ingester based on Telethon + SQLite + Tesseract
+- `telegram_digest.py`: config-driven digest orchestration and Telegram delivery
 
 Project-wide implementation rules and reusable conventions are documented in `../RULEBOOK.md`.
 Project-specific coding guidance is documented in [./AGENTS.md](./AGENTS.md).
@@ -31,86 +32,21 @@ Use [../RULEBOOK.md](../RULEBOOK.md) as the source of truth for repository-wide 
 - runtime file placement
 - logging and storage safety rules
 
-Config shape:
+Canonical config files:
 
-```toml
-[telegram]
-default_chat_id = "<chat id or empty>"
+- tracked config shape and documented defaults: [config/runtime.example.toml](./config/runtime.example.toml)
+- local machine-specific runtime values: `config/runtime.local.toml`
+- version-controlled digest prompt bundle referenced from runtime config: [config/digest_prompts.toml](./config/digest_prompts.toml)
 
-[telethon]
-user_session_name = "<user session name>"
-bot_session_name = "<bot session name>"
-api_id = "<api id or secret reference>"
-phone = "<phone or secret reference>"
+Config ownership:
 
-[auth]
-default_mode = "<user|bot|auto>"
-public_channel_mode = "<user|bot>"
-private_channel_mode = "<user|bot>"
-
-[channels]
-default_list = [
-  "<channel>, <display name>",
-]
-
-[processing]
-model = "<OpenAI model>"
-ocr = "<true|false>"
-
-[digest]
-time = "<HH:MM>"
-since = "<today|yesterday|week|month|-Nd|YYYY-MM-DD>"
-until = "<today|yesterday|week|month|-Nd|YYYY-MM-DD>"
-sync_mode = "<backfill|update|tail>"
-mark_read = "<true|false>"
-
-[digest_limits.day]
-sync_limit = "<messages per digest run for a 1-day window>"
-ai_batch_size = "<AI messages per summarization chunk for a 1-day window>"
-
-[digest_limits.week]
-sync_limit = "<messages per digest run for a 7-day window>"
-ai_batch_size = "<AI messages per summarization chunk for a 7-day window>"
-
-[digest_limits.month]
-sync_limit = "<messages per digest run for a 30-day window>"
-ai_batch_size = "<AI messages per summarization chunk for a 30-day window>"
-
-[sync]
-sync_limit = "<messages per non-digest sync run, 0 disables the shared cap>"
-backfill_limit = "<default per-channel limit for sync --mode backfill>"
-tail_limit = "<default per-channel limit for sync --mode tail>"
-update_limit = "<default per-channel limit for sync --mode update>"
-batch_size = "<shared SQLite commit batch size for all sync flows>"
-
-[digest_prompts]
-system_instructions = "<system instructions>"
-batch_digest_template = """
-<batch prompt template with placeholders>
-"""
-
-final_digest_template = """
-<final prompt template with placeholders>
-"""
-
-[paths]
-# history_db = "/absolute/path/to/telegram_history.sqlite3"
-# media_root = "/absolute/path/to/telegram_media"
-# tesseract_binary = "/opt/homebrew/bin/tesseract"
-
-[bridge]
-allowed_chat_ids = "<comma-separated chat ids or empty>"
-allowed_user_ids = "<comma-separated Telegram user ids or empty>"
-allowed_usernames = "<comma-separated Telegram usernames or empty>"
-text_chunk_size = "<500..4096>"
-agent_stats_row_limit = "<20..2000>"
-
-[secrets]
-bot_token = "<secret reference or local secret>"
-api_hash = "<secret reference or local secret>"
-user_password = "<secret reference or local secret>"
-openai_api_key = "<secret reference or local secret>"
-```
+- `[processing]`: cross-cutting analysis defaults such as model and OCR
+- `[digest]`: digest schedule, default window, and delivery behavior
+- `[digest_limits.*]`: profile-based digest sync and AI chunk limits
+- `[sync]`: non-digest sync limits and SQLite commit batching
+- `[digest_prompts].file`: path to the version-controlled prompt bundle
+- `[bridge]`: bot access control, chunking, `/agent-stats`, and `/top-models`
+- `[paths]`, `[ocr]`, `[secrets]`: local paths, OCR prompt, and secret references
 
 `default_chat_id` can stay empty until you send at least one message to the bot and discover your chat id through `listen`.
 
@@ -150,7 +86,7 @@ For the history client:
 - `-Nd` means “N days back from the current UTC date”, so with current UTC date `2026-03-23`, `-3d` resolves to `2026-03-20`
 - the same alias logic now applies consistently to `sync`, `export-csv`, `ocr-pending`, and `digest`
 - `digest.mark_read` enables the existing mark-as-read mechanism for digest prep-sync; it only has effect in `user` auth mode
-- `[digest_prompts]` stores the AI system instructions and the per-channel prompt template
+- `[digest_prompts].file` points to the version-controlled TOML bundle that stores the AI system instructions and per-channel prompt templates
 - `digest_limits.day`, `digest_limits.week`, and `digest_limits.month` override digest limits automatically based on the chosen date window
 - `digest_limits.day` applies to any one-day window, including `today`, `yesterday`, or an explicit single date like `since=2026-03-18 until=2026-03-18`
 - when more than one channel is selected for `digest`, the active digest `sync_limit` is distributed across them inside that run so that every selected channel gets a share of the budget
@@ -163,23 +99,15 @@ For the history client:
 - `[sync].sync_limit` and a command-level `--limit` both apply for non-digest sync:
   channels are processed in the order you requested, each channel may use up to its own command `--limit`, and the whole run stops once the shared `[sync].sync_limit` budget is exhausted
 - for non-digest sync, `--limit 0` removes the per-channel cap entirely; in that case only the shared `[sync].sync_limit` still limits the overall run
-- `batch_digest_template` supports `{channel_name}`, `{since}`, `{until}`, `{batch_index}`, `{message_count}`, `{message_block}`, and `{previous_batch_summary}`
-- `final_digest_template` supports `{channel_name}`, `{since}`, `{until}`, `{message_count}`, `{batch_count}`, and `{batch_summary_block}`
+- `digest_prompts.file` should usually be `digest_prompts.toml`; relative paths are resolved from the config directory that contains `runtime.local.toml`
 - `digest` overrides for `channel`, `since`, `until`, and auth mode win over config defaults when you pass them explicitly
 - `message_block` already includes a direct Telegram message link, `message_id`, UTC date, sender display name, sender username, `forwards`, `replies`, text, and OCR text when available
 - for private groups and channels without a public username, `channels.username` may stay empty in SQLite; this is expected and not an error
 - when `channels.username` is empty, digest links fall back to the private-message format `https://t.me/c/<internal_chat_id>/<message_id>`
-- both batch and final digest prompts should require the same first-line convention, currently `Главные темы дня: ...`, to reduce model drift between intermediate and final summaries
-- the digest prompts are expected to output `Наиболее популярное` as direct Telegram message links with short human-readable titles, using `forwards` and `replies` as popularity hints
-- `Связки вопрос-ответ/развитие темы` stays optional and should only appear when it adds structure beyond the main topics and popularity block; when used, each item should also reference a direct message link
-- prompt templates should avoid leaking internal processing words like `батч` into the user-facing digest text
-- Telegram-specific spacing and block formatting are enforced by digest post-processing, so prompt templates only need to describe the semantic structure of the answer
 - `tail`, `update`, and `backfill` already stream messages from Telegram incrementally through Telethon; `[sync].batch_size` affects local DB commit batching, not the underlying Telegram API paging
 - AI batching in `digest` is done per channel, not across channels: each selected channel gets its own batch chain, intermediate summaries, and final channel summary
 - digest delivery is also per channel: as soon as one channel summary is ready, it is sent to Telegram as a separate message
 - a final digest status message is sent only if one or more channels failed during sync or analysis
-- digest prompts are structured so that the stable instruction/rubric prefix comes before the variable batch payload, which helps OpenAI input caching hit more often across repeated calls
-- `digest_prompts.shared_prompt_prefix` is prepended to both intermediate and final prompts so the cache-friendly prefix stays aligned across the whole digest pipeline
 - every OpenAI digest call logs usage into SQLite table `ai_usage_log`, including input tokens, cached input tokens, output tokens, total tokens, latency, stage, status, `response_id`, `prompt_cache_key`, and shared-prefix diagnostics
 
 ### macOS Keychain
@@ -272,7 +200,6 @@ Bot command notes:
 - auth defaults to `user`
 - `since` means start of UTC day, `until` means end of UTC day for date-only values
 - supported date aliases: `today`, `yesterday`, `week`, `month`, `-Nd`
-- `/digest` keeps processing defaults, sync behavior, batch size, prompts, and schedule in config; bot parameters only override `channel`, `since`, `until`, and auth mode
 - `/digest -3d` is a shorthand for a one-day digest window with `since=-3d` and `until=-3d`
 - `/agent-stats` is handled locally by the bridge and scans only the latest configured `ai_usage_log` rows
 - `/top-models` is handled locally by the bridge, uses the configured external ranking API, and serves short-term results from in-memory cache inside the running bridge process
@@ -301,6 +228,11 @@ Restart the background service:
 bash telegram_connector/scripts/restart_launch_agent.sh
 ```
 
+Service update rule:
+
+- rerun `install_launch_agent.sh` after code changes, `telegram_shared` changes, `runtime.local.toml` changes, prompt-bundle changes, or schedule-related config changes such as `digest.time`
+- use `restart_launch_agent.sh` only to reload the already installed service copy when the installed code and config are already up to date
+
 Daemon logs:
 
 - `telegram_connector/data/launchd/bridge.startup.log`
@@ -318,8 +250,6 @@ Daemon logs:
 - `since=2026-03-15` means `2026-03-15T00:00:00+00:00`
 - `until=2026-03-16` means `2026-03-16T23:59:59+00:00`
 - aliases `week` and `month` mean `7` and `30` days back from today in UTC
-- `digest` uses `[digest]` defaults for its window and sync settings, and `[processing]` defaults for model/OCR, whenever you omit overrides
-- digest analysis is hierarchical: overlapping message batches are summarized first, then a final digest is built from the batch summaries
 - `media` downloads media only
 - `ocr` downloads image media and runs OCR
 - `read` is strictly optional and marks messages as read only in `user` auth mode
@@ -460,7 +390,7 @@ python3 telegram_connector/telegram_digest.py run --channel @vcnews,@refugecard 
 
 Additional notes:
 
-- `digest` takes model and OCR defaults from `[processing]`, schedule and window defaults from `[digest]`, profile-based fetch and AI chunk limits from `[digest_limits.*]`, and prompt templates from `[digest_prompts]`
+- `digest` takes model and OCR defaults from `[processing]`, schedule and window defaults from `[digest]`, profile-based fetch and AI chunk limits from `[digest_limits.*]`, and the prompt bundle path from `[digest_prompts].file`
 - explicit `--channel`, `--since`, `--until`, and `--auth-mode` override config defaults for a single run
 - bot command `digest` supports the same override set: `/digest @vcnews since=2026-03-17 until=2026-03-17`
 - if a selected channel has fewer messages than `digest.min_messages_for_ai`, digest skips OpenAI for that channel and sends a short “loaded without analysis” note instead
@@ -469,7 +399,6 @@ Additional notes:
 - final quality is usually better than a single huge prompt on long periods because the model sees ordered local context first and only then performs a second-pass synthesis
 - output is delivered to `telegram.default_chat_id`, not to an arbitrary invoking chat
 - the scheduled LaunchAgent uses `digest.time` from config and writes logs to `telegram_connector/data/launchd/digest.*.log`
-- if you change `digest.time` or other schedule-related config, rerun `install_launch_agent.sh` so the LaunchAgent plist is regenerated with the new time
 
 #### `sync`
 
