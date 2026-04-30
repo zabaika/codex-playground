@@ -58,7 +58,7 @@ class TelegramDigestTests(unittest.TestCase):
         self.assertEqual(result.time, "09:30")
         self.assertEqual(result.model, "test-model")
         self.assertEqual(result.sync_mode, "tail")
-        self.assertEqual(result.ai_batch_size, 0)
+        self.assertEqual(result.messages_per_ai_pass, 0)
         self.assertEqual(result.min_messages_for_ai, 7)
         self.assertEqual(result.separator_text, "────────")
         self.assertTrue(result.mark_read)
@@ -112,7 +112,10 @@ batch_digest_template = "Batch={batch_index}"
             until="yesterday",
             model="gpt-5-mini",
             sync_mode="update",
-            ai_batch_size=100,
+            messages_per_ai_pass=100,
+            message_text_max_chars=450,
+            message_ocr_max_chars=300,
+            message_block_max_chars=50000,
             min_messages_for_ai=1,
             separator_text="",
             mark_read=False,
@@ -165,6 +168,8 @@ batch_digest_template = "Batch={batch_index}"
                 }
             ],
             max_chars=500,
+            message_text_max_chars=450,
+            message_ocr_max_chars=300,
         )
 
         self.assertEqual(rendered.channel_name, "vc.ru")
@@ -267,6 +272,30 @@ batch_digest_template = "Batch={batch_index}"
 
         self.assertTrue(message.endswith("────────\n────────"))
 
+    def test_build_channel_digest_message_appends_char_limit_warning(self) -> None:
+        message = telegram_digest.build_channel_digest_message(
+            "Channel A",
+            since="2026-03-17",
+            until="2026-03-17",
+            message_count=3,
+            summary="Главные темы дня: тема.",
+            char_limit_reached=True,
+        )
+
+        self.assertIn("достигнут лимит message_block_max_chars", message)
+
+    def test_build_channel_digest_message_appends_sync_limit_warning(self) -> None:
+        message = telegram_digest.build_channel_digest_message(
+            "Channel A",
+            since="2026-03-17",
+            until="2026-03-17",
+            message_count=3,
+            summary="Главные темы дня: тема.",
+            sync_limit_reached=True,
+        )
+
+        self.assertIn("достигнут sync_limit", message)
+
     def test_build_message_link_uses_private_channel_fallback(self) -> None:
         link = telegram_digest.build_message_link({"channel_id": 2428609899, "message_id": 8, "username": None})
         self.assertEqual(link, "https://t.me/c/2428609899/8")
@@ -341,7 +370,7 @@ batch_digest_template = "Batch={batch_index}"
                     "Главные темы дня — eSIM, переводы и налоговые уведомления.",
                     "- Первый пункт",
                 ]
-            )
+            ),
         )
 
         self.assertIn("<b>Главные темы дня</b>\neSIM, переводы и налоговые уведомления.", formatted)
@@ -354,11 +383,86 @@ batch_digest_template = "Batch={batch_index}"
                     "Главная тема дня — рабочие схемы переводов и доступность карт.",
                     "- Первый пункт",
                 ]
-            )
+            ),
         )
 
-        self.assertIn("<b>Главная тема дня</b>\nрабочие схемы переводов и доступность карт.", formatted)
+        self.assertIn("<b>Главные темы дня</b>\nрабочие схемы переводов и доступность карт.", formatted)
         self.assertNotIn("Главная тема дня —", formatted)
+
+    def test_format_digest_summary_for_telegram_accepts_case_insensitive_main_topics(self) -> None:
+        formatted = telegram_digest.format_digest_summary_for_telegram(
+            "\n".join(
+                [
+                    "главные темы дня: eSIM, переводы и налоговые уведомления.",
+                    "- Первый пункт",
+                ]
+            ),
+        )
+
+        self.assertIn("<b>Главные темы дня</b>\neSIM, переводы и налоговые уведомления.", formatted)
+
+    def test_format_digest_summary_for_telegram_accepts_short_main_topics_heading(self) -> None:
+        formatted = telegram_digest.format_digest_summary_for_telegram(
+            "\n".join(
+                [
+                    "Главные темы: eSIM, переводы и налоговые уведомления.",
+                    "- Первый пункт",
+                ]
+            ),
+        )
+
+        self.assertIn("<b>Главные темы дня</b>\neSIM, переводы и налоговые уведомления.", formatted)
+
+    def test_format_digest_summary_for_telegram_accepts_short_section_prefixes(self) -> None:
+        formatted = telegram_digest.format_digest_summary_for_telegram(
+            "\n".join(
+                [
+                    "Главные темы дня: тема.",
+                    "Незакрытые вопросы",
+                    "- Вопрос 1",
+                    "Связки вопрос-ответ",
+                    "- Связка 1",
+                ]
+            ),
+        )
+
+        self.assertIn("<b>Незакрытые вопросы/продолжения</b>\n- Вопрос 1", formatted)
+        self.assertIn("<b>Связки вопрос-ответ/развитие темы</b>\n- Связка 1", formatted)
+
+    def test_format_digest_summary_for_telegram_accepts_case_insensitive_section_headings(self) -> None:
+        formatted = telegram_digest.format_digest_summary_for_telegram(
+            "\n".join(
+                [
+                    "главные темы: тема.",
+                    "наиболее популярное",
+                    "<https://t.me/refugecard/1> - Пункт 1",
+                    "незакрытые вопросы",
+                    "- Вопрос 1",
+                    "связки вопрос-ответ",
+                    "- Связка 1",
+                ]
+            ),
+        )
+
+        self.assertIn("<b>Главные темы дня</b>\nтема.", formatted)
+        self.assertIn("<b>Наиболее популярное</b>\nhttps://t.me/refugecard/1 - Пункт 1", formatted)
+        self.assertIn("<b>Незакрытые вопросы/продолжения</b>\n- Вопрос 1", formatted)
+        self.assertIn("<b>Связки вопрос-ответ/развитие темы</b>\n- Связка 1", formatted)
+
+    def test_format_digest_summary_for_telegram_accepts_inline_section_bodies_with_separators(self) -> None:
+        formatted = telegram_digest.format_digest_summary_for_telegram(
+            "\n".join(
+                [
+                    "Главные темы - eSIM и налоги.",
+                    "Незакрытые вопросы: нужен свежий кейс по банкам.",
+                    "Связки вопрос-ответ — обсуждение перешло к картам и переводам.",
+                ]
+            ),
+        )
+
+        self.assertIn("<b>Главные темы дня</b>\neSIM и налоги.", formatted)
+        self.assertIn("<b>Незакрытые вопросы/продолжения</b>\nнужен свежий кейс по банкам.", formatted)
+        self.assertIn("<b>Связки вопрос-ответ/развитие темы</b>\nобсуждение перешло к картам и переводам.", formatted)
 
     def test_build_channel_digest_message_keeps_header_compact(self) -> None:
         message = telegram_digest.build_channel_digest_message(
@@ -398,6 +502,7 @@ batch_digest_template = "Batch={batch_index}"
 
     def test_build_prompt_cache_info_uses_shared_prefix_hash_and_common_key(self) -> None:
         info = telegram_digest.build_prompt_cache_info(
+            stage="batch",
             model="gpt-5.4-mini",
             cache_channel="@vcnews",
             display_channel="vc.ru",
@@ -416,6 +521,7 @@ batch_digest_template = "Batch={batch_index}"
                 model="gpt-5.4-mini",
                 channel="@vcnews",
                 profile="day",
+                stage="batch",
             ),
         )
         self.assertEqual(info.cache_retention, "in_memory")
@@ -423,6 +529,22 @@ batch_digest_template = "Batch={batch_index}"
         self.assertEqual(info.prompt_chars, len("Shared vc.ru 2026-03-17 2026-03-17\n\nbody"))
         self.assertEqual(info.shared_prefix_chars, len("Shared vc.ru 2026-03-17 2026-03-17"))
         self.assertTrue(info.shared_prefix_hash)
+
+    def test_build_prompt_cache_key_splits_by_stage(self) -> None:
+        batch_key = telegram_digest.build_prompt_cache_key(
+            model="gpt-5.4-mini",
+            channel="@vcnews",
+            profile="day",
+            stage="batch",
+        )
+        final_key = telegram_digest.build_prompt_cache_key(
+            model="gpt-5.4-mini",
+            channel="@vcnews",
+            profile="day",
+            stage="final",
+        )
+
+        self.assertNotEqual(batch_key, final_key)
 
     def test_extract_usage_reads_cached_tokens(self) -> None:
         usage = telegram_digest.extract_usage(
@@ -452,6 +574,43 @@ batch_digest_template = "Batch={batch_index}"
         batches = list(telegram_digest.iter_message_batches(messages, 3))
         self.assertEqual([[item["message_id"] for item in batch] for batch in batches], [[1, 2, 3], [3, 4, 5], [5, 6, 7]])
 
+    def test_iter_rendered_message_batches_does_not_drop_messages_when_char_limit_hits(self) -> None:
+        messages = [
+            {
+                "channel_id": 123,
+                "title": "vc.ru",
+                "username": "vcnews",
+                "message_id": idx,
+                "date_utc": f"2026-03-17T09:0{idx}:00+00:00",
+                "sender_username": "alice",
+                "sender_display_name": "Alice",
+                "forwards": 0,
+                "replies": 0,
+                "text": "x" * 260,
+                "ocr_text": None,
+            }
+            for idx in range(1, 5)
+        ]
+
+        batches = list(
+            telegram_digest.iter_rendered_message_batches(
+                messages,
+                batch_size=4,
+                max_chars=900,
+                message_text_max_chars=260,
+                message_ocr_max_chars=0,
+            )
+        )
+
+        self.assertEqual(
+            [[item["message_id"] for item in batch] for batch, _rendered in batches],
+            [[1, 2], [2, 3], [3, 4]],
+        )
+        self.assertEqual(
+            {item["message_id"] for batch, _rendered in batches for item in batch},
+            {1, 2, 3, 4},
+        )
+
     def test_build_parser_accepts_run_overrides(self) -> None:
         parser = telegram_digest.build_parser()
 
@@ -464,10 +623,22 @@ batch_digest_template = "Batch={batch_index}"
 
     def test_resolve_digest_limits_uses_profile_specific_defaults(self) -> None:
         config = {
+            "digest_ai": {
+                "messages_per_ai_pass": "111",
+                "message_text_max_chars": "121",
+                "message_ocr_max_chars": "221",
+                "message_block_max_chars": "100000",
+            },
             "digest_limits": {
-                "day": {"sync_limit": "6100", "ai_batch_size": "111"},
-                "week": {"sync_limit": "43000", "ai_batch_size": "181"},
-                "month": {"sync_limit": "181000", "ai_batch_size": "241"},
+                "day": {
+                    "sync_limit": "6100",
+                },
+                "week": {
+                    "sync_limit": "43000",
+                },
+                "month": {
+                    "sync_limit": "181000",
+                },
             }
         }
 
@@ -475,9 +646,191 @@ batch_digest_template = "Batch={batch_index}"
         week = telegram_digest.resolve_digest_limits(config, "2026-03-11", "2026-03-17")
         month = telegram_digest.resolve_digest_limits(config, "2026-02-17", "2026-03-17")
 
-        self.assertEqual((day.profile, day.sync_limit, day.ai_batch_size), ("day", 6100, 111))
-        self.assertEqual((week.profile, week.sync_limit, week.ai_batch_size), ("week", 43000, 181))
-        self.assertEqual((month.profile, month.sync_limit, month.ai_batch_size), ("month", 181000, 241))
+        self.assertEqual(
+            (day.profile, day.sync_limit, day.messages_per_ai_pass, day.message_text_max_chars, day.message_ocr_max_chars, day.message_block_max_chars),
+            ("day", 6100, 111, 121, 221, 100000),
+        )
+        self.assertEqual(
+            (week.profile, week.sync_limit, week.messages_per_ai_pass, week.message_text_max_chars, week.message_ocr_max_chars, week.message_block_max_chars),
+            ("week", 43000, 111, 121, 221, 100000),
+        )
+        self.assertEqual(
+            (month.profile, month.sync_limit, month.messages_per_ai_pass, month.message_text_max_chars, month.message_ocr_max_chars, month.message_block_max_chars),
+            ("month", 181000, 111, 121, 221, 100000),
+        )
+
+    def test_summarize_channel_batches_uses_single_pass_when_full_window_fits(self) -> None:
+        conn = sqlite3.connect(":memory:")
+        telegram_digest.history_client.init_db(conn)
+        messages = [
+            {
+                "channel_id": 123,
+                "title": "vc.ru",
+                "username": "vcnews",
+                "message_id": 1,
+                "date_utc": "2026-03-17T09:00:00+00:00",
+                "sender_username": "alice",
+                "sender_display_name": "Alice",
+                "forwards": 2,
+                "replies": 3,
+                "text": "first",
+                "ocr_text": None,
+            },
+            {
+                "channel_id": 123,
+                "title": "vc.ru",
+                "username": "vcnews",
+                "message_id": 2,
+                "date_utc": "2026-03-17T10:00:00+00:00",
+                "sender_username": "bob",
+                "sender_display_name": "Bob",
+                "forwards": 1,
+                "replies": 0,
+                "text": "second",
+                "ocr_text": None,
+            },
+        ]
+        config = telegram_digest.DigestConfig(
+            time="08:00",
+            since="yesterday",
+            until="yesterday",
+            model="gpt-5.4-mini",
+            sync_mode="update",
+            messages_per_ai_pass=10,
+            message_text_max_chars=450,
+            message_ocr_max_chars=300,
+            message_block_max_chars=50000,
+            min_messages_for_ai=1,
+            separator_text="",
+            mark_read=False,
+            use_ocr=True,
+            system_instructions="system",
+            shared_prompt_prefix="Shared {channel_name} {since} {until}",
+            batch_prompt_template="Digest {channel_name} {message_count}\n{message_block}",
+            final_prompt_template="Final {channel_name}\n{batch_summary_block}",
+            openai_api_key="k",
+        )
+        original_run_openai_digest = telegram_digest.run_openai_digest
+        calls: list[str] = []
+        try:
+            def fake_run_openai_digest(api_key, model, system_instructions, prompt, *, prompt_cache_key):
+                calls.append(prompt)
+                return telegram_digest.OpenAIResult(
+                    response_id="resp_1",
+                    text="Main topics of the day: one direct digest.",
+                    usage=telegram_digest.OpenAIUsage(
+                        input_tokens=100,
+                        cached_input_tokens=0,
+                        output_tokens=20,
+                        total_tokens=120,
+                        latency_ms=50,
+                    ),
+                )
+
+            telegram_digest.run_openai_digest = fake_run_openai_digest
+            count, summary, char_limit_reached = telegram_digest.summarize_channel_batches(
+                conn,
+                api_key="k",
+                config=config,
+                channel="@vcnews",
+                channel_name="vc.ru",
+                since="2026-03-17",
+                until="2026-03-17",
+                total_message_count=2,
+                messages=iter(messages),
+            )
+        finally:
+            telegram_digest.run_openai_digest = original_run_openai_digest
+
+        self.assertEqual(count, 2)
+        self.assertEqual(summary, "Main topics of the day: one direct digest.")
+        self.assertFalse(char_limit_reached)
+        self.assertEqual(len(calls), 1)
+        self.assertNotIn("Final vc.ru", calls[0])
+
+    def test_summarize_channel_batches_reports_char_limit_hit(self) -> None:
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        telegram_digest.history_client.init_db(conn)
+        messages = [
+            {
+                "channel_id": 123,
+                "title": "vc.ru",
+                "username": "vcnews",
+                "message_id": 1,
+                "date_utc": "2026-03-17T09:00:00+00:00",
+                "sender_username": "alice",
+                "sender_display_name": "Alice",
+                "forwards": 0,
+                "replies": 0,
+                "text": "x" * 260,
+                "ocr_text": None,
+            },
+            {
+                "channel_id": 123,
+                "title": "vc.ru",
+                "username": "vcnews",
+                "message_id": 2,
+                "date_utc": "2026-03-17T10:00:00+00:00",
+                "sender_username": "bob",
+                "sender_display_name": "Bob",
+                "forwards": 0,
+                "replies": 0,
+                "text": "y" * 260,
+                "ocr_text": None,
+            },
+        ]
+        config = telegram_digest.DigestConfig(
+            time="08:00",
+            since="yesterday",
+            until="yesterday",
+            model="gpt-5.4-mini",
+            sync_mode="update",
+            messages_per_ai_pass=10,
+            message_text_max_chars=260,
+            message_ocr_max_chars=0,
+            message_block_max_chars=520,
+            min_messages_for_ai=1,
+            separator_text="",
+            mark_read=False,
+            use_ocr=False,
+            system_instructions="system",
+            shared_prompt_prefix="Shared {channel_name} {since} {until}",
+            batch_prompt_template="Digest {channel_name} {message_count}\n{message_block}",
+            final_prompt_template="Final {channel_name}\n{batch_summary_block}",
+            openai_api_key="k",
+        )
+        original_run_openai_digest = telegram_digest.run_openai_digest
+        try:
+            telegram_digest.run_openai_digest = lambda *args, **kwargs: telegram_digest.OpenAIResult(
+                response_id="resp_1",
+                text="Главные темы дня: тема.",
+                usage=telegram_digest.OpenAIUsage(
+                    input_tokens=100,
+                    cached_input_tokens=0,
+                    output_tokens=20,
+                    total_tokens=120,
+                    latency_ms=50,
+                ),
+            )
+            count, summary, char_limit_reached = telegram_digest.summarize_channel_batches(
+                conn,
+                api_key="k",
+                config=config,
+                channel="@vcnews",
+                channel_name="vc.ru",
+                since="2026-03-17",
+                until="2026-03-17",
+                total_message_count=2,
+                messages=iter(messages),
+            )
+        finally:
+            telegram_digest.run_openai_digest = original_run_openai_digest
+
+        self.assertEqual(count, 2)
+        self.assertEqual(summary, "Главные темы дня: тема.")
+        self.assertTrue(char_limit_reached)
+        conn.close()
 
     def test_cmd_run_sends_per_channel_messages_and_final_error_only_when_needed(self) -> None:
         temp_dir = tempfile.TemporaryDirectory()
@@ -500,8 +853,16 @@ batch_digest_template = "Batch={batch_index}"
                 "telegram": {"default_chat_id": "1"},
                 "processing": {"model": "test-model"},
                 "digest_prompts": {"file": str(prompt_file)},
+                "digest_ai": {
+                    "messages_per_ai_pass": "111",
+                    "message_text_max_chars": "450",
+                    "message_ocr_max_chars": "300",
+                    "message_block_max_chars": "100000",
+                },
                 "digest_limits": {
-                    "day": {"sync_limit": "6100", "ai_batch_size": "111"},
+                    "day": {
+                        "sync_limit": "6100",
+                    },
                 },
             }
             telegram_digest.history_client.connect_db = lambda runtime: sqlite3.connect(":memory:")
@@ -545,7 +906,7 @@ batch_digest_template = "Batch={batch_index}"
             telegram_digest.require_openai_api_key = lambda config: "k"
 
             async def fake_run_sync(runtime, **kwargs):
-                return [{"channel": "@a"}, {"channel": "@b"}]
+                return [{"channel": "@a", "sync_limit_reached": True}, {"channel": "@b"}]
 
             telegram_digest.run_sync = fake_run_sync
             telegram_digest.iter_channel_messages = lambda conn, channel, since, until, max_messages=None: iter(
@@ -553,11 +914,13 @@ batch_digest_template = "Batch={batch_index}"
             )
             telegram_digest.count_channel_messages = lambda conn, channel, since, until: 1
 
-            def fake_render_message_block(messages, max_chars):
+            def fake_render_message_block(messages, **kwargs):
+                max_chars = kwargs.get("max_chars")
                 return telegram_digest.ChannelDigestInput(
                     channel_name="Channel A" if max_chars == 1000 else "unused",
                     message_count=1,
                     message_block="block",
+                    hit_char_limit=False,
                 )
 
             telegram_digest.render_message_block = fake_render_message_block
@@ -565,7 +928,7 @@ batch_digest_template = "Batch={batch_index}"
             def fake_summarize_channel_batches(conn, **kwargs):
                 if kwargs["channel"] == "@b":
                     raise RuntimeError("boom")
-                return (1, "summary ok")
+                return (1, "summary ok", False)
 
             telegram_digest.summarize_channel_batches = fake_summarize_channel_batches
             telegram_digest.bridge.require_token = lambda: "token"
@@ -592,8 +955,9 @@ batch_digest_template = "Batch={batch_index}"
 
         self.assertEqual(exit_code, 0)
         self.assertEqual(len(sent), 2)
-        self.assertIn("Channel A", sent[0])
+        self.assertIn("@a", sent[0])
         self.assertIn("summary ok", sent[0])
+        self.assertIn("достигнут sync_limit", sent[0])
         self.assertIn("Digest completed with errors", sent[1])
         self.assertIn("analysis failed: boom", sent[1])
 
@@ -619,8 +983,16 @@ batch_digest_template = "Batch={batch_index}"
                 "processing": {"model": "test-model"},
                 "digest": {"min_messages_for_ai": "5"},
                 "digest_prompts": {"file": str(prompt_file)},
+                "digest_ai": {
+                    "messages_per_ai_pass": "111",
+                    "message_text_max_chars": "450",
+                    "message_ocr_max_chars": "300",
+                    "message_block_max_chars": "100000",
+                },
                 "digest_limits": {
-                    "day": {"sync_limit": "6100", "ai_batch_size": "111"},
+                    "day": {
+                        "sync_limit": "6100",
+                    },
                 },
             }
             telegram_digest.history_client.connect_db = lambda runtime: sqlite3.connect(":memory:")
@@ -671,11 +1043,12 @@ batch_digest_template = "Batch={batch_index}"
             )
             telegram_digest.count_channel_messages = lambda conn, channel, since, until: 3
 
-            def fake_render_message_block(messages, max_chars):
+            def fake_render_message_block(messages, **kwargs):
                 return telegram_digest.ChannelDigestInput(
                     channel_name="Channel A",
                     message_count=1,
                     message_block="block",
+                    hit_char_limit=False,
                 )
 
             telegram_digest.render_message_block = fake_render_message_block

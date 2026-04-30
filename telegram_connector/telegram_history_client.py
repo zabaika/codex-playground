@@ -951,6 +951,7 @@ async def sync_one_channel(
         skipped_existing = 0
         refreshed_existing_media = 0
         highest_message_id = None
+        seen_messages = 0
         mark_read_target_id = latest_processed_message_id(conn, entity.id, mode) if getattr(args, "mark_read", False) else None
         existing_max_id = latest_stored_message_id(conn, entity.id) if mode == "update" else None
         since_dt = parse_filter_datetime_value(getattr(args, "since", None))
@@ -965,6 +966,7 @@ async def sync_one_channel(
                 break
             if mode == "update" and existing_max_id is not None and message.id <= existing_max_id:
                 break
+            seen_messages += 1
             downloaded_path = None
             downloaded_size = None
             sender_username, sender_display_name = await resolve_sender_metadata(entity, message)
@@ -1040,6 +1042,7 @@ async def sync_one_channel(
             "auth_mode": auth_mode,
             "processed_messages": processed,
             "skipped_existing": skipped_existing,
+            "sync_limit_reached": bool(scan_limit is not None and seen_messages >= scan_limit),
             "refreshed_existing_media": refreshed_existing_media,
             "download_media": bool(args.download_media),
             "ocr_processed": ocr_processed,

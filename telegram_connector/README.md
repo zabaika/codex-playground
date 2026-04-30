@@ -42,7 +42,8 @@ Config ownership:
 
 - `[processing]`: cross-cutting analysis defaults such as model and OCR
 - `[digest]`: digest schedule, default window, and delivery behavior
-- `[digest_limits.*]`: profile-based digest sync and AI chunk limits
+- `[digest_ai]`: digest-wide AI pass limits shared by every period
+- `[digest_limits.*]`: profile-based digest sync limits
 - `[sync]`: non-digest sync limits and SQLite commit batching
 - `[digest_prompts].file`: path to the version-controlled prompt bundle
 - `[bridge]`: bot access control, chunking, `/agent-stats`, and `/top-models`
@@ -90,7 +91,12 @@ For the history client:
 - `digest_limits.day`, `digest_limits.week`, and `digest_limits.month` override digest limits automatically based on the chosen date window
 - `digest_limits.day` applies to any one-day window, including `today`, `yesterday`, or an explicit single date like `since=2026-03-18 until=2026-03-18`
 - when more than one channel is selected for `digest`, the active digest `sync_limit` is distributed across them inside that run so that every selected channel gets a share of the budget
-- `digest_limits.*.ai_batch_size` is the AI summarization chunk size used for hierarchical digest generation
+- `digest_ai.messages_per_ai_pass` is the maximum number of stored Telegram messages allowed in one AI pass; if the full channel window stays within this count and also fits the shared block budget, digest uses one direct AI request, otherwise the same value becomes the fallback chunk size
+- `digest_ai.message_text_max_chars` is the maximum number of characters kept from the main Telegram message text for one stored message row
+- `digest_ai.message_ocr_max_chars` is the maximum number of characters kept from OCR text for one stored message row
+- metadata such as `id`, `date`, `sender`, `link`, `forwards`, and `replies` are always included and are not charged against the text or OCR limits
+- `digest_ai.message_block_max_chars` is the maximum rendered character budget for one AI input block for one channel, regardless of whether the digest window is day, week, or month
+- current starting point in config therefore uses `digest_ai.messages_per_ai_pass = 500`, `digest_ai.message_text_max_chars = 450`, `digest_ai.message_ocr_max_chars = 300`, and `digest_ai.message_block_max_chars = 100000`
 - `[sync].batch_size` is the shared SQLite commit batch size for all sync flows, including digest-prep sync
 - `[sync].sync_limit` is the shared Telegram download cap for non-digest sync commands; it is applied across all selected channels in one run
 - `digest_limits.*.sync_limit` and `[sync].batch_size` do different jobs:
@@ -105,7 +111,7 @@ For the history client:
 - for private groups and channels without a public username, `channels.username` may stay empty in SQLite; this is expected and not an error
 - when `channels.username` is empty, digest links fall back to the private-message format `https://t.me/c/<internal_chat_id>/<message_id>`
 - `tail`, `update`, and `backfill` already stream messages from Telegram incrementally through Telethon; `[sync].batch_size` affects local DB commit batching, not the underlying Telegram API paging
-- AI batching in `digest` is done per channel, not across channels: each selected channel gets its own batch chain, intermediate summaries, and final channel summary
+- AI batching in `digest` is done per channel, not across channels: each selected channel first attempts a single direct AI pass when the full rendered window fits within the configured budgets; otherwise it falls back to the batch chain and final channel summary
 - digest delivery is also per channel: as soon as one channel summary is ready, it is sent to Telegram as a separate message
 - a final digest status message is sent only if one or more channels failed during sync or analysis
 - every OpenAI digest call logs usage into SQLite table `ai_usage_log`, including input tokens, cached input tokens, output tokens, total tokens, latency, stage, status, `response_id`, `prompt_cache_key`, and shared-prefix diagnostics
@@ -175,7 +181,7 @@ The leading `/` is optional for supported bridge commands.
 Bot command quick reference:
 
 - `/agent-stats`
-  show local OpenAI usage and prompt-cache summary from recent digest runs
+  show local OpenAI usage, single-pass share, and prompt-cache summary from recent digest runs
 - `/top-models [limit] [debug]`
   show the current top free models from the configured external ranking API
 - `/backfill [channel] [limit] [since=...] [until=...] [media] [bot|user|auto]`
@@ -202,6 +208,7 @@ Bot command notes:
 - supported date aliases: `today`, `yesterday`, `week`, `month`, `-Nd`
 - `/digest -3d` is a shorthand for a one-day digest window with `since=-3d` and `until=-3d`
 - `/agent-stats` is handled locally by the bridge and scans only the latest configured `ai_usage_log` rows
+- `/agent-stats` includes the share of digest requests that went through single-pass summarization (`stage=single`) inside the scanned window
 - `/top-models` is handled locally by the bridge, uses the configured external ranking API, and serves short-term results from in-memory cache inside the running bridge process
 - `/top-models ... debug` switches the formatter into an expanded per-model view and includes the raw ranking/eval fields that are normally hidden in the compact summary
 
@@ -365,7 +372,7 @@ Additional notes:
 #### `digest`
 
 Description:
-Run the config-driven morning workflow: sync the selected channels, optionally OCR images, summarize messages in overlapping AI batches, then build one final per-channel digest and deliver it to `telegram.default_chat_id`.
+Run the config-driven morning workflow: sync the selected channels, optionally OCR images, try a single direct per-channel AI digest when the full rendered window fits the configured budgets, otherwise summarize messages in overlapping AI batches and build one final per-channel digest, then deliver it to `telegram.default_chat_id`.
 
 CLI:
 
@@ -390,13 +397,17 @@ python3 telegram_connector/telegram_digest.py run --channel @vcnews,@refugecard 
 
 Additional notes:
 
-- `digest` takes model and OCR defaults from `[processing]`, schedule and window defaults from `[digest]`, profile-based fetch and AI chunk limits from `[digest_limits.*]`, and the prompt bundle path from `[digest_prompts].file`
+- `digest` takes model and OCR defaults from `[processing]`, schedule and window defaults from `[digest]`, digest-wide AI pass limits from `[digest_ai]`, profile-based fetch budgets from `[digest_limits.*]`, and the prompt bundle path from `[digest_prompts].file`
 - explicit `--channel`, `--since`, `--until`, and `--auth-mode` override config defaults for a single run
 - bot command `digest` supports the same override set: `/digest @vcnews since=2026-03-17 until=2026-03-17`
 - if a selected channel has fewer messages than `digest.min_messages_for_ai`, digest skips OpenAI for that channel and sends a short “loaded without analysis” note instead
 - sender display names and usernames are included in the AI input to preserve question/answer context in user discussions
-- batches keep chronological order and use a small automatic overlap between neighboring batches to reduce context loss at boundaries
-- final quality is usually better than a single huge prompt on long periods because the model sees ordered local context first and only then performs a second-pass synthesis
+- if the channel window fits within `digest_ai.messages_per_ai_pass`, `digest_ai.message_text_max_chars`, `digest_ai.message_ocr_max_chars`, and `digest_ai.message_block_max_chars`, digest uses one AI request and skips final aggregation for that channel
+- if the full channel window does not fit, batches keep chronological order and use a small automatic overlap between neighboring batches to reduce context loss at boundaries
+- fallback final quality on long periods is usually better than a single huge prompt because the model sees ordered local context first and only then performs a second-pass synthesis
+- if a channel reaches its effective `sync_limit` during digest prep-sync, the Telegram digest message for that channel ends with an explicit warning that the history window may have been loaded only partially
+- digest formatter normalizes a few close Russian heading variants from the model, such as `Главная тема дня` or `Главные темы`, back into the canonical Telegram heading `Главные темы дня`
+- section headings such as `Наиболее популярное`, `Незакрытые вопросы...`, and `Связки вопрос-ответ...` are also parsed tolerantly and normalized back into the canonical Telegram section names
 - output is delivered to `telegram.default_chat_id`, not to an arbitrary invoking chat
 - the scheduled LaunchAgent uses `digest.time` from config and writes logs to `telegram_connector/data/launchd/digest.*.log`
 

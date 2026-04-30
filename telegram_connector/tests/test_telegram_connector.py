@@ -656,7 +656,7 @@ class TelegramConnectorTests(unittest.TestCase):
                     VALUES
                     ('2026-03-23T10:00:00+00:00', 'digest', 'batch', '@vcnews', '2026-03-22', '2026-03-22', 'gpt-5.4-mini', 'resp_1', 'digest:a', 1, 10, 'p1', 100, 50, 20, 120, 200, 'ok'),
                     ('2026-03-23T10:05:00+00:00', 'digest', 'final', '@vcnews', '2026-03-22', '2026-03-22', 'gpt-5.4-mini', 'resp_2', 'digest:a', 2, 5, 'p2', 90, 10, 18, 108, 210, 'ok'),
-                    ('2026-03-23T10:10:00+00:00', 'digest', 'final', '@other', '2026-03-22', '2026-03-22', 'gpt-5.4-mini', 'resp_3', 'digest:b', 3, 5, 'p3', 80, 0, 16, 96, 220, 'ok')
+                    ('2026-03-23T10:10:00+00:00', 'digest', 'single', '@other', '2026-03-22', '2026-03-22', 'gpt-5.4-mini', 'resp_3', 'digest:b', 3, 5, 'p3', 80, 0, 16, 96, 220, 'ok')
                     """
                 )
                 conn.commit()
@@ -667,6 +667,7 @@ class TelegramConnectorTests(unittest.TestCase):
         self.assertEqual(summary["global"]["total_requests"], 2)
         self.assertEqual(summary["global"]["input_tokens"], 170)
         self.assertEqual(summary["global"]["cached_input_tokens"], 10)
+        self.assertEqual(summary["global"]["single_requests"], 1)
 
     def test_format_digest_usage_summary_includes_cached_share(self) -> None:
         text = telegram_connector.format_digest_usage_summary(
@@ -675,6 +676,7 @@ class TelegramConnectorTests(unittest.TestCase):
                     "total_requests": 3,
                     "ok_requests": 2,
                     "error_requests": 1,
+                    "single_requests": 1,
                     "cached_requests": 2,
                     "cache_keys": 1,
                     "first_request_at": "2026-03-23T10:00:00+00:00",
@@ -699,6 +701,7 @@ class TelegramConnectorTests(unittest.TestCase):
         self.assertIn("Digest stats:", text)
         self.assertIn("cached input tokens: 50", text)
         self.assertIn("cached share of input tokens: 25.0%", text)
+        self.assertIn("single-pass requests: 1 (33.3%)", text)
         self.assertIn("analysis window: latest 200 requests", text)
         self.assertIn("Latest rounds:", text)
         self.assertIn("final: ok, input=100, cached=25 (25.0%), output=15", text)
@@ -846,6 +849,7 @@ class TelegramConnectorTests(unittest.TestCase):
                 "total_requests": 1,
                 "ok_requests": 1,
                 "error_requests": 0,
+                "single_requests": 1,
                 "cached_requests": 1,
                 "cache_keys": 1,
                 "first_request_at": "2026-03-23T10:00:00+00:00",
@@ -876,6 +880,7 @@ class TelegramConnectorTests(unittest.TestCase):
             telegram_connector.subprocess.run = original_run
         self.assertEqual(captured["chat_id"], 42)
         self.assertIn("Digest stats:", str(captured["text"]))
+        self.assertIn("single-pass requests: 1 (100.0%)", str(captured["text"]))
 
     def test_handle_history_command_serves_top_models_without_subprocess(self) -> None:
         update = {

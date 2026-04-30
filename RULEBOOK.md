@@ -97,6 +97,10 @@ Rules:
 - command-line explicit values override config
 - if an operator omits an input target, source, profile, or scope selector, use configured defaults
 - if an operator explicitly provides a target, source, profile, or scope selector, ignore conflicting config defaults for that run
+- if runtime behavior is tuned by prompts, thresholds, limits, budgets, sizing formulas, section aliases, or other operator-facing knobs, keep those values in one canonical config or version-controlled bundle instead of hardcoding editable copies in code
+- when code still needs a constant because of an external protocol or library boundary, document that upstream constraint next to the constant and keep the effective operator-tunable value separate in config
+- do not hide derived runtime behavior behind undocumented formulas or silent clamps; if one config value is expected to be sized from another, put the exact practical formula and the current sample inputs next to the owning config fields
+- when several profiles share the same operator-facing knob, keep that knob in one shared config block and let per-profile sections override only the values that truly differ by profile
 - for local Codex skills, keep exactly one editable `config/runtime.local.toml` in the repository skill folder
 - if the skill is also installed under `~/.codex/skills`, the installed copy should point to that same repo file instead of keeping a second divergent local config
 - if a skill is only an orchestration layer over other local skills, prefer pointing at the sibling skills' local configs instead of copying the same machine-specific values into another file

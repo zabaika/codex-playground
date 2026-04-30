@@ -65,26 +65,29 @@ min_messages_for_ai = "1"
 # Whether digest prep-sync should mark the already-processed range as read using the existing read mechanism.
 mark_read = "true"
 
+[digest_ai]
+# Maximum number of stored Telegram messages allowed in one AI pass.
+# If the whole channel window has no more messages than this and also fits the shared block budget below,
+# digest uses one direct AI request; otherwise the same value becomes the fallback chunk size for hierarchical batching.
+messages_per_ai_pass = "500"
+# Maximum number of characters from the main Telegram message text kept for one stored message row.
+message_text_max_chars = "450"
+# Maximum number of characters from OCR text kept for one stored message row.
+message_ocr_max_chars = "300"
+# Maximum total size of one rendered AI input block in characters for one channel, regardless of digest period.
+message_block_max_chars = "100000"
+
 [digest_limits.day]
 # Recommended defaults for a daily window when the total traffic across all channels is about 5000 messages/day.
 sync_limit = "6000"
-# Number of messages per AI summarization chunk inside one channel.
-# This does not affect SQLite commit batching.
-ai_batch_size = "120"
 
 [digest_limits.week]
 # Recommended defaults for a 7-day window with the same traffic assumption.
 sync_limit = "42000"
-# Number of messages per AI summarization chunk inside one channel.
-# This does not affect SQLite commit batching.
-ai_batch_size = "180"
 
 [digest_limits.month]
 # Recommended defaults for a 30-day window with the same traffic assumption.
 sync_limit = "180000"
-# Number of messages per AI summarization chunk inside one channel.
-# This does not affect SQLite commit batching.
-ai_batch_size = "240"
 
 [sync]
 # Total Telegram download cap across all selected channels for one non-digest sync run.

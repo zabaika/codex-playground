@@ -35,6 +35,10 @@ DIGEST_PROMPT_REQUIRED_KEYS = (
     "batch_digest_template",
     "final_digest_template",
 )
+MAIN_TOPICS_DAY_HEADING = "Главные темы дня"
+MOST_POPULAR_HEADING = "Наиболее популярное"
+OPEN_QUESTIONS_HEADING = "Незакрытые вопросы/продолжения"
+QUESTION_ANSWER_LINKS_HEADING = "Связки вопрос-ответ/развитие темы"
 
 
 @dataclass
@@ -44,7 +48,10 @@ class DigestConfig:
     until: str
     model: str
     sync_mode: str
-    ai_batch_size: int
+    messages_per_ai_pass: int
+    message_text_max_chars: int
+    message_ocr_max_chars: int
+    message_block_max_chars: int
     min_messages_for_ai: int
     separator_text: str
     mark_read: bool
@@ -61,6 +68,7 @@ class ChannelDigestInput:
     channel_name: str
     message_count: int
     message_block: str
+    hit_char_limit: bool
 
 
 @dataclass
@@ -73,7 +81,10 @@ class SyncBatchPlan:
 class DigestLimits:
     profile: str
     sync_limit: int
-    ai_batch_size: int
+    messages_per_ai_pass: int
+    message_text_max_chars: int
+    message_ocr_max_chars: int
+    message_block_max_chars: int
 
 
 @dataclass
@@ -142,7 +153,10 @@ def resolve_digest_config(config: dict[str, Any]) -> DigestConfig:
         until=history_client.get_config_value(config, "digest", "until") or "yesterday",
         model=model,
         sync_mode=history_client.get_config_value(config, "digest", "sync_mode") or "update",
-        ai_batch_size=0,
+        messages_per_ai_pass=0,
+        message_text_max_chars=0,
+        message_ocr_max_chars=0,
+        message_block_max_chars=0,
         min_messages_for_ai=min_messages_for_ai,
         separator_text=(history_client.get_config_value(config, "digest", "separator_text") or "").strip(),
         mark_read=parse_bool(
@@ -217,19 +231,43 @@ def digest_profile_name(since: str, until: str) -> str:
 
 def resolve_digest_limits(config: dict[str, Any], since: str, until: str) -> DigestLimits:
     profile = digest_profile_name(since, until)
+    shared_ai_section = get_nested_section(config, "digest_ai")
     section = get_nested_section(config, "digest_limits", profile)
     raw_sync_limit = str(section.get("sync_limit", "")).strip()
-    raw_ai_batch_size = str(section.get("ai_batch_size", "")).strip()
+    raw_messages_per_ai_pass = str(shared_ai_section.get("messages_per_ai_pass", "")).strip()
+    raw_message_text_max_chars = str(shared_ai_section.get("message_text_max_chars", "")).strip()
+    raw_message_ocr_max_chars = str(shared_ai_section.get("message_ocr_max_chars", "")).strip()
+    raw_message_block_max_chars = str(shared_ai_section.get("message_block_max_chars", "")).strip()
     if not raw_sync_limit:
         raise SystemExit(f"Missing digest_limits.{profile}.sync_limit in runtime config.")
-    if not raw_ai_batch_size:
-        raise SystemExit(f"Missing digest_limits.{profile}.ai_batch_size in runtime config.")
+    if not raw_messages_per_ai_pass:
+        raise SystemExit("Missing digest_ai.messages_per_ai_pass in runtime config.")
+    if not raw_message_text_max_chars:
+        raise SystemExit("Missing digest_ai.message_text_max_chars in runtime config.")
+    if not raw_message_ocr_max_chars:
+        raise SystemExit("Missing digest_ai.message_ocr_max_chars in runtime config.")
+    if not raw_message_block_max_chars:
+        raise SystemExit("Missing digest_ai.message_block_max_chars in runtime config.")
     try:
         sync_limit = int(raw_sync_limit)
-        ai_batch_size = int(raw_ai_batch_size)
+        messages_per_ai_pass = int(raw_messages_per_ai_pass)
+        message_text_max_chars = int(raw_message_text_max_chars)
+        message_ocr_max_chars = int(raw_message_ocr_max_chars)
+        message_block_max_chars = int(raw_message_block_max_chars)
     except ValueError as exc:
-        raise SystemExit(f"Invalid integer in digest_limits.{profile}.sync_limit or ai_batch_size.") from exc
-    return DigestLimits(profile=profile, sync_limit=max(1, sync_limit), ai_batch_size=max(1, ai_batch_size))
+        raise SystemExit(
+            "Invalid integer in digest_ai.messages_per_ai_pass, digest_ai.message_text_max_chars, "
+            "digest_ai.message_ocr_max_chars, digest_ai.message_block_max_chars, or "
+            f"digest_limits.{profile}.sync_limit."
+        ) from exc
+    return DigestLimits(
+        profile=profile,
+        sync_limit=max(1, sync_limit),
+        messages_per_ai_pass=max(1, messages_per_ai_pass),
+        message_text_max_chars=max(0, message_text_max_chars),
+        message_ocr_max_chars=max(0, message_ocr_max_chars),
+        message_block_max_chars=max(1, message_block_max_chars),
+    )
 
 
 def require_openai_api_key(config: DigestConfig) -> str:
@@ -454,41 +492,101 @@ def build_message_link(message: dict[str, Any]) -> str | None:
 
 
 def truncate_text(value: str, limit: int) -> str:
+    if limit <= 0:
+        return ""
     if len(value) <= limit:
         return value
     return value[: max(0, limit - 1)].rstrip() + "…"
 
 
-def render_message_block(messages: Any, *, max_chars: int) -> ChannelDigestInput:
+def render_message_entry(
+    message: dict[str, Any],
+    *,
+    message_text_max_chars: int,
+    message_ocr_max_chars: int,
+) -> str:
+    base_parts = [
+        f"id={message['message_id']}",
+        f"date={message['date_utc']}",
+        f"sender={render_sender_label(message)}",
+        f"link={build_message_link(message) or '<no link>'}",
+        f"forwards={message.get('forwards') if message.get('forwards') is not None else 0}",
+        f"replies={message.get('replies') if message.get('replies') is not None else 0}",
+    ]
+    text_value = str(message.get("text") or "<no text>")
+    ocr_text = str(message.get("ocr_text") or "").strip()
+    parts = [*base_parts, f"text={truncate_text(text_value, message_text_max_chars)}"]
+    if ocr_text and message_ocr_max_chars > 0:
+        parts.append(f"ocr={truncate_text(ocr_text, message_ocr_max_chars)}")
+    return "\n".join(parts)
+
+
+def render_message_block(
+    messages: Any,
+    *,
+    max_chars: int,
+    message_text_max_chars: int,
+    message_ocr_max_chars: int,
+) -> ChannelDigestInput:
     chunks: list[str] = []
     total = 0
     message_count = 0
     channel_name = ""
+    hit_char_limit = False
     for item in messages:
         if not channel_name:
             channel_name = item.get("title") or item.get("username") or ""
-        message_count += 1
-        parts = [
-            f"id={item['message_id']}",
-            f"date={item['date_utc']}",
-            f"sender={render_sender_label(item)}",
-            f"link={build_message_link(item) or '<no link>'}",
-            f"forwards={item.get('forwards') if item.get('forwards') is not None else 0}",
-            f"replies={item.get('replies') if item.get('replies') is not None else 0}",
-            f"text={truncate_text(item['text'] or '<no text>', 400)}",
-        ]
-        if item.get("ocr_text"):
-            parts.append(f"ocr={truncate_text(item['ocr_text'], 220)}")
-        block = "\n".join(parts)
+        block = render_message_entry(
+            item,
+            message_text_max_chars=message_text_max_chars,
+            message_ocr_max_chars=message_ocr_max_chars,
+        )
         if total and total + len(block) + 2 > max_chars:
+            hit_char_limit = True
             break
         chunks.append(block)
         total += len(block) + 2
+        message_count += 1
     return ChannelDigestInput(
         channel_name=channel_name,
         message_count=message_count,
         message_block="\n\n".join(chunks),
+        hit_char_limit=hit_char_limit,
     )
+
+
+def iter_rendered_message_batches(
+    messages: list[dict[str, Any]],
+    *,
+    batch_size: int,
+    max_chars: int,
+    message_text_max_chars: int,
+    message_ocr_max_chars: int,
+) -> Any:
+    index = 0
+    while index < len(messages):
+        window = messages[index : index + batch_size]
+        rendered = render_message_block(
+            window,
+            max_chars=max_chars,
+            message_text_max_chars=message_text_max_chars,
+            message_ocr_max_chars=message_ocr_max_chars,
+        )
+        actual_count = rendered.message_count
+        if actual_count <= 0:
+            actual_count = 1
+            rendered = render_message_block(
+                window[:1],
+                max_chars=max_chars,
+                message_text_max_chars=message_text_max_chars,
+                message_ocr_max_chars=message_ocr_max_chars,
+            )
+        batch = window[:actual_count]
+        yield batch, rendered
+        if index + actual_count >= len(messages):
+            break
+        overlap = batch_overlap_size(min(batch_size, actual_count))
+        index += max(1, actual_count - overlap)
 
 
 def build_batch_digest_prompt(
@@ -576,17 +674,19 @@ def extract_usage(response: dict[str, Any], latency_ms: int) -> OpenAIUsage:
     return shared_extract_usage(response, latency_ms)
 
 
-def build_prompt_cache_key(*, model: str, channel: str, profile: str) -> str:
+def build_prompt_cache_key(*, model: str, channel: str, profile: str, stage: str) -> str:
     return shared_hash_cache_key(
         "digest",
         model.strip().lower() or "unknown-model",
         channel.strip().lstrip("@").lower() or "unknown-channel",
         profile.strip().lower() or "day",
+        stage.strip().lower() or "unknown-stage",
     )
 
 
 def build_prompt_cache_info(
     *,
+    stage: str,
     model: str,
     cache_channel: str,
     display_channel: str,
@@ -603,7 +703,7 @@ def build_prompt_cache_info(
         until=until,
     ).strip()
     return shared_build_prompt_cache_info(
-        cache_key=build_prompt_cache_key(model=model, channel=cache_channel, profile=profile),
+        cache_key=build_prompt_cache_key(model=model, channel=cache_channel, profile=profile, stage=stage),
         system_instructions=system_instructions,
         prompt_text=prompt,
         shared_prefix=prefix_text,
@@ -736,14 +836,6 @@ def format_digest_summary_for_telegram(summary: str) -> str:
     compact_lines = [line for line in lines if line]
     if not compact_lines:
         return ""
-
-    heading_prefixes = (
-        "Главные темы",
-        "Наиболее популярное",
-        "Незакрытые вопросы",
-        "Связки вопрос-ответ",
-    )
-
     formatted: list[str] = []
     current_section = ""
     previous_item_was_list = False
@@ -756,17 +848,31 @@ def format_digest_summary_for_telegram(summary: str) -> str:
         return escaped
 
     def normalize_lead_line(value: str) -> str:
-        normalized = re.sub(r"^Главн(ая тема|ые темы) дня\s*[:\-—]\s*", "", value, flags=re.IGNORECASE).strip()
-        return normalized or value.strip()
+        normalized = re.sub(r"^(?:Главная тема дня|Главные темы дня|Главные темы)\s*[:\-—]\s*", "", value, flags=re.IGNORECASE).strip()
+        if normalized != value.strip():
+            return normalized or value.strip()
+        return value.strip()
 
     def extract_lead_heading(value: str) -> str:
-        match = re.match(r"^(Главн(?:ая тема|ые темы) дня)\s*[:\-—]\s*(.*)$", value, flags=re.IGNORECASE)
-        if not match:
-            return "Главные темы дня"
-        heading = match.group(1).strip()
-        if heading.lower().startswith("главная"):
-            return "Главная тема дня"
-        return "Главные темы дня"
+        if re.match(r"^(?:Главная тема дня|Главные темы дня|Главные темы)\s*[:\-—]\s*", value, flags=re.IGNORECASE):
+            return MAIN_TOPICS_DAY_HEADING
+        return MAIN_TOPICS_DAY_HEADING
+
+    def resolve_heading(value: str) -> tuple[str, str] | None:
+        heading_patterns = (
+            (MAIN_TOPICS_DAY_HEADING, r"^(?:Главная тема дня|Главные темы дня|Главные темы)\b"),
+            (MOST_POPULAR_HEADING, r"^Наиболее популярное\b"),
+            (OPEN_QUESTIONS_HEADING, r"^Незакрытые вопросы"),
+            (QUESTION_ANSWER_LINKS_HEADING, r"^Связки вопрос-ответ"),
+        )
+        for canonical_heading, pattern in heading_patterns:
+            match = re.match(pattern, value, flags=re.IGNORECASE)
+            if not match:
+                continue
+            body_match = re.match(rf"^{pattern[1:]}\s*[:\-—]\s*(.*)$", value, flags=re.IGNORECASE)
+            body = body_match.group(1).strip() if body_match else ""
+            return canonical_heading, body
+        return None
 
     first_line = compact_lines[0]
     if (
@@ -784,18 +890,13 @@ def format_digest_summary_for_telegram(summary: str) -> str:
         previous_line_kind = "text"
 
     for line in compact_lines:
-        is_heading = any(line.startswith(prefix) for prefix in heading_prefixes)
+        heading = resolve_heading(line)
+        is_heading = heading is not None
         is_list_item = line.startswith("- ") or line.startswith("• ") or line.startswith("<http")
 
         if is_heading:
-            current_section = "popular" if line.startswith("Наиболее популярное") else "regular"
-            heading_line = line
-            body_line = ""
-            if ":" in line:
-                prefix, suffix = line.split(":", 1)
-                if any(prefix.startswith(item) for item in heading_prefixes):
-                    heading_line = prefix
-                    body_line = suffix.strip()
+            heading_line, body_line = heading
+            current_section = "popular" if heading_line == MOST_POPULAR_HEADING else "regular"
             if formatted and formatted[-1] != "":
                 formatted.append("")
             formatted.append(f"<b>{escape_line(heading_line)}</b>")
@@ -839,6 +940,8 @@ def build_channel_digest_message(
     until: str,
     message_count: int,
     summary: str,
+    char_limit_reached: bool = False,
+    sync_limit_reached: bool = False,
     separator_text: str = "",
 ) -> str:
     formatted_summary = format_digest_summary_for_telegram(summary)
@@ -857,6 +960,18 @@ def build_channel_digest_message(
         body = header
     else:
         body = f"{header}\n\n{formatted_summary}"
+    warnings: list[str] = []
+    if char_limit_reached:
+        warnings.append(
+            "<i>Предупреждение: по этому чату был достигнут лимит "
+            "message_block_max_chars, поэтому часть локального контекста была разбита на дополнительные AI-батчи.</i>"
+        )
+    if sync_limit_reached:
+        warnings.append(
+            "<i>Предупреждение: по этому чату был достигнут sync_limit, поэтому Telegram-история для выбранного периода могла быть загружена не полностью.</i>"
+        )
+    if warnings:
+        body = f"{body}\n\n" + "\n\n".join(warnings)
     if separator_text:
         escaped_separator = html.escape(separator_text, quote=False)
         return f"{body}\n\n{escaped_separator}\n{escaped_separator}"
@@ -870,6 +985,7 @@ def build_channel_digest_skip_message(
     until: str,
     message_count: int,
     min_messages_for_ai: int,
+    sync_limit_reached: bool = False,
     separator_text: str = "",
 ) -> str:
     return build_channel_digest_message(
@@ -881,6 +997,7 @@ def build_channel_digest_skip_message(
             f"Сообщений меньше порога для AI-обработки ({min_messages_for_ai}). "
             "Сообщения загружены, но digest отправлен без анализа."
         ),
+        sync_limit_reached=sync_limit_reached,
         separator_text=separator_text,
     )
 
@@ -907,16 +1024,98 @@ def summarize_channel_batches(
     channel_name: str,
     since: str,
     until: str,
+    total_message_count: int,
     messages: Any,
-) -> tuple[int, str]:
+) -> tuple[int, str, bool]:
     batch_summaries: list[str] = []
     unique_message_ids: set[int] = set()
     previous_batch_summary = ""
     batch_index = 0
-    batch_size = config.ai_batch_size
-    for batch in iter_message_batches(messages, batch_size):
+    batch_size = max(1, config.messages_per_ai_pass)
+    all_messages = list(messages)
+    batch_source = all_messages
+    char_limit_reached = False
+    if total_message_count <= batch_size:
+        single_pass_input = render_message_block(
+            all_messages,
+            max_chars=config.message_block_max_chars,
+            message_text_max_chars=config.message_text_max_chars,
+            message_ocr_max_chars=config.message_ocr_max_chars,
+        )
+        if single_pass_input.message_count == total_message_count:
+            unique_message_ids.update(int(item["message_id"]) for item in all_messages if item.get("message_id") is not None)
+            prompt = build_batch_digest_prompt(
+                config.shared_prompt_prefix,
+                config.batch_prompt_template,
+                channel_name or channel,
+                since,
+                until,
+                1,
+                single_pass_input.message_count,
+                single_pass_input.message_block,
+                "",
+            )
+            cache_info = build_prompt_cache_info(
+                stage="single",
+                model=config.model,
+                cache_channel=channel,
+                display_channel=channel_name or channel,
+                since=since,
+                until=until,
+                system_instructions=config.system_instructions,
+                shared_prompt_prefix=config.shared_prompt_prefix,
+                prompt=prompt,
+            )
+            try:
+                result = run_openai_digest(
+                    api_key,
+                    config.model,
+                    config.system_instructions,
+                    prompt,
+                    prompt_cache_key=cache_info.cache_key,
+                )
+            except Exception as exc:
+                log_openai_usage(
+                    log_conn,
+                    stage="single",
+                    channel=channel,
+                    since=since,
+                    until=until,
+                    model=config.model,
+                    request_index=1,
+                    message_count=single_pass_input.message_count,
+                    status="error",
+                    cache_info=cache_info,
+                    prompt_text=prompt,
+                    error=str(exc) or exc.__class__.__name__,
+                )
+                raise
+            log_openai_usage(
+                log_conn,
+                stage="single",
+                channel=channel,
+                since=since,
+                until=until,
+                model=config.model,
+                request_index=1,
+                message_count=single_pass_input.message_count,
+                status="ok",
+                cache_info=cache_info,
+                prompt_text=prompt,
+                usage=result.usage,
+                response_id=result.response_id,
+            )
+            return len(unique_message_ids), result.text, False
+        char_limit_reached = True
+    for batch, batch_input in iter_rendered_message_batches(
+        batch_source,
+        batch_size=batch_size,
+        max_chars=config.message_block_max_chars,
+        message_text_max_chars=config.message_text_max_chars,
+        message_ocr_max_chars=config.message_ocr_max_chars,
+    ):
         batch_index += 1
-        batch_input = render_message_block(batch, max_chars=max(6000, min(50000, batch_size * 450)))
+        char_limit_reached = char_limit_reached or batch_input.hit_char_limit
         unique_message_ids.update(int(item["message_id"]) for item in batch if item.get("message_id") is not None)
         prompt = build_batch_digest_prompt(
             config.shared_prompt_prefix,
@@ -930,6 +1129,7 @@ def summarize_channel_batches(
             previous_batch_summary,
         )
         cache_info = build_prompt_cache_info(
+            stage="batch",
             model=config.model,
             cache_channel=channel,
             display_channel=channel_name or channel,
@@ -982,9 +1182,13 @@ def summarize_channel_batches(
         previous_batch_summary = batch_result.text[:2000]
 
     if not batch_summaries:
-        return 0, "Новых сообщений в выбранном периоде нет."
+        return 0, "Новых сообщений в выбранном периоде нет.", False
     if len(batch_summaries) == 1:
-        return len(unique_message_ids), batch_summaries[0].split("\n", 1)[1] if "\n" in batch_summaries[0] else batch_summaries[0]
+        return (
+            len(unique_message_ids),
+            batch_summaries[0].split("\n", 1)[1] if "\n" in batch_summaries[0] else batch_summaries[0],
+            char_limit_reached,
+        )
 
     final_prompt = build_final_digest_prompt(
         config.shared_prompt_prefix,
@@ -997,6 +1201,7 @@ def summarize_channel_batches(
         "\n\n".join(batch_summaries),
     )
     final_cache_info = build_prompt_cache_info(
+        stage="final",
         model=config.model,
         cache_channel=channel,
         display_channel=channel_name or channel,
@@ -1045,7 +1250,7 @@ def summarize_channel_batches(
         usage=final_result.usage,
         response_id=final_result.response_id,
     )
-    return len(unique_message_ids), final_result.text
+    return len(unique_message_ids), final_result.text, char_limit_reached
 
 
 def cmd_run(args: argparse.Namespace) -> int:
@@ -1104,7 +1309,7 @@ def cmd_run(args: argparse.Namespace) -> int:
                 until=until,
                 max_messages=None,
             )
-            preview = render_message_block(
+            preview_row = next(
                 iter_channel_messages(
                     conn,
                     channel=channel,
@@ -1112,7 +1317,7 @@ def cmd_run(args: argparse.Namespace) -> int:
                     until=until,
                     max_messages=1,
                 ),
-                max_chars=1000,
+                None,
             )
             total_message_count = count_channel_messages(
                 conn,
@@ -1120,7 +1325,11 @@ def cmd_run(args: argparse.Namespace) -> int:
                 since=since,
                 until=until,
             )
-            channel_name = resolve_display_channel_name(conn, channel, preview.channel_name)
+            preview_channel_name = ""
+            if isinstance(preview_row, dict):
+                preview_channel_name = str(preview_row.get("title") or preview_row.get("username") or "").strip()
+            channel_name = resolve_display_channel_name(conn, channel, preview_channel_name)
+            sync_limit_reached = bool(sync_result.get("sync_limit_reached"))
             if not total_message_count:
                 send_digest_message(
                     token,
@@ -1131,6 +1340,7 @@ def cmd_run(args: argparse.Namespace) -> int:
                         until=until,
                         message_count=0,
                         summary="Новых сообщений в выбранном периоде нет.",
+                        sync_limit_reached=sync_limit_reached,
                         separator_text=digest_config.separator_text,
                     ),
                 )
@@ -1146,6 +1356,7 @@ def cmd_run(args: argparse.Namespace) -> int:
                         until=until,
                         message_count=total_message_count,
                         min_messages_for_ai=digest_config.min_messages_for_ai,
+                        sync_limit_reached=sync_limit_reached,
                         separator_text=digest_config.separator_text,
                     ),
                 )
@@ -1154,7 +1365,7 @@ def cmd_run(args: argparse.Namespace) -> int:
             if api_key is None:
                 api_key = require_openai_api_key(digest_config)
             try:
-                message_count, summary = summarize_channel_batches(
+                message_count, summary, char_limit_reached = summarize_channel_batches(
                     log_conn,
                     api_key=api_key,
                     config=DigestConfig(
@@ -1163,7 +1374,10 @@ def cmd_run(args: argparse.Namespace) -> int:
                         until=digest_config.until,
                         model=digest_config.model,
                         sync_mode=digest_config.sync_mode,
-                        ai_batch_size=limits.ai_batch_size,
+                        messages_per_ai_pass=limits.messages_per_ai_pass,
+                        message_text_max_chars=limits.message_text_max_chars,
+                        message_ocr_max_chars=limits.message_ocr_max_chars,
+                        message_block_max_chars=limits.message_block_max_chars,
                         min_messages_for_ai=digest_config.min_messages_for_ai,
                         separator_text=digest_config.separator_text,
                         mark_read=digest_config.mark_read,
@@ -1178,6 +1392,7 @@ def cmd_run(args: argparse.Namespace) -> int:
                     channel_name=channel_name,
                     since=since,
                     until=until,
+                    total_message_count=total_message_count,
                     messages=message_rows,
                 )
             except Exception as exc:
@@ -1192,6 +1407,8 @@ def cmd_run(args: argparse.Namespace) -> int:
                     until=until,
                     message_count=message_count,
                     summary=summary,
+                    char_limit_reached=char_limit_reached,
+                    sync_limit_reached=sync_limit_reached,
                     separator_text=digest_config.separator_text,
                 ),
             )
@@ -1216,7 +1433,10 @@ def cmd_run(args: argparse.Namespace) -> int:
                 "until": until,
                 "limit_profile": limits.profile,
                 "sync_limit": limits.sync_limit,
-                "ai_batch_size": limits.ai_batch_size,
+                "messages_per_ai_pass": limits.messages_per_ai_pass,
+                "message_text_max_chars": limits.message_text_max_chars,
+                "message_ocr_max_chars": limits.message_ocr_max_chars,
+                "message_block_max_chars": limits.message_block_max_chars,
                 "sync_mode": digest_config.sync_mode,
                 "auth_mode": auth_mode,
                 "sync_results": sync_results,

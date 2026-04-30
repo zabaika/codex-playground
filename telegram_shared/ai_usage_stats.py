@@ -33,6 +33,7 @@ def fetch_ai_usage_summary(
                 COUNT(*) AS total_requests,
                 SUM(CASE WHEN status = 'ok' THEN 1 ELSE 0 END) AS ok_requests,
                 SUM(CASE WHEN status = 'error' THEN 1 ELSE 0 END) AS error_requests,
+                SUM(CASE WHEN stage = 'single' THEN 1 ELSE 0 END) AS single_requests,
                 SUM(CASE WHEN COALESCE(cached_input_tokens, 0) > 0 THEN 1 ELSE 0 END) AS cached_requests,
                 COUNT(DISTINCT prompt_cache_key) AS cache_keys,
                 MIN(created_at) AS first_request_at,
@@ -59,6 +60,7 @@ def fetch_ai_usage_summary(
                     COUNT(*) AS total_requests,
                     SUM(CASE WHEN status = 'ok' THEN 1 ELSE 0 END) AS ok_requests,
                     SUM(CASE WHEN status = 'error' THEN 1 ELSE 0 END) AS error_requests,
+                    SUM(CASE WHEN stage = 'single' THEN 1 ELSE 0 END) AS single_requests,
                     SUM(CASE WHEN COALESCE(cached_input_tokens, 0) > 0 THEN 1 ELSE 0 END) AS cached_requests,
                     MIN(created_at) AS first_request_at,
                     MAX(created_at) AS last_request_at,
@@ -112,13 +114,16 @@ def format_ai_usage_summary(
     row_limit = int(summary.get("row_limit") or 0)
     global_input = int(global_stats.get("input_tokens") or 0)
     global_cached = int(global_stats.get("cached_input_tokens") or 0)
+    global_single = int(global_stats.get("single_requests") or 0)
     global_saved_pct = round((global_cached / global_input) * 100, 1) if global_input > 0 else 0.0
+    global_single_pct = round((global_single / int(global_stats.get("total_requests") or 1)) * 100, 1) if int(global_stats.get("total_requests") or 0) > 0 else 0.0
     lines = [
         f"{title}:",
         f"- analysis window: latest {row_limit} requests",
         f"- all requests: {int(global_stats.get('total_requests') or 0)}",
         f"- ok: {int(global_stats.get('ok_requests') or 0)}",
         f"- errors: {int(global_stats.get('error_requests') or 0)}",
+        f"- single-pass requests: {global_single} ({global_single_pct}%)",
         f"- requests with cached input: {int(global_stats.get('cached_requests') or 0)}",
         f"- cache keys: {int(global_stats.get('cache_keys') or 0)}",
         f"- input tokens: {global_input}",
@@ -136,12 +141,15 @@ def format_ai_usage_summary(
     if subject_label and subject_value and filtered_total > 0:
         filtered_input = int(filtered_stats.get("input_tokens") or 0)
         filtered_cached = int(filtered_stats.get("cached_input_tokens") or 0)
+        filtered_single = int(filtered_stats.get("single_requests") or 0)
         filtered_saved_pct = round((filtered_cached / filtered_input) * 100, 1) if filtered_input > 0 else 0.0
+        filtered_single_pct = round((filtered_single / filtered_total) * 100, 1) if filtered_total > 0 else 0.0
         lines.extend(
             [
                 "",
                 f"{subject_label} ({subject_value}):",
                 f"- requests: {filtered_total}",
+                f"- single-pass requests: {filtered_single} ({filtered_single_pct}%)",
                 f"- cached input tokens: {filtered_cached}",
                 f"- cached share of input tokens: {filtered_saved_pct}%",
             ]
