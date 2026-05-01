@@ -18,6 +18,7 @@ SPEC.loader.exec_module(telegram_digest)
 TEST_DIGEST_PROMPTS = """[digest_prompts]
 system_instructions = "system prompt"
 shared_prompt_prefix = "Shared {channel_name} {since} {until}"
+single_digest_template = "Single={channel_name}; Total={message_count}; {message_block}"
 batch_digest_template = "Batch={batch_index}; Count={message_count}; Prev={previous_batch_summary}; {message_block}"
 final_digest_template = "Final={channel_name}; Total={message_count}; Batches={batch_count}; {batch_summary_block}"
 """
@@ -65,6 +66,7 @@ class TelegramDigestTests(unittest.TestCase):
         self.assertFalse(result.use_ocr)
         self.assertEqual(result.system_instructions, "system prompt")
         self.assertEqual(result.shared_prompt_prefix, "Shared {channel_name} {since} {until}")
+        self.assertEqual(result.single_prompt_template, "Single={channel_name}; Total={message_count}; {message_block}")
         self.assertEqual(result.batch_prompt_template, "Batch={batch_index}; Count={message_count}; Prev={previous_batch_summary}; {message_block}")
         self.assertEqual(result.final_prompt_template, "Final={channel_name}; Total={message_count}; Batches={batch_count}; {batch_summary_block}")
         self.assertEqual(result.openai_api_key, "op://Personal/item/openai_api_key")
@@ -96,6 +98,7 @@ class TelegramDigestTests(unittest.TestCase):
                 content="""[digest_prompts]
 system_instructions = "system prompt"
 shared_prompt_prefix = "Shared {channel_name} {since} {until}"
+single_digest_template = "Single={channel_name}; Total={message_count}; {message_block}"
 batch_digest_template = "Batch={batch_index}"
 """,
             )
@@ -122,6 +125,7 @@ batch_digest_template = "Batch={batch_index}"
             use_ocr=True,
             system_instructions="system",
             shared_prompt_prefix="shared {channel_name} {since} {until}",
+            single_prompt_template="{channel_name} {message_count} {message_block}",
             batch_prompt_template="{channel_name} {message_block}",
             final_prompt_template="{channel_name} {batch_summary_block}",
             openai_api_key="k",
@@ -464,6 +468,49 @@ batch_digest_template = "Batch={batch_index}"
         self.assertIn("<b>Незакрытые вопросы/продолжения</b>\nнужен свежий кейс по банкам.", formatted)
         self.assertIn("<b>Связки вопрос-ответ/развитие темы</b>\nобсуждение перешло к картам и переводам.", formatted)
 
+    def test_format_digest_summary_for_telegram_bolds_numbered_main_topics_leads(self) -> None:
+        formatted = telegram_digest.format_digest_summary_for_telegram(
+            "\n".join(
+                [
+                    "Главные темы дня: переводы, сбои балансов и адрес во Freedom.",
+                    "1. Обсуждали, как вывести рубли из Альфы РБ на карту Мир в РФ: участники писали про комиссии и варианты перевода.",
+                    "2. Много сообщений было про БЦК, Freedom и Статус: обсуждали лимиты, минусы и странные списания.",
+                ]
+            ),
+        )
+
+        self.assertIn(
+            "1. <b>Обсуждали, как вывести рубли из Альфы РБ на карту Мир в РФ:</b>\nучастники писали про комиссии и варианты перевода.",
+            formatted,
+        )
+        self.assertIn(
+            "2. <b>Много сообщений было про БЦК, Freedom и Статус:</b>\nобсуждали лимиты, минусы и странные списания.",
+            formatted,
+        )
+
+    def test_format_digest_summary_for_telegram_bolds_bulleted_main_topics_leads(self) -> None:
+        formatted = telegram_digest.format_digest_summary_for_telegram(
+            "\n".join(
+                [
+                    "Главные темы дня",
+                    "переводы из Альфы и Сбербанка, сбои и минусы в Freedom/БЦК, настройка Статуса и вопросы по регистрации во Freedom",
+                    "- Переводы из Альфы РБ и на МИР: участники быстро нашли рабочий вариант перевода рублей на карту МИР.",
+                    "- Freedom и адрес регистрации: обсуждали, какой адрес безопаснее указывать при регистрации.",
+                    "Наиболее популярное",
+                    "<https://t.me/refugecard/1> - Пункт 1",
+                ]
+            ),
+        )
+
+        self.assertIn(
+            "- <b>Переводы из Альфы РБ и на МИР:</b>\nучастники быстро нашли рабочий вариант перевода рублей на карту МИР.",
+            formatted,
+        )
+        self.assertIn(
+            "- <b>Freedom и адрес регистрации:</b>\nобсуждали, какой адрес безопаснее указывать при регистрации.",
+            formatted,
+        )
+
     def test_build_channel_digest_message_keeps_header_compact(self) -> None:
         message = telegram_digest.build_channel_digest_message(
             "Channel A",
@@ -498,6 +545,21 @@ batch_digest_template = "Batch={batch_index}"
 
         self.assertTrue(prompt.startswith("Shared vc.ru 2026-03-17 2026-03-17"))
         self.assertIn("Digest vc.ru 2026-03-17 2026-03-17 2 1 prev summary", prompt)
+        self.assertIn("sender=Alice (@alice)", prompt)
+
+    def test_build_single_digest_prompt_uses_template(self) -> None:
+        prompt = telegram_digest.build_single_digest_prompt(
+            "Shared {channel_name} {since} {until}",
+            "Single {channel_name} {since} {until} {message_count}\n{message_block}",
+            "vc.ru",
+            "2026-03-17",
+            "2026-03-17",
+            2,
+            "id=1\nsender=Alice (@alice)\ntext=hello",
+        )
+
+        self.assertTrue(prompt.startswith("Shared vc.ru 2026-03-17 2026-03-17"))
+        self.assertIn("Single vc.ru 2026-03-17 2026-03-17 2", prompt)
         self.assertIn("sender=Alice (@alice)", prompt)
 
     def test_build_prompt_cache_info_uses_shared_prefix_hash_and_common_key(self) -> None:
@@ -706,6 +768,7 @@ batch_digest_template = "Batch={batch_index}"
             use_ocr=True,
             system_instructions="system",
             shared_prompt_prefix="Shared {channel_name} {since} {until}",
+            single_prompt_template="Single {channel_name} {message_count}\n{message_block}",
             batch_prompt_template="Digest {channel_name} {message_count}\n{message_block}",
             final_prompt_template="Final {channel_name}\n{batch_summary_block}",
             openai_api_key="k",
@@ -796,6 +859,7 @@ batch_digest_template = "Batch={batch_index}"
             use_ocr=False,
             system_instructions="system",
             shared_prompt_prefix="Shared {channel_name} {since} {until}",
+            single_prompt_template="Single {channel_name} {message_count}\n{message_block}",
             batch_prompt_template="Digest {channel_name} {message_count}\n{message_block}",
             final_prompt_template="Final {channel_name}\n{batch_summary_block}",
             openai_api_key="k",

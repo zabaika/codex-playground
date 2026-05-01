@@ -407,6 +407,7 @@ Additional notes:
 - fallback final quality on long periods is usually better than a single huge prompt because the model sees ordered local context first and only then performs a second-pass synthesis
 - if a channel reaches its effective `sync_limit` during digest prep-sync, the Telegram digest message for that channel ends with an explicit warning that the history window may have been loaded only partially
 - digest formatter normalizes a few close Russian heading variants from the model, such as `Главная тема дня` or `Главные темы`, back into the canonical Telegram heading `Главные темы дня`
+- inside `Главные темы дня`, paragraph leads like `- Тема: пояснение` or `1. Тема: пояснение` are rendered with the lead before the first colon in bold for faster scanning
 - section headings such as `Наиболее популярное`, `Незакрытые вопросы...`, and `Связки вопрос-ответ...` are also parsed tolerantly and normalized back into the canonical Telegram section names
 - output is delivered to `telegram.default_chat_id`, not to an arbitrary invoking chat
 - the scheduled LaunchAgent uses `digest.time` from config and writes logs to `telegram_connector/data/launchd/digest.*.log`

@@ -32,6 +32,7 @@ OPENAI_DIGEST_RETRY_ATTEMPTS = 3
 DIGEST_PROMPT_REQUIRED_KEYS = (
     "system_instructions",
     "shared_prompt_prefix",
+    "single_digest_template",
     "batch_digest_template",
     "final_digest_template",
 )
@@ -58,6 +59,7 @@ class DigestConfig:
     use_ocr: bool
     system_instructions: str
     shared_prompt_prefix: str
+    single_prompt_template: str
     batch_prompt_template: str
     final_prompt_template: str
     openai_api_key: str
@@ -169,6 +171,7 @@ def resolve_digest_config(config: dict[str, Any]) -> DigestConfig:
         ),
         system_instructions=prompts["system_instructions"],
         shared_prompt_prefix=prompts["shared_prompt_prefix"],
+        single_prompt_template=prompts["single_digest_template"],
         batch_prompt_template=prompts["batch_digest_template"],
         final_prompt_template=prompts["final_digest_template"],
         openai_api_key=os.environ.get("OPENAI_API_KEY", "").strip() or history_client.get_config_value(config, "secrets", "openai_api_key"),
@@ -617,6 +620,30 @@ def build_batch_digest_prompt(
     return f"{prefix}\n\n{body}"
 
 
+def build_single_digest_prompt(
+    shared_prefix: str,
+    template: str,
+    channel_name: str,
+    since: str,
+    until: str,
+    message_count: int,
+    message_block: str,
+) -> str:
+    prefix = shared_prefix.format(
+        channel_name=channel_name,
+        since=since,
+        until=until,
+    ).strip()
+    body = template.format(
+        channel_name=channel_name,
+        since=since,
+        until=until,
+        message_count=message_count,
+        message_block=message_block,
+    ).strip()
+    return f"{prefix}\n\n{body}"
+
+
 def build_final_digest_prompt(
     shared_prefix: str,
     template: str,
@@ -838,7 +865,6 @@ def format_digest_summary_for_telegram(summary: str) -> str:
         return ""
     formatted: list[str] = []
     current_section = ""
-    previous_item_was_list = False
     previous_line_kind = ""
 
     def escape_line(value: str) -> str:
@@ -846,6 +872,13 @@ def format_digest_summary_for_telegram(summary: str) -> str:
         escaped = escaped.replace("&lt;https://", "https://").replace("&lt;http://", "http://")
         escaped = escaped.replace("&gt;", "")
         return escaped
+
+    def format_main_topics_line(value: str) -> str:
+        match = re.match(r"^((?:[-•]\s+|\d+\.\s+)?)([^:]{2,200}):(.*)$", value)
+        if not match:
+            return escape_line(value)
+        marker, lead, tail = match.groups()
+        return f"{escape_line(marker)}<b>{escape_line(lead)}:</b>\n{escape_line(tail).lstrip()}"
 
     def normalize_lead_line(value: str) -> str:
         normalized = re.sub(r"^(?:Главная тема дня|Главные темы дня|Главные темы)\s*[:\-—]\s*", "", value, flags=re.IGNORECASE).strip()
@@ -879,6 +912,7 @@ def format_digest_summary_for_telegram(summary: str) -> str:
         len(compact_lines) > 1
         and not (first_line.startswith("- ") or first_line.startswith("• ") or first_line.startswith("<http"))
     ):
+        current_section = "main_topics"
         formatted.extend(
             [
                 f"<b>{escape_line(extract_lead_heading(first_line))}</b>",
@@ -896,16 +930,23 @@ def format_digest_summary_for_telegram(summary: str) -> str:
 
         if is_heading:
             heading_line, body_line = heading
-            current_section = "popular" if heading_line == MOST_POPULAR_HEADING else "regular"
+            if heading_line == MAIN_TOPICS_DAY_HEADING:
+                current_section = "main_topics"
+            elif heading_line == MOST_POPULAR_HEADING:
+                current_section = "popular"
+            else:
+                current_section = "regular"
             if formatted and formatted[-1] != "":
                 formatted.append("")
             formatted.append(f"<b>{escape_line(heading_line)}</b>")
             if body_line:
-                formatted.append(escape_line(body_line))
+                if current_section == "main_topics":
+                    formatted.append(format_main_topics_line(body_line))
+                else:
+                    formatted.append(escape_line(body_line))
                 previous_line_kind = "text"
             else:
                 previous_line_kind = "heading"
-            previous_item_was_list = False
             continue
 
         if is_list_item:
@@ -917,15 +958,19 @@ def format_digest_summary_for_telegram(summary: str) -> str:
                 and previous_line_kind in {"text", "list"}
             ):
                 formatted.append("")
-            formatted.append(escape_line(line))
-            previous_item_was_list = True
+            if current_section == "main_topics":
+                formatted.append(format_main_topics_line(line))
+            else:
+                formatted.append(escape_line(line))
             previous_line_kind = "list"
             continue
 
         if formatted and formatted[-1] != "":
             formatted.append("")
-        formatted.append(escape_line(line))
-        previous_item_was_list = False
+        if current_section == "main_topics":
+            formatted.append(format_main_topics_line(line))
+        else:
+            formatted.append(escape_line(line))
         previous_line_kind = "text"
 
     while formatted and formatted[-1] == "":
@@ -1044,16 +1089,14 @@ def summarize_channel_batches(
         )
         if single_pass_input.message_count == total_message_count:
             unique_message_ids.update(int(item["message_id"]) for item in all_messages if item.get("message_id") is not None)
-            prompt = build_batch_digest_prompt(
+            prompt = build_single_digest_prompt(
                 config.shared_prompt_prefix,
-                config.batch_prompt_template,
+                config.single_prompt_template,
                 channel_name or channel,
                 since,
                 until,
-                1,
                 single_pass_input.message_count,
                 single_pass_input.message_block,
-                "",
             )
             cache_info = build_prompt_cache_info(
                 stage="single",
@@ -1384,6 +1427,7 @@ def cmd_run(args: argparse.Namespace) -> int:
                         use_ocr=digest_config.use_ocr,
                         system_instructions=digest_config.system_instructions,
                         shared_prompt_prefix=digest_config.shared_prompt_prefix,
+                        single_prompt_template=digest_config.single_prompt_template,
                         batch_prompt_template=digest_config.batch_prompt_template,
                         final_prompt_template=digest_config.final_prompt_template,
                         openai_api_key=digest_config.openai_api_key,
