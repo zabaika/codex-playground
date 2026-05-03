@@ -51,6 +51,12 @@ When working in `tools/kb-index`, prefer these sources in this order:
 - [RULEBOOK.md](./RULEBOOK.md) for cross-project rules
 - tests in [tools/kb-index/tests](./tools/kb-index/tests) for executable expectations
 
+When working in `skills`, prefer these sources in this order:
+- [skills/README.md](./skills/README.md) for the skill catalog, installation pattern, and local conventions
+- the target skill's local docs such as `README.md`, `AGENTS.md`, and `SKILL.md` inside its folder for behavior and maintenance rules
+- [RULEBOOK.md](./RULEBOOK.md) for cross-project rules
+- any skill-local scripts or tests for executable expectations
+
 If README, code, and tests disagree, update them together rather than fixing only one layer.
 
 ## Repo Rules
@@ -62,4 +68,5 @@ If README, code, and tests disagree, update them together rather than fixing onl
 - never commit plaintext secrets
 - keep local config and generated runtime artifacts out of commits
 - when a project has its own `AGENTS.md`, prefer that file for operational details, commands, runtime semantics, and verification steps
+- for repository-managed local skills, treat the copy under `skills/<skill-name>/` as the editable source of truth and treat `~/.codex/skills/<skill-name>` as an installed copy refreshed from the repository
 - before finishing behavior changes, update docs in the same change and verify the relevant tests pass

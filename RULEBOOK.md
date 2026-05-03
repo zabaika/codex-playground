@@ -102,8 +102,24 @@ Rules:
 - do not hide derived runtime behavior behind undocumented formulas or silent clamps; if one config value is expected to be sized from another, put the exact practical formula and the current sample inputs next to the owning config fields
 - when several profiles share the same operator-facing knob, keep that knob in one shared config block and let per-profile sections override only the values that truly differ by profile
 - for local Codex skills, keep exactly one editable `config/runtime.local.toml` in the repository skill folder
+- for repository-managed local Codex skills, keep the repository copy under `skills/<skill-name>/` as the single editable source of truth for code, prompts, references, docs, and install helpers
+- for repository-managed local Codex skills, the minimum expected repository shape is `SKILL.md`, `README.md`, and `install-local.sh`
+- use `README.md` as the operator-facing local summary for purpose, source-of-truth, installation, runtime behavior, and main files
+- keep routine maintenance notes in the local `README.md` by default; split them into `AGENTS.md` only when the skill needs a separate future-agent maintenance contract
+- when a skill has a `references/` directory, document those reference files in the local `README.md` with one short explanation per file or per clearly grouped subset
+- keep reference-file links and explanations in the skill-local `README.md`, not in root catalog documents such as `skills/README.md`
+- add `AGENTS.md` only when the skill needs a separate maintenance contract for future agent edits beyond what `SKILL.md`, `README.md`, and `RULEBOOK.md` already cover
+- add audit, security-review, or third-party review documents only when the skill's provenance or risk profile justifies them
+- install repository-managed local Codex skills into `~/.codex/skills/<skill-name>` through a skill-local `install-local.sh` script rather than by ad hoc manual copying
+- treat the installed `~/.codex/skills/<skill-name>` copy as a deploy artifact, not as a second editable workspace
+- after changing a repository-managed skill, refresh the installed copy by rerunning its `install-local.sh` script instead of patching files under `~/.codex/skills` directly
+- keep the install pattern consistent across local skills: resolve the source directory from the script location, target `${CODEX_HOME:-$HOME/.codex}/skills/<skill-name>`, and make the script safe to rerun for normal refresh flows
+- when a local skill needs operator-facing maintenance docs, keep them in the repository copy and reinstall them together with the rest of the skill so the installed copy stays in sync
 - if the skill is also installed under `~/.codex/skills`, the installed copy should point to that same repo file instead of keeping a second divergent local config
 - if a skill is only an orchestration layer over other local skills, prefer pointing at the sibling skills' local configs instead of copying the same machine-specific values into another file
+- do not modify system-provided Codex skills in place as a normal customization path
+- when a system skill is missing a dependency, validation helper, or local convention, solve that through a project-local wrapper, companion skill, additional checker, or shared rulebook guidance instead of patching the system skill itself
+- treat edits to system skills as an explicit exception path only when a user directly requests that change and the operational tradeoff is understood
 
 Telegram-specific example:
 
