@@ -394,6 +394,13 @@ python3 -m unittest discover -s skills/article-to-obsidian-kb/tests -q
 - In `Обновлены`, group updated files together and briefly say what changed or what new signal was appended.
 - In `Новые теги`, list only tags that did not already exist in the vault before this run and name the created or updated notes where each new tag was introduced.
 - If the run did not create any new tags, still include `Новые теги` and say explicitly that no new tags were introduced.
+- After `Новые теги`, always add a short final index-sync block when the run attempted the post-write `kb-index` refresh and it succeeded.
+- Format that success block as two flat bullets:
+  - `индекс был обновлён успешно`
+  - `в индекс вошли N изменённые заметки`
+- Use the actual `updated_notes_count` returned by the canonical `update_kb_index` command for `N`.
+- Do not mention index errors in the normal success case.
+- Mention an index-refresh problem only if the post-write sync actually failed, and keep that failure note brief.
 - Output only files that were created or updated.
 - Do not list unchanged notes.
 - If the source adds no new knowledge, say so briefly and mention which existing notes already cover it.
