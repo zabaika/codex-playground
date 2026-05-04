@@ -8,7 +8,9 @@ This file is the single source of truth for how existing notes are updated, merg
 - Create a new note only when the article introduces a genuinely new lesson cluster, operating model, or concept.
 - Re-check the indexed candidate pool immediately before creating a file.
 - Re-check both configured note roots through indexed retrieval before creating a concept note.
+- Treat indexed note metadata as the canonical first-pass inspection layer before any full file read.
 - Only fall back to broad direct vault search when the configured index is unavailable, broken, or clearly stale.
+- In that fallback, search only inside the configured note roots rather than broadening to unrelated local directories.
 
 ## General Update Rules
 
@@ -93,6 +95,7 @@ Bullet format:
 - Update `# Связанные заметки` after every create or update.
 - Prefer reusing already opened notes and the existing indexed shortlist before issuing any extra retrieval pass for related links.
 - Build candidate related links through indexed retrieval only when the current candidate pool still does not give enough strong options, and then read only the strongest shortlist that survived scoring.
+- Inspect candidate tags, headings, and outgoing links from the index first; do not reopen files only to recover metadata the index already has.
 - Remove obvious duplicate wikilinks.
 - After inline wikilinks are finalized, remove from `# Связанные заметки` any note that is already linked inline in the body.
 - If the closing section becomes empty after that deduplication, delete the heading instead of leaving an empty or mechanically duplicated block.

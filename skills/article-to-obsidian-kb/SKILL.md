@@ -82,6 +82,20 @@ python3 scripts/detect_source_route.py --source-file "[SOURCE_FILE]"
 5. Search the configured note roots before drafting any file.
    - If `paths.kb_index_config` is present and the index is healthy, use indexed retrieval first through the canonical external CLI.
    - Derive `KB_INDEX_ROOT` as the parent directory of the directory that contains `paths.kb_index_config`.
+   - Treat the workflow as three separate access modes:
+     - `discovery`: use the index only
+     - `metadata inspection`: use the index first
+     - `full-content reading`: read files directly only after the shortlist is already chosen
+   - When the index is healthy, do not use `rg`, `find`, `fd`, or broad direct filesystem scans for:
+     - note discovery
+     - known-note lookup
+     - related-note discovery
+     - concept discovery
+     - tag reuse or tag existence checks
+   - In the normal path, filesystem access is allowed only for:
+     - reading config files
+     - opening already shortlisted notes by known `path`
+     - final write, merge, and post-write verification steps
 
 ```bash
 [KB_INDEX_ROOT]/bin/search_kb --config-path "[KB_INDEX_CONFIG]" --json "[QUERY]"
@@ -89,6 +103,19 @@ python3 scripts/detect_source_route.py --source-file "[SOURCE_FILE]"
 
    - Treat `search_kb` as a note-level retrieval step. The result is a shortlist of whole notes, not chunk hits.
    - Each result should be interpreted through `path`, `title`, `score`, `tags`, `lead_summary`, `headings`, and `snippet`.
+   - Treat those indexed fields as the canonical metadata inspection layer for existing notes while the index is healthy.
+   - Do not open files just to inspect note metadata such as `tags`, `title`, `headings`, `note_type`, `links_out`, or `lead_summary` when the same facts are already available from the index.
+   - For tag discovery and tag reuse checks, use the canonical tag-discovery CLI instead of `rg`:
+
+```bash
+[KB_INDEX_ROOT]/bin/list_kb_tags --config-path "[KB_INDEX_CONFIG]" --json
+[KB_INDEX_ROOT]/bin/list_kb_tags --config-path "[KB_INDEX_CONFIG]" --tag "[EXACT_TAG]" --json
+[KB_INDEX_ROOT]/bin/list_kb_tags --config-path "[KB_INDEX_CONFIG]" --prefix "[TAG_PREFIX]" --json
+```
+
+   - Use `list_kb_tags --tag` when the workflow wants to know whether one exact tag already exists and which notes already use it.
+   - Use `list_kb_tags --prefix` when the workflow wants to inspect nearby existing tags before deciding whether a new tag is justified.
+   - Use unfiltered `list_kb_tags` only when a broader tag inventory is genuinely needed; do not default to it when an exact or prefix check is enough.
    - Let the index-configured `retrieval.default_limit` control the default shortlist size. Override with `--limit` only when the current source clearly needs a broader pass.
    - When the workflow already knows or strongly suspects the exact note title, prefer an index-backed title lookup instead of a filesystem name scan:
 
@@ -112,13 +139,15 @@ python3 scripts/detect_source_route.py --source-file "[SOURCE_FILE]"
    - Stop early when one note is clearly dominant and the nearby shortlist is coherent enough to support a confident `update vs create` check.
    - Merge the returned notes into one candidate pool, deduplicate by `path`, and keep the strongest score per note.
    - Use the index to shortlist candidate notes from both `note_roots.article` and `note_roots.concept`.
-   - Only after that open the most relevant files directly for factual verification.
+   - Only after that open the most relevant files directly for full-text verification or merge work.
    - In the normal path, read the full text of only the top `3-5` candidate notes per decision surface:
      - top article-like candidates when deciding whether to update or create the source-derived note
      - top concept-like candidates when deciding whether to update or create each concept note
    - Reuse the same indexed candidate pool for later tag, concept, related-note, and wikilink decisions whenever it already covers the local topic well enough.
+   - Prefer index-backed metadata inspection over direct file inspection for those later decisions.
    - If indexed retrieval returns weak or obviously off-topic notes, broaden once with one extra query or a higher `--limit`. Do not jump straight to a full vault scan.
-   - If the index is unavailable, broken, or clearly stale, fall back to direct filename/content search through `note_roots.article` and `note_roots.concept`.
+   - If the index is unavailable, broken, or clearly stale, fall back to direct filename/content search only inside `note_roots.article` and `note_roots.concept`.
+   - Even in fallback mode, never broaden discovery to unrelated roots or to the entire home directory.
 6. Read the most relevant matching notes and decide `update` vs `create`.
    - Treat high-confidence matches as candidates for update, not as automatic updates. Confirm by reading the full note.
    - Bias toward `update` when the existing note matches the same durable topic, mechanism, and context, even if the new source adds better wording or stronger evidence.
@@ -204,8 +233,11 @@ python3 -m unittest discover -s skills/article-to-obsidian-kb/tests -q
 ## Search Strategy
 
 - Treat `kb-index` as the canonical retrieval layer for every search-like step in the workflow, not only the first `update vs create` pass.
+- Treat `kb-index` as the canonical metadata-inspection layer for existing notes too, as long as the index is healthy.
+- Treat `list_kb_tags` as the canonical index-backed path for tag existence checks, tag reuse checks, and nearby-tag discovery.
 - Search coverage must still span both configured note roots, but do that through indexed retrieval first, not by broad direct filesystem scanning.
 - Treat `kb-index` as the canonical first-pass retrieval layer and direct file reads as the second pass.
+- Direct file reads are for full note content only after the shortlist is known, not for vault-wide discovery and not for metadata checks that the index already exposes.
 - Keep the detailed retrieval plan, query sequencing, and stop conditions in workflow step `5` above.
 - Keep canonical concept-creation, closing-link, and update semantics in:
   - [references/vault-conventions.md](references/vault-conventions.md)

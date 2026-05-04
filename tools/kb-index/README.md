@@ -86,6 +86,7 @@ CLI сначала читает `config/runtime.local.toml`, а явные ар�
 
 
 - `build_kb_index`
+- `list_kb_tags`
 - `update_kb_index`
 - `search_kb`
 - `status_kb_index`
@@ -100,6 +101,20 @@ search_kb --mode title-first --note-type concept "Known note title"
 ```
 
 Его стоит использовать вместо прямого `rg` по именам файлов, когда workflow уже знает или почти знает имя нужной заметки и хочет найти её через индекс, а не мимо индекса.
+
+Для tag discovery есть отдельный CLI:
+
+```bash
+list_kb_tags --config-path /absolute/path/to/runtime.local.toml --json
+list_kb_tags --config-path /absolute/path/to/runtime.local.toml --tag developer-productivity --json
+list_kb_tags --config-path /absolute/path/to/runtime.local.toml --prefix developer --json
+```
+
+Используй его вместо `rg` по vault, когда нужно:
+
+- получить список всех используемых тегов
+- проверить, существует ли уже конкретный тег
+- посмотреть соседние существующие теги перед созданием нового
 
 Пока не реализованы и остаются roadmap items:
 

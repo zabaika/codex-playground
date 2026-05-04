@@ -13,6 +13,7 @@ from .config import DEFAULT_CONFIG_PATH, load_runtime_config
 from .index_db import connect, get_status, init_db
 from .indexer import build_or_update_index
 from .search import search_index
+from .tags import list_tags_index
 
 
 def resolve_runtime(args: argparse.Namespace):
@@ -98,6 +99,17 @@ def cmd_status(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_list_tags(args: argparse.Namespace) -> int:
+    _, db_path, _, _, _, _, _ = resolve_runtime(args)
+    results = list_tags_index(db_path, tag=args.tag, prefix=args.prefix)
+    if args.json:
+        print(json.dumps(results, ensure_ascii=False, indent=2))
+    else:
+        for item in results:
+            print(f"{item['note_count']}\t{item['tag']}")
+    return 0
+
+
 def cmd_auto_update_install(args: argparse.Namespace) -> int:
     config_path = Path(args.config_path)
     config = load_runtime_config(config_path)
@@ -154,6 +166,13 @@ def build_parser() -> argparse.ArgumentParser:
     status_parser_cmd = subparsers.add_parser('status')
     add_common_paths(status_parser_cmd)
     status_parser_cmd.set_defaults(func=cmd_status)
+
+    list_tags_parser_cmd = subparsers.add_parser('list-tags')
+    add_common_paths(list_tags_parser_cmd)
+    list_tags_parser_cmd.add_argument('--tag', help='Exact tag to inspect')
+    list_tags_parser_cmd.add_argument('--prefix', help='Prefix filter for tag discovery')
+    list_tags_parser_cmd.add_argument('--json', action='store_true')
+    list_tags_parser_cmd.set_defaults(func=cmd_list_tags)
 
     auto_update_install_parser = subparsers.add_parser('auto-update-install')
     add_common_paths(auto_update_install_parser)

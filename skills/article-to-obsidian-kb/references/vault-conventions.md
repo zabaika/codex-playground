@@ -118,6 +118,10 @@ Frontmatter is part of the note schema, not optional decoration.
 - Normalize terminology when multiple variants exist.
 - Deduplicate tags against the existing vault before saving the note.
 - Translate Russian candidate tags into English before the vault deduplication check.
+- Treat indexed tag discovery as the canonical vault check path when `kb-index` is healthy:
+  - use exact tag lookup first
+  - then prefix or nearby-tag inspection when exact lookup is inconclusive
+  - do not fall back to `rg` over the vault for tag reuse discovery when the index already exposes the same information
 - Treat the creation of a brand-new tag as a last resort.
 - Create a new tag only when you are fully confident that no existing vault tag is close enough in meaning and the new tag is clearly necessary for future retrieval.
 - If there is any material doubt, prefer the nearest existing canonical vault tag instead of introducing a new one.
