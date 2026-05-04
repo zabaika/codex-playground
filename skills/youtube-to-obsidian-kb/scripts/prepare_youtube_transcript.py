@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 from datetime import datetime, timezone
 import html
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -54,44 +55,78 @@ def _string_value(raw_value: object, default: str = "") -> str:
 def resolve_path(raw_value: str, base_dir: Path) -> Path:
     candidate = Path(raw_value).expanduser()
     if candidate.is_absolute():
-        return candidate
-    return (base_dir / candidate).resolve()
+        return candidate.resolve(strict=False)
+    return (base_dir / candidate).resolve(strict=False)
 
 
-def project_root(config: dict, current_dir: Path) -> Path:
+def infer_repo_root(skill_root: Path) -> Path | None:
+    for candidate in (skill_root, *skill_root.parents):
+        if (candidate / "RULEBOOK.md").exists():
+            return candidate.resolve(strict=False)
+    return None
+
+
+def load_article_runtime_paths_module(article_config_path: Path):
+    script_path = article_config_path.parent.parent / "scripts" / "runtime_paths.py"
+    if not script_path.exists():
+        raise SystemExit(f"Article runtime path resolver is missing: {script_path}")
+    module_name = f"article_runtime_paths_{abs(hash(script_path.resolve(strict=False)))}"
+    spec = importlib.util.spec_from_file_location(module_name, script_path)
+    if spec is None or spec.loader is None:
+        raise SystemExit(f"Could not load article runtime path resolver from: {script_path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def article_project_root(article_config_path: Path) -> Path | None:
+    module = load_article_runtime_paths_module(article_config_path)
+    config = module.load_toml(article_config_path)
+    return module.resolve_project_root(config=config, skill_dir=article_config_path.parent.parent)
+
+
+def project_root(config: dict, skill_root: Path, article_config_path: Path | None = None) -> Path:
     env_override = os.environ.get(DEFAULT_PROJECT_ROOT_ENV, "").strip()
     if env_override:
-        return resolve_path(env_override, current_dir)
+        return resolve_path(env_override, skill_root)
     paths = config.get("paths", {})
     raw_value = _string_value(paths.get("project_root"), "")
     if raw_value:
-        return resolve_path(raw_value, current_dir)
-    return current_dir
+        return resolve_path(raw_value, skill_root)
+    if article_config_path is not None and article_config_path.exists():
+        resolved = article_project_root(article_config_path)
+        if resolved is not None:
+            return resolved
+    inferred = infer_repo_root(skill_root)
+    if inferred is not None:
+        return inferred
+    raise SystemExit(
+        "Could not resolve project root for youtube-to-obsidian-kb. "
+        "Set CODEX_PLAYGROUND_PROJECT_ROOT, [paths].project_root, or a sibling article-to-obsidian-kb config that resolves project-local paths."
+    )
 
 
-def prepare_output_dir(config: dict, current_dir: Path) -> Path:
+def prepare_output_dir(config: dict, resolved_project_root: Path) -> Path:
     paths = config.get("paths", {})
-    base_dir = project_root(config, current_dir)
     raw_value = _string_value(paths.get("prepared_transcripts_dir"), DEFAULT_PREPARED_DIR)
-    resolved = resolve_path(raw_value, base_dir)
+    resolved = resolve_path(raw_value, resolved_project_root)
     resolved.mkdir(parents=True, exist_ok=True)
     return resolved
 
 
-def log_path(config: dict, current_dir: Path) -> Path:
+def log_path(config: dict, resolved_project_root: Path) -> Path:
     paths = config.get("paths", {})
-    base_dir = project_root(config, current_dir)
     raw_value = _string_value(paths.get("log_file"), DEFAULT_LOG_FILE)
-    resolved = resolve_path(raw_value, base_dir)
+    resolved = resolve_path(raw_value, resolved_project_root)
     resolved.parent.mkdir(parents=True, exist_ok=True)
     return resolved
 
 
-def configured_path(config: dict, current_dir: Path, key: str, default_value: str) -> Path:
+def configured_path(config: dict, resolved_project_root: Path, key: str, default_value: str) -> Path:
     paths = config.get("paths", {})
-    base_dir = project_root(config, current_dir)
     raw_value = _string_value(paths.get(key), default_value)
-    return resolve_path(raw_value, base_dir)
+    return resolve_path(raw_value, resolved_project_root)
 
 
 def append_log(path: Path, message: str) -> None:
@@ -137,16 +172,22 @@ def resolve_optional_config(
     config_dir: Path | None,
     fallback_relative_to_skill: str,
     fallback_relative_to_project: str,
-    project_root_dir: Path,
+    project_root_dir: Path | None,
 ) -> Path:
     candidates: list[Path] = []
     if explicit_path:
         if config_dir is None:
+            if project_root_dir is None:
+                raise SystemExit(
+                    "Relative config override was provided but project root is unavailable. "
+                    "Set CODEX_PLAYGROUND_PROJECT_ROOT or [paths].project_root."
+                )
             candidates.append(resolve_path(explicit_path, project_root_dir))
         else:
             candidates.append(resolve_path(explicit_path, config_dir))
-    fallback_repo = resolve_path(fallback_relative_to_project, project_root_dir)
-    candidates.append(fallback_repo)
+    if project_root_dir is not None:
+        fallback_repo = resolve_path(fallback_relative_to_project, project_root_dir)
+        candidates.append(fallback_repo)
     if config_dir is not None:
         candidates.append(resolve_path(fallback_relative_to_skill, config_dir))
     for candidate in candidates:
@@ -417,24 +458,24 @@ def main() -> int:
     config_path = Path(args.config).expanduser() if args.config else skill_root / "config" / "runtime.local.toml"
     config = load_toml(config_path)
     config_dir = config_path.parent
-    current_dir = Path.cwd()
-    resolved_project_root = project_root(config, current_dir)
-    prepared_dir = prepare_output_dir(config, current_dir)
-    current_log_path = log_path(config, current_dir)
+    fallback_project_root = infer_repo_root(skill_root)
 
     skills_cfg = config.get("skills", {})
-    transcribe_config_path = resolve_optional_config(
-        _string_value(skills_cfg.get("youtube_transcribe_config"), ""),
-        config_dir,
-        DEFAULT_TRANSCRIBE_CONFIG_FROM_SKILL,
-        DEFAULT_TRANSCRIBE_CONFIG_FROM_PROJECT,
-        resolved_project_root,
-    )
     article_config_path = resolve_optional_config(
         _string_value(skills_cfg.get("article_to_obsidian_config"), ""),
         config_dir,
         DEFAULT_ARTICLE_CONFIG_FROM_SKILL,
         DEFAULT_ARTICLE_CONFIG_FROM_PROJECT,
+        fallback_project_root,
+    )
+    resolved_project_root = project_root(config, skill_root, article_config_path)
+    prepared_dir = prepare_output_dir(config, resolved_project_root)
+    current_log_path = log_path(config, resolved_project_root)
+    transcribe_config_path = resolve_optional_config(
+        _string_value(skills_cfg.get("youtube_transcribe_config"), ""),
+        config_dir,
+        DEFAULT_TRANSCRIBE_CONFIG_FROM_SKILL,
+        DEFAULT_TRANSCRIBE_CONFIG_FROM_PROJECT,
         resolved_project_root,
     )
     ensure_article_config_is_ready(article_config_path)
@@ -457,7 +498,7 @@ def main() -> int:
         transcribe_config = load_toml(transcribe_config_path)
         transcribe_log_path = configured_path(
             transcribe_config,
-            current_dir,
+            resolved_project_root,
             "log_file",
             DEFAULT_TRANSCRIBE_LOG_FILE,
         )

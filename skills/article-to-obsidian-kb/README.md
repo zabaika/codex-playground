@@ -38,9 +38,10 @@ Treat the repository copy of `config/runtime.local.toml` as the single editable 
 - keeps `source` as the default workflow mode
 - uses separate note roots for source-derived notes and concept notes
 - can resolve dedicated structured note roots when `structured` mode is explicitly selected
-- resolves staging and temporary files through `paths.scratch_root`, defaulting to `scratch/article-to-obsidian-kb`
+- resolves staging and temporary files through `paths.scratch_root`, defaulting to `<project_root>/scratch/article-to-obsidian-kb`
 - can use `paths.project_root` or `CODEX_PLAYGROUND_PROJECT_ROOT` to keep project-local `source` paths relative even when the skill runs from an installed copy under `~/.codex`
 - uses `paths.kb_index_config` as the canonical entry point to `kb-index` when configured
+- never resolves project-local relative paths from the shell cwd
 - treats the repository copy of `config/runtime.local.toml` as the single editable local config
 - uses `config/runtime.example.toml` as the canonical operator-facing reference for config keys, defaults, and local-runtime notes
 

@@ -33,12 +33,12 @@ Turn a source article, transcript, or other long-form text into compact, Russian
 4. Treat that repo copy as the single editable local config. If an installed Codex copy exists under `~/.codex/skills`, it should point to the same file rather than keeping a second divergent copy.
 5. Use `note_roots.article` and `note_roots.concept` from that file for all `source`-mode search and save operations.
 6. When `structured` mode is explicitly selected, resolve the destination for that structured type according to [references/structured-note-types.md](references/structured-note-types.md) instead of reusing the normal source-mode note roots.
-7. Resolve `paths.scratch_root` from that file when it exists. If it is missing, default to `scratch/article-to-obsidian-kb` relative to the current project root.
-8. Resolve `paths.project_root` from that file when it exists. Use it only as a project-root override for path normalization cases such as relativizing project-local `source` artifacts from an installed copy. If `CODEX_PLAYGROUND_PROJECT_ROOT` is set, prefer it over the config key.
+7. Resolve `paths.scratch_root` from that file when it exists. If it is missing, default to `<project_root>/scratch/article-to-obsidian-kb`.
+8. Resolve `paths.project_root` from that file when it exists. Use it as the canonical base for project-local relative paths such as `paths.scratch_root` and `paths.kb_index_config`. If `CODEX_PLAYGROUND_PROJECT_ROOT` is set, prefer it over the config key.
 9. Resolve `paths.kb_index_config` from that file when it exists. Use it as the canonical entry point to `kb-index` for indexed retrieval.
 10. If temporary or staging files are needed at any point in the workflow, write them only under `paths.scratch_root`.
 11. Never create repo-local temporary folders under `tmp/` for this skill. Keep temporary artifacts consolidated under `scratch/` so they are easy to inspect and clean.
-12. Do not look for the config relative to the current working directory unless the skill directory itself is the current working directory.
+12. Do not look for the config or resolve project-local relative paths relative to the current working directory.
 13. If `<skill-dir>/config/runtime.local.toml` exists and contains both required note roots, do not ask the user for those paths again.
 14. Never commit machine-specific paths, local roots, passwords, or tokens into `SKILL.md`, references, or tracked config files.
 15. If the local config is missing and the roots are not already obvious from the current task, pause and ask the user instead of guessing.
@@ -52,7 +52,9 @@ When `structured` mode is explicitly selected, route by [references/structured-n
 1. Load the local runtime config and resolve the note roots.
    - Resolve the scratch staging root too.
    - Resolve `paths.kb_index_config` too when it exists.
-   - If `paths.scratch_root` is absent, use `scratch/article-to-obsidian-kb`.
+   - If `paths.scratch_root` is absent, use `<project_root>/scratch/article-to-obsidian-kb`.
+   - Resolve `paths.scratch_root` and `paths.kb_index_config` relative to the resolved project root, never relative to the shell cwd.
+   - If one of those paths is relative and project root still cannot be resolved, fail fast instead of guessing.
 2. Read the source from the provided URL or supplied text.
    - Prefer the full article body, transcript, or detailed show notes when they are available.
    - Do not draft source-derived notes from a short teaser alone when the page contains more operational detail deeper in the page.

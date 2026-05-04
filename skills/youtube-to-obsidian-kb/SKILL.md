@@ -28,9 +28,11 @@ Do not draft notes from the video title, thumbnail, or short description alone. 
 5. If this skill has a local config, use it only for:
    - pointing at the sibling skill configs
    - overriding the project-root-relative staging/log paths
-6. Never copy note-root values or transcript-provider settings into tracked files.
-7. If the sibling transcript config is missing, stop and tell the user that transcript extraction is not configured.
-8. If the sibling article config is missing or lacks `note_roots.article` and `note_roots.concept`, stop and tell the user that the Obsidian roots are not configured.
+6. Resolve wrapper-local relative paths such as `prepared_transcripts_dir` and `log_file` from project root, never from the shell cwd.
+7. If this skill does not have its own project-root override, inherit project-root resolution from the sibling `article-to-obsidian-kb` config before guessing.
+8. Never copy note-root values or transcript-provider settings into tracked files.
+9. If the sibling transcript config is missing, stop and tell the user that transcript extraction is not configured.
+10. If the sibling article config is missing or lacks `note_roots.article` and `note_roots.concept`, stop and tell the user that the Obsidian roots are not configured.
 
 ## Default Workflow
 

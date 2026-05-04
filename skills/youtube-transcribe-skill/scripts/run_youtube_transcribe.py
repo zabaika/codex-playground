@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import argparse
 from datetime import datetime
-import os
 import re
 import subprocess
 import sys
@@ -20,7 +19,6 @@ DEFAULT_PRIORITY = ["orig", "ru", "en", "uk"]
 DEFAULT_SUB_FORMAT = "srt/vtt/best"
 DEFAULT_OUTPUT_TEMPLATE = "%(title).180B [%(id)s].%(ext)s"
 DEFAULT_ENGINE_ORDER = ["youtube-transcript-api", "yt-dlp"]
-DEFAULT_PROJECT_ROOT_ENV = "CODEX_PLAYGROUND_PROJECT_ROOT"
 DEFAULT_BROWSER = "chrome"
 DEFAULT_AUTH_MODE = "none"
 DEFAULT_PROVIDER_KIND = "bgutil"
@@ -31,6 +29,8 @@ DEFAULT_RETRY_ATTEMPTS = 3
 DEFAULT_RETRY_INITIAL_DELAY = 2.0
 DEFAULT_RETRY_BACKOFF = 2.0
 DEFAULT_RETRY_MAX_DELAY = 10.0
+SCRIPT_DIR = Path(__file__).resolve().parent
+SKILL_DIR = SCRIPT_DIR.parent
 
 
 def load_config(config_path: Path) -> dict:
@@ -91,42 +91,6 @@ def _path_value(raw_value: object, default: str = "") -> str:
     return str(raw_value).strip() or default
 
 
-def resolve_runtime_path(raw_value: str, current_dir: Path) -> Path:
-    path = Path(raw_value).expanduser()
-    if path.is_absolute():
-        return path
-    return (current_dir / path).resolve()
-
-
-def project_root(config: dict, current_dir: Path) -> Path:
-    paths = config.get("paths", {})
-    env_override = os.environ.get(DEFAULT_PROJECT_ROOT_ENV, "").strip()
-    if env_override:
-        return resolve_runtime_path(env_override, current_dir)
-    raw_value = _path_value(paths.get("project_root"), "")
-    if not raw_value:
-        return current_dir
-    return resolve_runtime_path(raw_value, current_dir)
-
-
-def output_dir(config: dict, current_dir: Path) -> Path:
-    paths = config.get("paths", {})
-    base_dir = project_root(config, current_dir)
-    raw_value = _path_value(paths.get("output_dir"), "")
-    if not raw_value:
-        return base_dir
-    return resolve_runtime_path(raw_value, base_dir)
-
-
-def log_file(config: dict, current_dir: Path) -> Path | None:
-    paths = config.get("paths", {})
-    base_dir = project_root(config, current_dir)
-    raw_value = _path_value(paths.get("log_file"), "")
-    if not raw_value:
-        return None
-    return resolve_runtime_path(raw_value, base_dir)
-
-
 def ensure_directory(path: Path, label: str) -> Path:
     path.mkdir(parents=True, exist_ok=True)
     if not path.is_dir():
@@ -151,8 +115,7 @@ def extract_video_id(raw: str) -> str:
     return "unknown"
 
 
-def build_log_path(config: dict, current_dir: Path) -> Path | None:
-    configured_file = log_file(config, current_dir)
+def build_log_path(configured_file: Path | None) -> Path | None:
     if configured_file is None:
         return None
     ensure_directory(configured_file.parent, "Log directory")
@@ -384,7 +347,7 @@ def run_youtube_transcript_api(
     python_path = vendored_yta_python()
     if not python_path.is_file():
         return None
-    script_path = Path(__file__).resolve().parent / "fetch_with_youtube_transcript_api.py"
+    script_path = SCRIPT_DIR / "fetch_with_youtube_transcript_api.py"
     args = [
         str(python_path),
         str(script_path),
@@ -394,6 +357,8 @@ def run_youtube_transcript_api(
         *subtitles_priority(config),
         "--output-dir",
         str(target_output_dir),
+        "--project-root",
+        str(target_output_dir.parent),
     ]
     if title:
         args.extend(["--title", title])
@@ -507,13 +472,15 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    script_dir = Path(__file__).resolve().parent
-    skill_root = script_dir.parent
-    config_path = Path(args.config).expanduser() if args.config else skill_root / "config" / "runtime.local.toml"
-    config = load_config(config_path)
-    current_dir = Path.cwd()
-    target_output_dir = ensure_directory(output_dir(config, current_dir), "Subtitle output directory")
-    current_log_path = build_log_path(config, current_dir)
+    if str(SCRIPT_DIR) not in sys.path:
+        sys.path.insert(0, str(SCRIPT_DIR))
+    from runtime_paths import resolve_runtime_paths
+
+    config_path = Path(args.config).expanduser() if args.config else SKILL_DIR / "config" / "runtime.local.toml"
+    resolved_runtime = resolve_runtime_paths(config_path=config_path, skill_dir=SKILL_DIR)
+    config = resolved_runtime.config
+    target_output_dir = ensure_directory(resolved_runtime.output_dir, "Subtitle output directory")
+    current_log_path = build_log_path(resolved_runtime.log_file)
     auth_args, env_updates = build_auth_args(config)
     network_args = build_network_args(config)
     retry_config = retry_settings(config)

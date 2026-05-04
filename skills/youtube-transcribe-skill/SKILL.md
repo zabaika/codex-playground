@@ -19,10 +19,11 @@ Input YouTube URL: `$ARGUMENTS`
 3. Resolve relative runtime paths from the project root:
    - `CODEX_PLAYGROUND_PROJECT_ROOT` when set
    - otherwise `[paths].project_root`
-   - otherwise the current working directory
-4. Prefer a provider-based steady-state setup.
-5. Never commit `runtime.local.toml`.
-6. Prefer writing subtitles and logs into a project-local `scratch/` directory via `[paths]`.
+   - otherwise repo-root inference from the skill location
+4. Never resolve project-local relative paths from the shell cwd.
+5. Prefer a provider-based steady-state setup.
+6. Never commit `runtime.local.toml`.
+7. Prefer writing subtitles and logs into a project-local `scratch/` directory via `[paths]`.
 
 ## Guardrails
 

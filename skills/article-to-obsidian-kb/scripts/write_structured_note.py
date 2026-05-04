@@ -6,16 +6,13 @@ from __future__ import annotations
 import argparse
 import json
 import importlib.util
-import os
 import re
 import sys
-import tomllib
 from pathlib import Path
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 SKILL_DIR = SCRIPT_DIR.parent
-PROJECT_ROOT = SKILL_DIR.parent.parent
 TEMPLATE_DIR = SKILL_DIR / "templates"
 DEFAULT_CONFIG_PATH = SKILL_DIR / "config" / "runtime.local.toml"
 
@@ -23,6 +20,7 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 from check_note_contract import collect_violations, collect_violations_from_text
+from runtime_paths import load_toml, resolve_project_root as resolve_project_root_path
 
 
 def resolve_council_payload_schema_script() -> Path:
@@ -108,16 +106,10 @@ def yaml_quote(value: str) -> str:
 
 
 def resolve_project_root(config: dict[str, object] | None = None) -> Path:
-    env_root = os.environ.get("CODEX_PLAYGROUND_PROJECT_ROOT", "").strip()
-    if env_root:
-        return Path(env_root).expanduser().resolve(strict=False)
-    if config:
-        paths = config.get("paths", {})
-        if isinstance(paths, dict):
-            configured_root = paths.get("project_root")
-            if isinstance(configured_root, str) and configured_root.strip():
-                return Path(configured_root).expanduser().resolve(strict=False)
-    return PROJECT_ROOT.resolve(strict=False)
+    resolved = resolve_project_root_path(config=config, skill_dir=SKILL_DIR)
+    if resolved is None:
+        raise ValueError("Project root could not be resolved for display_source_path")
+    return resolved
 
 
 def display_source_path(value: str, config: dict[str, object] | None = None) -> str:
@@ -127,7 +119,10 @@ def display_source_path(value: str, config: dict[str, object] | None = None) -> 
     candidate = Path(raw).expanduser()
     if not candidate.is_absolute():
         return raw.replace("\\", "/")
-    project_root = resolve_project_root(config)
+    try:
+        project_root = resolve_project_root(config)
+    except ValueError:
+        return raw.replace("\\", "/")
     try:
         relative = candidate.resolve(strict=False).relative_to(project_root)
     except ValueError:
@@ -255,9 +250,7 @@ def build_markdown(payload: dict[str, object], config: dict[str, object] | None 
 
 
 def resolve_config(path: Path) -> dict[str, object]:
-    if not path.exists():
-        return {}
-    return tomllib.loads(path.read_text(encoding="utf-8"))
+    return load_toml(path)
 
 
 def resolve_output_path(

@@ -145,18 +145,13 @@ class StructuredNoteWriterTests(unittest.TestCase):
 
     def test_display_source_path_uses_project_root_override_for_installed_copy_layout(self) -> None:
         absolute = "/Users/andrejzabaev/Documents/Playground/scratch/llm-council/council-payload-20260504-000458.json"
-        original_project_root = WRITER.PROJECT_ROOT
-        try:
-            WRITER.PROJECT_ROOT = Path("/Users/andrejzabaev/.codex")
-            self.assertEqual(
-                "scratch/llm-council/council-payload-20260504-000458.json",
-                WRITER.display_source_path(
-                    absolute,
-                    config={"paths": {"project_root": "/Users/andrejzabaev/Documents/Playground"}},
-                ),
-            )
-        finally:
-            WRITER.PROJECT_ROOT = original_project_root
+        self.assertEqual(
+            "scratch/llm-council/council-payload-20260504-000458.json",
+            WRITER.display_source_path(
+                absolute,
+                config={"paths": {"project_root": "/Users/andrejzabaev/Documents/Playground"}},
+            ),
+        )
 
     def test_display_source_path_prefers_env_project_root_over_config(self) -> None:
         absolute = "/Users/andrejzabaev/Documents/Playground/scratch/llm-council/council-payload-20260504-000458.json"

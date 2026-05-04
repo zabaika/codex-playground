@@ -5,19 +5,34 @@ import argparse
 import re
 import socket
 import sys
+from types import SimpleNamespace
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-import requests
-from youtube_transcript_api import YouTubeTranscriptApi
-from youtube_transcript_api._errors import YouTubeTranscriptApiException
-from youtube_transcript_api.formatters import SRTFormatter
+try:
+    import requests
+except ModuleNotFoundError:  # pragma: no cover
+    requests = None
+
+try:
+    from youtube_transcript_api import YouTubeTranscriptApi
+    from youtube_transcript_api._errors import YouTubeTranscriptApiException
+    from youtube_transcript_api.formatters import SRTFormatter
+except ModuleNotFoundError:  # pragma: no cover
+    YouTubeTranscriptApi = None
+
+    class YouTubeTranscriptApiException(Exception):
+        pass
+
+    SRTFormatter = None
 
 
 DEFAULT_PRIORITY = ["orig", "ru", "en", "uk"]
 TRANSIENT_PREFIX = "TRANSIENT_ERROR:"
 NO_SUBTITLES_PREFIX = "NO_SUBTITLES:"
 GENERIC_PREFIX = "ERROR:"
+SCRIPT_DIR = Path(__file__).resolve().parent
+SKILL_DIR = SCRIPT_DIR.parent
 
 
 def extract_video_id(raw: str) -> str:
@@ -53,13 +68,35 @@ def choose_transcript(transcript_list, priority: list[str]):
     raise SystemExit(f"None of the preferred subtitle languages are available. Available languages: {available}")
 
 
-def resolve_output_dir(raw_value: str | None) -> Path:
+def infer_repo_root(skill_dir: Path) -> Path | None:
+    for candidate in (skill_dir, *skill_dir.parents):
+        if (candidate / "RULEBOOK.md").exists():
+            return candidate.resolve(strict=False)
+    return None
+
+
+def resolve_output_dir(raw_value: str | None, project_root_raw: str | None) -> Path:
+    if str(SCRIPT_DIR) not in sys.path:
+        sys.path.insert(0, str(SCRIPT_DIR))
+    from runtime_paths import resolve_against
+
+    project_root = project_root_raw.strip() if project_root_raw else ""
+    if project_root:
+        base_dir = resolve_against(SKILL_DIR, project_root)
+    else:
+        inferred = infer_repo_root(SKILL_DIR)
+        if inferred is None:
+            raise SystemExit(
+                "Could not resolve project root for youtube-transcript-api helper. "
+                "Pass --project-root or set CODEX_PLAYGROUND_PROJECT_ROOT."
+            )
+        base_dir = inferred
     if not raw_value or not raw_value.strip():
-        return Path.cwd()
+        return (base_dir / "scratch").resolve(strict=False)
     target = Path(raw_value).expanduser()
     if target.is_absolute():
-        return target
-    return (Path.cwd() / target).resolve()
+        return target.resolve(strict=False)
+    return (base_dir / target).resolve(strict=False)
 
 
 def sanitize_filename_component(raw_value: str, video_id: str) -> str:
@@ -72,7 +109,13 @@ def sanitize_filename_component(raw_value: str, video_id: str) -> str:
 def classify_exception(exc: Exception) -> tuple[str, str]:
     text = f"{exc.__class__.__name__}: {exc}".strip()
     lowered = text.lower()
-    if isinstance(exc, (socket.gaierror, requests.exceptions.ConnectionError, requests.exceptions.Timeout)):
+    request_exceptions = ()
+    if requests is not None:
+        request_exceptions = (
+            requests.exceptions.ConnectionError,
+            requests.exceptions.Timeout,
+        )
+    if isinstance(exc, (socket.gaierror, *request_exceptions)):
         return TRANSIENT_PREFIX, "Temporary network or DNS error while contacting YouTube."
     if "failed to resolve" in lowered or "nameresolutionerror" in lowered or "max retries exceeded" in lowered:
         return TRANSIENT_PREFIX, "Temporary network or DNS error while contacting YouTube."
@@ -98,7 +141,11 @@ def main() -> int:
     )
     parser.add_argument(
         "--output-dir",
-        help="Directory for the generated subtitle file. Defaults to the current working directory.",
+        help="Directory for the generated subtitle file. Relative paths are resolved from project root.",
+    )
+    parser.add_argument(
+        "--project-root",
+        help="Optional project-root base for resolving relative output paths.",
     )
     parser.add_argument(
         "--title",
@@ -108,8 +155,12 @@ def main() -> int:
     args = parser.parse_args()
 
     video_id = extract_video_id(args.url)
-    output_dir = resolve_output_dir(args.output_dir)
+    output_dir = resolve_output_dir(args.output_dir, args.project_root)
     output_dir.mkdir(parents=True, exist_ok=True)
+    if requests is None or YouTubeTranscriptApi is None or SRTFormatter is None:
+        raise SystemExit(
+            "youtube-transcript-api helper dependencies are not installed in this interpreter."
+        )
 
     try:
         transcript_list = YouTubeTranscriptApi().list(video_id)

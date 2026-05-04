@@ -8,7 +8,8 @@ order = ["youtube-transcript-api", "yt-dlp"]
 # Resolution order for the base directory:
 # 1. CODEX_PLAYGROUND_PROJECT_ROOT
 # 2. [paths].project_root
-# 3. current working directory
+# 3. repo-root inference from the skill location
+# Relative output and log paths must never fall back to the shell cwd.
 project_root = ""
 output_dir = "scratch"
 log_file = "scratch/youtube-transcribe.log"

@@ -13,7 +13,8 @@ article_to_obsidian_config = "../../article-to-obsidian-kb/config/runtime.local.
 # Resolution order for the base directory:
 # 1. CODEX_PLAYGROUND_PROJECT_ROOT
 # 2. [paths].project_root
-# 3. current working directory
+# 3. sibling article-to-obsidian-kb project-root resolution
+# 4. repo-root inference from the skill location
 # Leave `project_root` empty unless you need to override automatic resolution.
 project_root = ""
 # Prepared transcript markdown files should stay under scratch/, not repo-local tmp/.

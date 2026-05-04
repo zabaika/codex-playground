@@ -20,6 +20,7 @@ The skill:
 - loads `config/runtime.local.toml` when present and otherwise falls back to `config/runtime.example.toml`
 - treats the repository copy of `config/runtime.local.toml` as the single editable local config
 - resolves output and log paths through `[paths]`, usually into `scratch/`
+- never resolves project-local relative paths from the shell cwd
 - prefers provider-based steady-state auth over browser-cookie access
 - keeps one append-only log file instead of per-run log fan-out
 
