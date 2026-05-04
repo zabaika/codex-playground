@@ -392,6 +392,10 @@ python3 -m unittest discover -s skills/article-to-obsidian-kb/tests -q
   - `Новые теги` for genuinely new frontmatter tags introduced in this run
 - In `Созданы` and `Новые концепты`, give each file a one-line explanation of what it is about.
 - In `Обновлены`, group updated files together and briefly say what changed or what new signal was appended.
+- If this run removed, replaced, or materially pruned links from `# Связанные заметки` in any touched note, explicitly mention that in the relevant line under `Обновлены` when the change altered the note's meaningful graph.
+- For each such note, state which links were removed or replaced and give one short reason when the change was substantive, for example weaker than new nearby links or deliberate narrowing of the closing section.
+- Do not require enumerating removals that happened only because a link was already present inline and the closing section was deduplicated mechanically.
+- Do not hide substantive link-pruning side effects behind generic phrases like `cleaned up links` when specific removed links materially changed the note's graph.
 - In `Новые теги`, list only tags that did not already exist in the vault before this run and name the created or updated notes where each new tag was introduced.
 - If the run did not create any new tags, still include `Новые теги` and say explicitly that no new tags were introduced.
 - After `Новые теги`, always add a short final index-sync block when the run attempted the post-write `kb-index` refresh and it succeeded.
