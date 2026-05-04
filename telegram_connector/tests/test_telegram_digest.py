@@ -1,4 +1,7 @@
 import importlib.util
+import io
+import json
+import os
 import sqlite3
 import sys
 import tempfile
@@ -29,6 +32,63 @@ class TelegramDigestTests(unittest.TestCase):
         prompt_file = directory / "digest_prompts.toml"
         prompt_file.write_text(content, encoding="utf-8")
         return prompt_file
+
+    def test_write_digest_last_attempt_overwrites_previous_payload(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            original_project_root = telegram_digest.PROJECT_ROOT
+            original_launchd_log_dir = telegram_digest.LAUNCHD_LOG_DIR
+            original_digest_last_attempt_log = telegram_digest.DIGEST_LAST_ATTEMPT_LOG
+            try:
+                telegram_digest.PROJECT_ROOT = Path(tmp_dir)
+                telegram_digest.LAUNCHD_LOG_DIR = telegram_digest.PROJECT_ROOT / "data" / "launchd"
+                telegram_digest.DIGEST_LAST_ATTEMPT_LOG = telegram_digest.LAUNCHD_LOG_DIR / "digest.last_attempt.json"
+                telegram_digest.write_digest_last_attempt({"status": "started", "started_at": "2026-05-04T06:00:00+00:00"})
+                telegram_digest.write_digest_last_attempt(
+                    {
+                        "status": "sent",
+                        "started_at": "2026-05-04T06:00:00+00:00",
+                        "finished_at": "2026-05-04T06:10:00+00:00",
+                    }
+                )
+                payload = json.loads((Path(tmp_dir) / "data" / "launchd" / "digest.last_attempt.json").read_text(encoding="utf-8"))
+            finally:
+                telegram_digest.PROJECT_ROOT = original_project_root
+                telegram_digest.LAUNCHD_LOG_DIR = original_launchd_log_dir
+                telegram_digest.DIGEST_LAST_ATTEMPT_LOG = original_digest_last_attempt_log
+
+        self.assertEqual(payload["status"], "sent")
+        self.assertEqual(payload["finished_at"], "2026-05-04T06:10:00+00:00")
+
+    def test_configure_digest_cli_logging_writes_project_launchd_logs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            original_launchd_log_dir = telegram_digest.LAUNCHD_LOG_DIR
+            original_stdout = sys.stdout
+            original_stderr = sys.stderr
+            original_xpc_service_name = os.environ.get("XPC_SERVICE_NAME")
+            try:
+                telegram_digest.LAUNCHD_LOG_DIR = Path(tmp_dir) / "data" / "launchd"
+                if "XPC_SERVICE_NAME" in os.environ:
+                    del os.environ["XPC_SERVICE_NAME"]
+                sys.stdout = io.StringIO()
+                sys.stderr = io.StringIO()
+                with telegram_digest.configure_digest_cli_logging():
+                    print("stdout-line")
+                    print("stderr-line", file=sys.stderr)
+                startup_text = (telegram_digest.LAUNCHD_LOG_DIR / "digest.startup.log").read_text(encoding="utf-8")
+                stdout_text = (telegram_digest.LAUNCHD_LOG_DIR / "digest.stdout.log").read_text(encoding="utf-8")
+                stderr_text = (telegram_digest.LAUNCHD_LOG_DIR / "digest.stderr.log").read_text(encoding="utf-8")
+            finally:
+                telegram_digest.LAUNCHD_LOG_DIR = original_launchd_log_dir
+                sys.stdout = original_stdout
+                sys.stderr = original_stderr
+                if original_xpc_service_name is None:
+                    os.environ.pop("XPC_SERVICE_NAME", None)
+                else:
+                    os.environ["XPC_SERVICE_NAME"] = original_xpc_service_name
+
+        self.assertIn("starting telegram digest", startup_text)
+        self.assertIn("stdout-line", stdout_text)
+        self.assertIn("stderr-line", stderr_text)
 
     def test_resolve_digest_config_reads_prompt_templates_from_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:

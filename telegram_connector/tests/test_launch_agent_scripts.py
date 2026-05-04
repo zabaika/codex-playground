@@ -14,7 +14,9 @@ class LaunchAgentScriptTests(unittest.TestCase):
         self.assertIn('STARTUP_LOG="$PROJECT_LOG_DIR/bridge.startup.log"', content)
         self.assertIn('STDOUT_LOG="$PROJECT_LOG_DIR/bridge.stdout.log"', content)
         self.assertIn('STDERR_LOG="$PROJECT_LOG_DIR/bridge.stderr.log"', content)
+        self.assertIn('DIGEST_LAST_ATTEMPT_LOG="$PROJECT_LOG_DIR/digest.last_attempt.json"', content)
         self.assertIn('rm -f "$PROJECT_LOG_DIR"/bridge.startup.log', content)
+        self.assertNotIn('"$SERVICE_ROOT"/data/launchd', content)
 
     def test_installer_runner_appends_startup_log(self) -> None:
         content = INSTALLER.read_text(encoding="utf-8")
@@ -26,7 +28,7 @@ class LaunchAgentScriptTests(unittest.TestCase):
         self.assertIn('printf \'[%s] starting telegram bridge from %s\\n\'', content)
         self.assertIn('STARTUP_LOG="\\$TELEGRAM_CONNECTOR_PROJECT_ROOT/data/launchd/bridge.startup.log"', content)
         self.assertIn('exec "$PYTHON_BIN" "\\$ROOT/telegram_connector.py" listen --run-commands', content)
-        self.assertIn('exec "$PYTHON_BIN" "\\$ROOT/telegram_digest.py" run', content)
+        self.assertIn('exec /usr/bin/caffeinate -i "$PYTHON_BIN" "\\$ROOT/telegram_digest.py" run', content)
 
     def test_installer_sets_project_root_env_in_plist(self) -> None:
         content = INSTALLER.read_text(encoding="utf-8")

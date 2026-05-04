@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import contextlib
 import html
 import json
 import os
@@ -27,6 +28,8 @@ from telegram_shared.openai_usage import log_openai_usage as shared_log_openai_u
 
 APP_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = Path(os.environ.get("TELEGRAM_CONNECTOR_PROJECT_ROOT", "")).expanduser() if os.environ.get("TELEGRAM_CONNECTOR_PROJECT_ROOT") else APP_DIR
+LAUNCHD_LOG_DIR = PROJECT_ROOT / "data" / "launchd"
+DIGEST_LAST_ATTEMPT_LOG = LAUNCHD_LOG_DIR / "digest.last_attempt.json"
 
 OPENAI_DIGEST_RETRY_ATTEMPTS = 3
 DIGEST_PROMPT_REQUIRED_KEYS = (
@@ -94,6 +97,82 @@ class OpenAIResult:
     response_id: str | None
     text: str
     usage: OpenAIUsage
+
+
+class TeeStream:
+    def __init__(self, primary: Any, secondary: Any) -> None:
+        self.primary = primary
+        self.secondary = secondary
+
+    def write(self, data: str) -> int:
+        self.primary.write(data)
+        self.secondary.write(data)
+        return len(data)
+
+    def flush(self) -> None:
+        self.primary.flush()
+        self.secondary.flush()
+
+    def isatty(self) -> bool:
+        primary_isatty = getattr(self.primary, "isatty", None)
+        return bool(primary_isatty() if callable(primary_isatty) else False)
+
+
+def audit_timestamp() -> str:
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+
+
+def build_digest_run_id() -> str:
+    return f"digest-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}-{os.getpid()}"
+
+
+def build_launch_context() -> dict[str, Any]:
+    return {
+        "source": "launchd" if os.environ.get("XPC_SERVICE_NAME") else "cli",
+        "xpc_service_name": os.environ.get("XPC_SERVICE_NAME"),
+        "pid": os.getpid(),
+        "ppid": os.getppid(),
+        "cwd": str(Path.cwd()),
+        "project_root": str(PROJECT_ROOT),
+        "python_executable": sys.executable,
+        "stdin_is_tty": os.isatty(0),
+        "stdout_is_tty": os.isatty(1),
+        "stderr_is_tty": os.isatty(2),
+    }
+
+
+def write_digest_last_attempt(payload: dict[str, Any]) -> None:
+    LAUNCHD_LOG_DIR.mkdir(parents=True, exist_ok=True)
+    temp_path = DIGEST_LAST_ATTEMPT_LOG.with_suffix(".tmp")
+    temp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    temp_path.replace(DIGEST_LAST_ATTEMPT_LOG)
+
+
+@contextlib.contextmanager
+def configure_digest_cli_logging() -> Any:
+    if os.environ.get("XPC_SERVICE_NAME"):
+        yield
+        return
+
+    LAUNCHD_LOG_DIR.mkdir(parents=True, exist_ok=True)
+    startup_log = LAUNCHD_LOG_DIR / "digest.startup.log"
+    stdout_log = LAUNCHD_LOG_DIR / "digest.stdout.log"
+    stderr_log = LAUNCHD_LOG_DIR / "digest.stderr.log"
+    with startup_log.open("a", encoding="utf-8") as fh:
+        fh.write(f"[{audit_timestamp()}] starting telegram digest from {Path.cwd()}\n")
+
+    original_stdout = sys.stdout
+    original_stderr = sys.stderr
+    with stdout_log.open("a", encoding="utf-8") as stdout_fh, stderr_log.open("a", encoding="utf-8") as stderr_fh:
+        sys.stdout = TeeStream(original_stdout, stdout_fh)
+        sys.stderr = TeeStream(original_stderr, stderr_fh)
+        try:
+            yield
+        finally:
+            sys.stdout.flush()
+            sys.stderr.flush()
+            sys.stdout = original_stdout
+            sys.stderr = original_stderr
 
 
 def parse_bool(value: str, default: bool = False) -> bool:
@@ -1297,45 +1376,76 @@ def summarize_channel_batches(
 
 
 def cmd_run(args: argparse.Namespace) -> int:
-    runtime = history_client.resolve_runtime()
-    config = history_client.load_runtime_config()
-    digest_config = resolve_digest_config(config)
-    if digest_config.sync_mode not in {"backfill", "tail", "update"}:
-        raise SystemExit("digest.sync_mode must be one of 'backfill', 'tail', or 'update'.")
-    default_since, default_until = resolve_digest_window(digest_config)
-    since = args.since or default_since
-    until = args.until or default_until
-    since, until = normalize_digest_window_values(since, until)
-    auth_mode = args.auth_mode or runtime.default_auth_mode
-    limits = resolve_digest_limits(config, since, until)
-
-    import asyncio
-
-    sync_results = asyncio.run(
-        run_sync(
-            runtime,
-            channel=args.channel,
-            since=since,
-            until=until,
-            total_limit=limits.sync_limit,
-            use_ocr=digest_config.use_ocr,
-            mark_read=digest_config.mark_read,
-            mode=digest_config.sync_mode,
-            auth_mode=auth_mode,
-        )
+    run_id = getattr(args, "audit_run_id", None) or build_digest_run_id()
+    started_at = getattr(args, "audit_started_at", None) or audit_timestamp()
+    launch_context = build_launch_context()
+    write_digest_last_attempt(
+        {
+            "run_id": run_id,
+            "started_at": started_at,
+            "finished_at": None,
+            "status": "started",
+            "wake_context": launch_context,
+            "channel_override": args.channel,
+            "since_override": args.since,
+            "until_override": args.until,
+            "auth_mode_override": args.auth_mode,
+        }
     )
-    token = bridge.require_token()
-    chat_id = history_client.get_config_value(config, "telegram", "default_chat_id")
-    if not chat_id:
-        raise SystemExit("Missing telegram.default_chat_id for digest delivery.")
-    conn = history_client.connect_db(runtime)
-    log_conn = history_client.connect_db(runtime)
-    history_client.init_db(log_conn)
+
+    runtime = None
+    config = None
+    digest_config = None
+    since = None
+    until = None
+    auth_mode = None
+    limits = None
+    channels: list[str] = []
+    sent_channel_messages = 0
+    sync_results: list[dict[str, Any]] = []
+    errors: list[str] = []
+    conn = None
+    log_conn = None
+    token = None
+    chat_id = None
     try:
+        runtime = history_client.resolve_runtime()
+        config = history_client.load_runtime_config()
+        digest_config = resolve_digest_config(config)
+        if digest_config.sync_mode not in {"backfill", "tail", "update"}:
+            raise SystemExit("digest.sync_mode must be one of 'backfill', 'tail', or 'update'.")
+        default_since, default_until = resolve_digest_window(digest_config)
+        since = args.since or default_since
+        until = args.until or default_until
+        since, until = normalize_digest_window_values(since, until)
+        auth_mode = args.auth_mode or runtime.default_auth_mode
+        limits = resolve_digest_limits(config, since, until)
+
+        import asyncio
+
+        sync_results = asyncio.run(
+            run_sync(
+                runtime,
+                channel=args.channel,
+                since=since,
+                until=until,
+                total_limit=limits.sync_limit,
+                use_ocr=digest_config.use_ocr,
+                mark_read=digest_config.mark_read,
+                mode=digest_config.sync_mode,
+                auth_mode=auth_mode,
+            )
+        )
+        token = bridge.require_token()
+        chat_id = history_client.get_config_value(config, "telegram", "default_chat_id")
+        if not chat_id:
+            raise SystemExit("Missing telegram.default_chat_id for digest delivery.")
+        conn = history_client.connect_db(runtime)
+        log_conn = history_client.connect_db(runtime)
+        history_client.init_db(log_conn)
+
         channels = history_client.resolve_channels_argument(runtime, args.channel)
         sync_result_by_channel = {item.get("channel"): item for item in sync_results}
-        sent_channel_messages = 0
-        errors: list[str] = []
         api_key: str | None = None
         for channel in channels:
             sync_result = sync_result_by_channel.get(channel)
@@ -1457,40 +1567,72 @@ def cmd_run(args: argparse.Namespace) -> int:
                 ),
             )
             sent_channel_messages += 1
-    finally:
-        conn.close()
-        log_conn.close()
 
-    if errors:
-        send_digest_message(
-            token,
-            chat_id,
-            build_digest_error_message(since=since, until=until, errors=errors, separator_text=digest_config.separator_text),
-        )
-    print(
-        json.dumps(
+        if errors:
+            send_digest_message(
+                token,
+                chat_id,
+                build_digest_error_message(since=since, until=until, errors=errors, separator_text=digest_config.separator_text),
+            )
+        payload = {
+            "status": "partial" if errors else "sent",
+            "channels": len(channels),
+            "sent_channel_messages": sent_channel_messages,
+            "since": since,
+            "until": until,
+            "limit_profile": limits.profile,
+            "sync_limit": limits.sync_limit,
+            "messages_per_ai_pass": limits.messages_per_ai_pass,
+            "message_text_max_chars": limits.message_text_max_chars,
+            "message_ocr_max_chars": limits.message_ocr_max_chars,
+            "message_block_max_chars": limits.message_block_max_chars,
+            "sync_mode": digest_config.sync_mode,
+            "auth_mode": auth_mode,
+            "sync_results": sync_results,
+            "errors": errors,
+        }
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+        write_digest_last_attempt(
             {
-                "status": "partial" if errors else "sent",
-                "channels": len(channels),
-                "sent_channel_messages": sent_channel_messages,
+                "run_id": run_id,
+                "started_at": started_at,
+                "finished_at": audit_timestamp(),
+                "status": payload["status"],
+                "wake_context": launch_context,
+                "channel_override": args.channel,
+                "since_override": args.since,
+                "until_override": args.until,
+                "auth_mode_override": args.auth_mode,
+                **payload,
+            }
+        )
+        return 0
+    except BaseException as exc:
+        write_digest_last_attempt(
+            {
+                "run_id": run_id,
+                "started_at": started_at,
+                "finished_at": audit_timestamp(),
+                "status": "failed",
+                "wake_context": launch_context,
+                "channel_override": args.channel,
+                "since_override": args.since,
+                "until_override": args.until,
+                "auth_mode_override": args.auth_mode,
                 "since": since,
                 "until": until,
-                "limit_profile": limits.profile,
-                "sync_limit": limits.sync_limit,
-                "messages_per_ai_pass": limits.messages_per_ai_pass,
-                "message_text_max_chars": limits.message_text_max_chars,
-                "message_ocr_max_chars": limits.message_ocr_max_chars,
-                "message_block_max_chars": limits.message_block_max_chars,
-                "sync_mode": digest_config.sync_mode,
                 "auth_mode": auth_mode,
                 "sync_results": sync_results,
                 "errors": errors,
-            },
-            ensure_ascii=False,
-            indent=2,
+                "error": str(exc) or exc.__class__.__name__,
+            }
         )
-    )
-    return 0
+        raise
+    finally:
+        if conn is not None:
+            conn.close()
+        if log_conn is not None:
+            log_conn.close()
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1510,7 +1652,11 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
-    return args.func(args)
+    if getattr(args, "command", None) == "run":
+        args.audit_run_id = build_digest_run_id()
+        args.audit_started_at = audit_timestamp()
+    with configure_digest_cli_logging():
+        return args.func(args)
 
 
 if __name__ == "__main__":

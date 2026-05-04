@@ -115,6 +115,7 @@ For the history client:
 - digest delivery is also per channel: as soon as one channel summary is ready, it is sent to Telegram as a separate message
 - a final digest status message is sent only if one or more channels failed during sync or analysis
 - every OpenAI digest call logs usage into SQLite table `ai_usage_log`, including input tokens, cached input tokens, output tokens, total tokens, latency, stage, status, `response_id`, `prompt_cache_key`, and shared-prefix diagnostics
+- `ai_usage_log` is stored inside SQLite database `telegram_connector/data/telegram_history.sqlite3`; it is not a file under `data/launchd`
 
 ### macOS Keychain
 
@@ -239,6 +240,7 @@ Service update rule:
 
 - rerun `install_launch_agent.sh` after code changes, `telegram_shared` changes, `runtime.local.toml` changes, prompt-bundle changes, or schedule-related config changes such as `digest.time`
 - use `restart_launch_agent.sh` only to reload the already installed service copy when the installed code and config are already up to date
+- the scheduled digest runner uses `caffeinate -i` so a `launchd` start during macOS maintenance wake does not immediately fall back asleep mid-run
 
 Daemon logs:
 
@@ -248,6 +250,8 @@ Daemon logs:
 - `telegram_connector/data/launchd/digest.startup.log`
 - `telegram_connector/data/launchd/digest.stdout.log`
 - `telegram_connector/data/launchd/digest.stderr.log`
+- `telegram_connector/data/launchd/digest.last_attempt.json`
+  overwritten on every digest run and keeps only the latest launch audit record
 
 ### Shared command rules
 

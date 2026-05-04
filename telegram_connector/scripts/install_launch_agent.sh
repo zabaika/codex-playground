@@ -15,6 +15,7 @@ STDERR_LOG="$PROJECT_LOG_DIR/bridge.stderr.log"
 DIGEST_STARTUP_LOG="$PROJECT_LOG_DIR/digest.startup.log"
 DIGEST_STDOUT_LOG="$PROJECT_LOG_DIR/digest.stdout.log"
 DIGEST_STDERR_LOG="$PROJECT_LOG_DIR/digest.stderr.log"
+DIGEST_LAST_ATTEMPT_LOG="$PROJECT_LOG_DIR/digest.last_attempt.json"
 
 resolve_python_bin() {
   local explicit="${PYTHON_BIN:-}"
@@ -70,12 +71,11 @@ print(int(hour_text), int(minute_text))
 PY
 )
 
-mkdir -p "$SERVICE_ROOT/config" "$SERVICE_ROOT/data/launchd" "$SERVICE_ROOT/scripts" "$LAUNCH_AGENTS_DIR" "$PROJECT_LOG_DIR"
+mkdir -p "$SERVICE_ROOT/config" "$SERVICE_ROOT/data" "$SERVICE_ROOT/scripts" "$LAUNCH_AGENTS_DIR" "$PROJECT_LOG_DIR"
 
 rm -f "$PROJECT_LOG_DIR"/bridge.startup.log "$PROJECT_LOG_DIR"/bridge.stdout.log "$PROJECT_LOG_DIR"/bridge.stderr.log
 rm -f "$PROJECT_LOG_DIR"/digest.startup.log "$PROJECT_LOG_DIR"/digest.stdout.log "$PROJECT_LOG_DIR"/digest.stderr.log
-rm -f "$SERVICE_ROOT"/data/launchd/bridge.stdout.log "$SERVICE_ROOT"/data/launchd/bridge.stderr.log
-rm -f "$SERVICE_ROOT"/data/launchd/digest.stdout.log "$SERVICE_ROOT"/data/launchd/digest.stderr.log
+rm -f "$PROJECT_LOG_DIR"/digest.last_attempt.json
 
 cp "$SOURCE_ROOT/telegram_connector.py" "$SERVICE_ROOT/telegram_connector.py"
 cp "$SOURCE_ROOT/telegram_history_client.py" "$SERVICE_ROOT/telegram_history_client.py"
@@ -125,7 +125,7 @@ STARTUP_LOG="\$TELEGRAM_CONNECTOR_PROJECT_ROOT/data/launchd/digest.startup.log"
 
 cd "\$ROOT"
 printf '[%s] starting telegram digest from %s\n' "\$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "\$ROOT" >> "\$STARTUP_LOG"
-exec "$PYTHON_BIN" "\$ROOT/telegram_digest.py" run
+exec /usr/bin/caffeinate -i "$PYTHON_BIN" "\$ROOT/telegram_digest.py" run
 EOF
 
 chmod +x "$SERVICE_ROOT/scripts/run_telegram_digest.sh"
@@ -226,5 +226,6 @@ echo "Stderr log: $STDERR_LOG"
 echo "Digest startup log: $DIGEST_STARTUP_LOG"
 echo "Digest stdout log: $DIGEST_STDOUT_LOG"
 echo "Digest stderr log: $DIGEST_STDERR_LOG"
+echo "Digest last-attempt audit log: $DIGEST_LAST_ATTEMPT_LOG"
 echo "Digest schedule: $(printf '%02d:%02d' "$DIGEST_HOUR" "$DIGEST_MINUTE")"
 echo "Python interpreter: $PYTHON_BIN"
