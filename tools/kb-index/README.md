@@ -63,7 +63,7 @@ tools/kb-index/
 Там живут:
 
 - runtime-копия `src/kb_index`
-- snapshot `config/runtime.local.toml`
+- симлинк `config/runtime.local.toml` на репозиторный конфиг
 - shell-runner для `launchd`
 
 Канонические `launchd`-логи при этом пишутся в project root, а не в service root:
@@ -161,7 +161,7 @@ list_kb_tags --config-path /absolute/path/to/runtime.local.toml --prefix develop
 - `uninstall_kb_index_auto_update --config-path ...`
 
 Installer не запускает код напрямую из `Documents/Playground`.
-Вместо этого он копирует runtime-слой в `~/Library/Application Support/kb_index_service`, генерирует там shell-runner и уже его регистрирует в `launchd`.
+Вместо этого он копирует runtime-слой в `~/Library/Application Support/kb_index_service`, оставляет `config/runtime.local.toml` симлинком на исходный конфиг в репозитории, генерирует там shell-runner и уже его регистрирует в `launchd`.
 Этот deployment shape совпадает с уже рабочим паттерном `telegram_connector` и обходит проблемы запуска launch agents прямо из пользовательского project tree.
 При этом stdout/stderr и startup trace остаются в `tools/kb-index/data/launchd`, чтобы operational logs жили рядом с проектом, а не были размазаны между двумя корнями.
 
@@ -185,7 +185,7 @@ install_kb_index_auto_update --config-path /absolute/path/to/runtime.local.toml
 Повторный запуск installer:
 
 - обновляет runtime-копию в `~/Library/Application Support/kb_index_service`
-- переснимает snapshot `runtime.local.toml`
+- пересоздаёт симлинк `runtime.local.toml` на указанный source-of-truth конфиг
 - перегенерирует shell-runner
 - переустанавливает `launchd` plist
 

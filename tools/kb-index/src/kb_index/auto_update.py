@@ -34,6 +34,12 @@ def service_runtime_config_path_for(auto_update: AutoUpdateConfig) -> Path:
     return service_root_for(auto_update) / 'config' / 'runtime.local.toml'
 
 
+def _replace_with_symlink(link_path: Path, target_path: Path) -> None:
+    if link_path.is_symlink() or link_path.exists():
+        link_path.unlink()
+    link_path.symlink_to(target_path)
+
+
 def render_runner_script(auto_update: AutoUpdateConfig, project_root: Path) -> str:
     service_root = service_root_for(auto_update)
     runtime_config = service_runtime_config_path_for(auto_update)
@@ -125,7 +131,7 @@ def _sync_runtime_copy(auto_update: AutoUpdateConfig, config_path: Path, project
     service_log_dir.mkdir(parents=True, exist_ok=True)
 
     shutil.copytree(src_root, dst_src_root, dirs_exist_ok=True)
-    shutil.copy2(config_path, config_dir / 'runtime.local.toml')
+    _replace_with_symlink(config_dir / 'runtime.local.toml', config_path.resolve())
 
     example_config = project_root / 'config' / 'runtime.example.toml'
     if example_config.exists():
@@ -205,6 +211,8 @@ def install_launchd_auto_update(
         'service_root': str(runtime_paths['service_root']),
         'runner_path': str(runtime_paths['runner_path']),
         'runtime_config_path': str(runtime_paths['runtime_config_path']),
+        'runtime_config_is_symlink': runtime_paths['runtime_config_path'].is_symlink(),
+        'runtime_config_symlink_target': str(runtime_paths['runtime_config_path'].resolve()),
         'log_dir': str(runtime_paths['log_dir']),
         'loaded': True,
     }
@@ -266,9 +274,12 @@ def get_launchd_auto_update_status(auto_update: AutoUpdateConfig) -> dict[str, o
         'runner_exists': runner_path.exists(),
         'runtime_config_path': str(runtime_config_path),
         'runtime_config_exists': runtime_config_path.exists(),
+        'runtime_config_is_symlink': runtime_config_path.is_symlink(),
         'log_dir': str(log_dir),
         'loaded': False,
     }
+    if runtime_config_path.is_symlink():
+        status['runtime_config_symlink_target'] = str(runtime_config_path.resolve())
     if platform.system() != 'Darwin':
         status['platform_supported'] = False
         return status

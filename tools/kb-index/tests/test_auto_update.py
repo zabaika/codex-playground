@@ -3,8 +3,10 @@ from __future__ import annotations
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
+from unittest.mock import patch
 
 from kb_index.auto_update import (
+    _sync_runtime_copy,
     project_launchd_log_dir_for,
     render_launchd_plist,
     render_runner_script,
@@ -66,6 +68,36 @@ class AutoUpdateTests(unittest.TestCase):
             self.assertIn(f"sys.path.insert(0, {str(service_root_for(auto_update) / 'src')!r})", payload)
             self.assertIn("from kb_index.cli import main", payload)
             self.assertIn(str(service_runtime_config_path_for(auto_update)), payload)
+
+    def test_sync_runtime_copy_links_runtime_config_to_source_of_truth(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            project_root = root / 'project'
+            service_root = root / 'service-root'
+            src_root = project_root / 'src' / 'kb_index'
+            config_dir = project_root / 'config'
+            src_root.mkdir(parents=True)
+            config_dir.mkdir(parents=True)
+            (src_root / '__init__.py').write_text('', encoding='utf-8')
+            config_path = config_dir / 'runtime.local.toml'
+            config_path.write_text('[vault]\nroot = \'/tmp\'\n', encoding='utf-8')
+
+            auto_update = AutoUpdateConfig(
+                enabled=True,
+                mode='launchd',
+                interval_minutes=15,
+                launchd_label='local.kb-index.auto-update',
+                plist_path=root / 'local.kb-index.auto-update.plist',
+                run_on_load=True,
+            )
+
+            with patch('kb_index.auto_update.service_root_for', return_value=service_root):
+                runtime_paths = _sync_runtime_copy(auto_update, config_path, project_root)
+
+            runtime_config_path = service_root / 'config' / 'runtime.local.toml'
+            self.assertEqual(runtime_paths['runtime_config_path'], runtime_config_path)
+            self.assertTrue(runtime_config_path.is_symlink())
+            self.assertEqual(runtime_config_path.resolve(), config_path.resolve())
 
 
 if __name__ == '__main__':
