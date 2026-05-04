@@ -9,6 +9,7 @@ Use `article-to-obsidian-kb` when a source article, transcript, or long-form tex
 The skill:
 
 - reads a source URL or provided long-form text
+- defaults to `source` mode unless a structured mode is explicitly requested
 - routes the source through an engineering or general analysis path
 - searches existing note roots before drafting anything
 - prefers updating matching notes over creating duplicates
@@ -29,23 +30,31 @@ Install or refresh the local Codex copy with:
 bash skills/article-to-obsidian-kb/install-local.sh
 ```
 
+Treat the repository copy of `config/runtime.local.toml` as the single editable local config. If an installed Codex copy exists under `~/.codex/skills`, it should point to the same file instead of keeping a second divergent copy.
+
 ## Local Runtime Behavior
 
 - loads vault roots from `config/runtime.local.toml`
+- keeps `source` as the default workflow mode
 - uses separate note roots for source-derived notes and concept notes
+- can resolve dedicated structured note roots when `structured` mode is explicitly selected
 - resolves staging and temporary files through `paths.scratch_root`, defaulting to `scratch/article-to-obsidian-kb`
+- can use `paths.project_root` or `CODEX_PLAYGROUND_PROJECT_ROOT` to keep project-local `source` paths relative even when the skill runs from an installed copy under `~/.codex`
 - uses `paths.kb_index_config` as the canonical entry point to `kb-index` when configured
 - treats the repository copy of `config/runtime.local.toml` as the single editable local config
+- uses `config/runtime.example.toml` as the canonical operator-facing reference for config keys, defaults, and local-runtime notes
 
 ## Main Files
 
 - `SKILL.md`: runtime workflow entrypoint
 - `scripts/check_note_contract.py`: mechanical note-contract checker
 - `scripts/detect_source_route.py`: source routing helper
+- `scripts/write_structured_note.py`: explicit structured-note writer for non-source payloads such as `council-verdict`
+- `templates/council-verdict.md.tmpl`: mechanical render-layout for the `council-verdict` structured note
 
 ## References
 
-- `references/local-config.md`: explains how the skill resolves local vault roots, scratch paths, and `kb-index` config
+- `references/structured-note-types.md`: defines explicit structured-note modes and the current `council-verdict` route
 - `references/vault-conventions.md`: defines the canonical final note contract for frontmatter, titles, tags, links, spacing, and closing sections
 - `references/update-patterns.md`: defines update-vs-create behavior, merge rules, chronology, and post-write verification
 - `references/source-analysis-engineering.md`: defines the extraction path for engineering-heavy sources

@@ -5,7 +5,7 @@ This file is the single source of truth for the final note contract used by `art
 ## Scope
 
 - These conventions apply to every saved note regardless of whether the source was processed through the engineering analysis path or the general analysis path.
-- Resolve note roots from `config/runtime.local.toml` via [local-config.md](local-config.md).
+- Resolve note roots from `config/runtime.local.toml`, using `config/runtime.example.toml` as the canonical reference for key names and defaults.
 - Store source-derived notes in `note_roots.article`.
 - Store concept notes in `note_roots.concept`.
 - Treat the filename as identical to the note `title`.

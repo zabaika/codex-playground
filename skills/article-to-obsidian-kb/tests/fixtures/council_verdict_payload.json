@@ -1,0 +1,83 @@
+{
+  "type": "council-verdict",
+  "title": "Тестовый council verdict для CTO/CIO",
+  "timestamp": "2026-05-03 23:15:00",
+  "year": "2026",
+  "question": "Нужно ли оставлять двуязычный профиль в LinkedIn для поиска ролей CTO/CIO?",
+  "framed_question": "Пользователь ищет роли CTO/CIO вне РФ в русскоязычных командах и хочет понять, стоит ли оставлять только английскую версию профиля.",
+  "payload_source": "scratch/llm-council/council-payload-20260503-231500.json",
+  "verdict": {
+    "agrees": "Совет согласен, что полностью убирать русский слой рискованно для целевого сегмента.",
+    "clashes": "Главное расхождение касается глубины русского слоя: от короткого conversion block до более полноценного mirrored presence.",
+    "blind_spots": "Совет недооценил влияние outbound networking и language-specific surfaces LinkedIn вне основного narrative.",
+    "recommendation": "Оставить English-first профиль и сохранить короткий управляемый русский слой для discoverability и trust.",
+    "first_step": "1. Переписать Headline и About в English-first формате. 2. Добавить короткий русский блок в About с точными keywords и географиями. 3. Замерить 30 дней качество inbound."
+  },
+  "advisors": [
+    {
+      "name": "Contrarian",
+      "headline": "English-only может отрезать нужный warm inbound",
+      "stance": "Keep bilingual",
+      "response": "Полный отказ от русского языка слишком агрессивен для сегмента, где trust и скорость первого контакта завязаны на языке."
+    },
+    {
+      "name": "First Principles Thinker",
+      "headline": "Нужно оптимизировать не эстетику, а релевантный входящий поток",
+      "stance": "Keep bilingual",
+      "response": "Язык профиля — это не декоративный слой, а часть поисковой и сигнальной поверхности."
+    },
+    {
+      "name": "Expansionist",
+      "headline": "Двуязычие дает дополнительный охват без второго бренда",
+      "stance": "English-first with Russian support",
+      "response": "Если positioning единый, второй язык расширяет захват без обязательного конфликта бренда."
+    },
+    {
+      "name": "Outsider",
+      "headline": "English-only упрощает профиль, но не рынок",
+      "stance": "Keep bilingual with unified positioning",
+      "response": "Для внешнего наблюдателя русский язык здесь выглядит как сигнал близости к нужному hiring layer."
+    },
+    {
+      "name": "Executor",
+      "headline": "Лучший tradeoff — English-first плюс короткий русский блок",
+      "stance": "English-first plus controlled Russian layer",
+      "response": "Самая практичная модель — один основной narrative на английском и короткий русский search/conversion layer."
+    }
+  ],
+  "peer_reviews": [
+    {
+      "reviewer": "Reviewer 1",
+      "response": "1. Самый сильный: Response E. Его practical move должен дожить до финального плана. 2. Самое большое слепое пятно у Response A. 3. Все недооценили outbound networking."
+    },
+    {
+      "reviewer": "Reviewer 2",
+      "response": "1. Самый сильный: Response E. 2. Самое большое слепое пятно у Response B. 3. Все недооценили language-specific surfaces."
+    }
+  ],
+  "anonymization_mapping": [
+    {
+      "label": "Response A",
+      "advisor": "Contrarian"
+    },
+    {
+      "label": "Response B",
+      "advisor": "First Principles Thinker"
+    },
+    {
+      "label": "Response C",
+      "advisor": "Expansionist"
+    },
+    {
+      "label": "Response D",
+      "advisor": "Outsider"
+    },
+    {
+      "label": "Response E",
+      "advisor": "Executor"
+    }
+  ],
+  "related_notes": [
+    "Поиск работы в зарубежных компаниях"
+  ]
+}

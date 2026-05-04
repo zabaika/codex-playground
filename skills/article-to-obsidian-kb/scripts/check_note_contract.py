@@ -11,6 +11,7 @@ from pathlib import Path
 
 
 SOURCE_NOTE_TYPES = {"lessons", "general", "operating-model"}
+STRUCTURED_NOTE_TYPES = {"council-verdict"}
 HEADING_RE = re.compile(r"^(#{1,6})\s+(.+?)\s*$")
 WIKILINK_RE = re.compile(r"\[\[([^|\]]+)(?:\|([^\]]+))?\]\]")
 URL_RE = re.compile(r"https?://\S+")
@@ -144,6 +145,8 @@ def _check_required_frontmatter(
     required = ["title", "type", "tags"]
     if expect == "source":
         required += ["source", "date"]
+    if expect == "structured-council-verdict":
+        required += ["source", "date"]
     for key in required:
         value = frontmatter.get(key)
         if value in (None, "", []):
@@ -168,6 +171,14 @@ def _check_required_frontmatter(
             Violation(
                 "frontmatter.invalid-type",
                 "Source-derived note должен иметь `type: lessons|general|operating-model`.",
+                1,
+            )
+        )
+    if expect == "structured-council-verdict" and note_type != "council-verdict":
+        violations.append(
+            Violation(
+                "frontmatter.invalid-type",
+                "Structured council verdict note должен иметь `type: council-verdict`.",
                 1,
             )
         )
@@ -214,6 +225,303 @@ def _check_tag_rules(frontmatter: dict[str, object], expect: str) -> list[Violat
                     1,
                 )
             )
+    if expect == "structured-council-verdict":
+        if tags != ["council-verdict"]:
+            violations.append(
+                Violation(
+                    "frontmatter.invalid-council-tags",
+                    "Structured council verdict note должен иметь ровно один тег `council-verdict`.",
+                    1,
+                )
+            )
+    return violations
+
+
+def _check_council_verdict_shape(body: str) -> list[Violation]:
+    violations: list[Violation] = []
+    normalized_body = body.lstrip("\n")
+    required_headings = [
+        "## Формулировка вопроса для совета",
+        "## Вердикт совета",
+        "## Позиции советников",
+        "## Взаимная проверка",
+        "### Где совет согласен",
+        "### Где мнения расходятся",
+        "### Какие слепые зоны нашел совет",
+        "### Рекомендация",
+        "### Что сделать первым",
+    ]
+    violations.extend(_check_required_headings(body, required_headings))
+
+    if not normalized_body.startswith("Разбор решения:\n```text\n"):
+        violations.append(
+            Violation(
+                "structure.invalid-council-opening",
+                "Council verdict note должен начинаться с `Разбор решения:` и fenced `text` block.",
+                1,
+            )
+        )
+    if "\n```\n" not in normalized_body:
+        violations.append(
+            Violation(
+                "structure.missing-question-code-fence-close",
+                "После блока `Разбор решения` должен быть закрывающий fenced block.",
+                1,
+            )
+        )
+    if re.search(r"(?m)^# (?!Связанные заметки$)", body):
+        line = _body_line_number(body, "# ")
+        violations.append(
+            Violation(
+                "structure.unexpected-h1-in-body",
+                "В теле council verdict note не должно быть отдельного H1-заголовка кроме `# Связанные заметки`.",
+                line,
+            )
+        )
+    violations.extend(_check_council_verdict_section_order(body))
+    violations.extend(_check_council_verdict_degraded_status_block(body))
+    violations.extend(_check_council_verdict_advisor_blocks(body))
+    violations.extend(_check_council_verdict_peer_review_blocks(body))
+    return violations
+
+
+def _heading_line_map(body: str) -> dict[str, int]:
+    mapping: dict[str, int] = {}
+    for line_no, heading, _level in _extract_headings(body):
+        mapping.setdefault(heading, line_no)
+    return mapping
+
+
+def _check_council_verdict_section_order(body: str) -> list[Violation]:
+    violations: list[Violation] = []
+    heading_lines = _heading_line_map(body)
+    ordered = [
+        "## Формулировка вопроса для совета",
+        "## Вердикт совета",
+        "### Где совет согласен",
+        "### Где мнения расходятся",
+        "### Какие слепые зоны нашел совет",
+        "### Рекомендация",
+        "### Что сделать первым",
+        "## Позиции советников",
+        "## Взаимная проверка",
+    ]
+    previous_line = None
+    previous_heading = None
+    for heading in ordered:
+        current_line = heading_lines.get(heading)
+        if current_line is None:
+            continue
+        if previous_line is not None and current_line <= previous_line:
+            violations.append(
+                Violation(
+                    "structure.invalid-council-section-order",
+                    f"Heading `{heading}` должен идти после `{previous_heading}` в каноническом порядке.",
+                    current_line,
+                )
+            )
+            break
+        previous_line = current_line
+        previous_heading = heading
+
+    related_line = heading_lines.get("# Связанные заметки")
+    peer_review_line = heading_lines.get("## Взаимная проверка")
+    if related_line is not None and peer_review_line is not None and related_line <= peer_review_line:
+        violations.append(
+            Violation(
+                "structure.invalid-related-section-order",
+                "`# Связанные заметки` должен идти только после `## Взаимная проверка`.",
+                related_line,
+            )
+        )
+    return violations
+
+
+def _section_slice(lines: list[str], start_heading: str, end_headings: set[str]) -> tuple[int | None, list[str]]:
+    start_idx = None
+    for idx, line in enumerate(lines):
+        if line.strip() == start_heading:
+            start_idx = idx
+            break
+    if start_idx is None:
+        return None, []
+    collected: list[str] = []
+    for idx in range(start_idx + 1, len(lines)):
+        if lines[idx].strip() in end_headings:
+            break
+        collected.append(lines[idx])
+    return start_idx + 1, collected
+
+
+def _check_council_verdict_degraded_status_block(body: str) -> list[Violation]:
+    violations: list[Violation] = []
+    lines = body.splitlines()
+    start_line, section_lines = _section_slice(
+        lines,
+        "## Статус прогона",
+        {"## Формулировка вопроса для совета"},
+    )
+    if start_line is None:
+        return violations
+    non_empty = [(idx, line) for idx, line in enumerate(section_lines, start=start_line + 1) if line.strip()]
+    if not non_empty:
+        violations.append(
+            Violation(
+                "structure.empty-degraded-status-block",
+                "После `## Статус прогона` должен быть marker line и объяснение причины деградации.",
+                start_line,
+            )
+        )
+        return violations
+    marker_line_no, marker_text = non_empty[0]
+    if marker_text.strip() != "Этот прогон был деградированным.":
+        violations.append(
+            Violation(
+                "structure.invalid-degraded-status-marker",
+                "Первой строкой degraded-status блока должна быть `Этот прогон был деградированным.`",
+                marker_line_no,
+            )
+        )
+    if len(non_empty) < 2:
+        violations.append(
+            Violation(
+                "structure.missing-degraded-status-details",
+                "Degraded-status блок должен содержать отдельное объяснение причины деградации.",
+                marker_line_no,
+            )
+        )
+    return violations
+
+
+def _check_council_verdict_advisor_blocks(body: str) -> list[Violation]:
+    violations: list[Violation] = []
+    lines = body.splitlines()
+    start_line, section_lines = _section_slice(
+        lines,
+        "## Позиции советников",
+        {"## Взаимная проверка"},
+    )
+    if start_line is None:
+        return violations
+    idx = 0
+    found_block = False
+    while idx < len(section_lines):
+        line = section_lines[idx]
+        absolute_line = start_line + 1 + idx
+        if not line.strip():
+            idx += 1
+            continue
+        if not line.startswith("### "):
+            violations.append(
+                Violation(
+                    "structure.invalid-advisor-block-heading",
+                    "Каждый advisor block должен начинаться с `### <Advisor Name>`.",
+                    absolute_line,
+                )
+            )
+            return violations
+        found_block = True
+        if idx + 1 >= len(section_lines) or not section_lines[idx + 1].startswith("- **Позиция:** "):
+            violations.append(
+                Violation(
+                    "structure.invalid-advisor-stance-line",
+                    "После advisor heading должна идти строка `- **Позиция:** ...`.",
+                    absolute_line + 1,
+                )
+            )
+            return violations
+        if idx + 2 >= len(section_lines) or not section_lines[idx + 2].startswith("- **Ключевой вывод:** "):
+            violations.append(
+                Violation(
+                    "structure.invalid-advisor-headline-line",
+                    "После строки позиции должна идти строка `- **Ключевой вывод:** ...`.",
+                    absolute_line + 2,
+                )
+            )
+            return violations
+        body_lines: list[str] = []
+        idx += 3
+        while idx < len(section_lines):
+            current = section_lines[idx]
+            if current.startswith("### "):
+                break
+            if current.strip():
+                body_lines.append(current)
+            idx += 1
+        if not body_lines:
+            violations.append(
+                Violation(
+                    "structure.empty-advisor-response-body",
+                    "Advisor block должен содержать непустое тело ответа после summary lines.",
+                    absolute_line,
+                )
+            )
+            return violations
+    if not found_block:
+        violations.append(
+            Violation(
+                "structure.missing-advisor-blocks",
+                "Под `## Позиции советников` должен быть хотя бы один advisor block.",
+                start_line,
+            )
+        )
+    return violations
+
+
+def _check_council_verdict_peer_review_blocks(body: str) -> list[Violation]:
+    violations: list[Violation] = []
+    lines = body.splitlines()
+    start_line, section_lines = _section_slice(
+        lines,
+        "## Взаимная проверка",
+        {"# Связанные заметки"},
+    )
+    if start_line is None:
+        return violations
+    idx = 0
+    found_block = False
+    while idx < len(section_lines):
+        line = section_lines[idx]
+        absolute_line = start_line + 1 + idx
+        if not line.strip():
+            idx += 1
+            continue
+        if not line.startswith("### "):
+            violations.append(
+                Violation(
+                    "structure.invalid-peer-review-heading",
+                    "Каждый peer-review block должен начинаться с `### <Reviewer Name>`.",
+                    absolute_line,
+                )
+            )
+            return violations
+        found_block = True
+        body_lines: list[str] = []
+        idx += 1
+        while idx < len(section_lines):
+            current = section_lines[idx]
+            if current.startswith("### "):
+                break
+            if current.strip():
+                body_lines.append(current)
+            idx += 1
+        if not body_lines:
+            violations.append(
+                Violation(
+                    "structure.empty-peer-review-body",
+                    "Peer-review block должен содержать непустое тело ответа.",
+                    absolute_line,
+                )
+            )
+            return violations
+    if not found_block:
+        violations.append(
+            Violation(
+                "structure.missing-peer-review-blocks",
+                "Под `## Взаимная проверка` должен быть хотя бы один peer-review block.",
+                start_line,
+            )
+        )
     return violations
 
 
@@ -601,6 +909,57 @@ def collect_violations(
     chronology_headings = chronology_headings or []
 
     text = path.read_text(encoding="utf-8")
+    return collect_violations_from_text(
+        text,
+        expect=expect,
+        min_related_links=min_related_links,
+        forbidden_terms=forbidden_terms,
+        required_linked_phrases=required_linked_phrases,
+        required_example_phrases=required_example_phrases,
+        allow_latin_terms=allow_latin_terms,
+        required_headings=required_headings,
+        forbidden_headings=forbidden_headings,
+        enforce_leading_bold_under=enforce_leading_bold_under,
+        leading_bold_threshold=leading_bold_threshold,
+        require_intro_before_first_heading=require_intro_before_first_heading,
+        require_related_section_final=require_related_section_final,
+        required_related_links=required_related_links,
+        check_title_matches_filename=check_title_matches_filename,
+        path=path,
+        chronology_headings=chronology_headings,
+    )
+
+
+def collect_violations_from_text(
+    text: str,
+    *,
+    expect: str,
+    min_related_links: int = 0,
+    forbidden_terms: list[str] | None = None,
+    required_linked_phrases: list[str] | None = None,
+    required_example_phrases: list[str] | None = None,
+    allow_latin_terms: list[str] | None = None,
+    required_headings: list[str] | None = None,
+    forbidden_headings: list[str] | None = None,
+    enforce_leading_bold_under: list[str] | None = None,
+    leading_bold_threshold: int = 40,
+    require_intro_before_first_heading: bool = True,
+    require_related_section_final: bool = True,
+    required_related_links: list[str] | None = None,
+    check_title_matches_filename: bool = False,
+    path: Path | None = None,
+    chronology_headings: list[str] | None = None,
+) -> list[Violation]:
+    forbidden_terms = forbidden_terms or []
+    required_linked_phrases = required_linked_phrases or []
+    required_example_phrases = required_example_phrases or []
+    allow_latin_terms = allow_latin_terms or []
+    required_headings = required_headings or []
+    forbidden_headings = forbidden_headings or []
+    enforce_leading_bold_under = enforce_leading_bold_under or []
+    required_related_links = required_related_links or []
+    chronology_headings = chronology_headings or []
+
     frontmatter_block, body, body_line_offset = _split_frontmatter(text)
     frontmatter = _parse_frontmatter_block(frontmatter_block)
     violations: list[Violation] = []
@@ -608,11 +967,15 @@ def collect_violations(
     violations.extend(_check_required_frontmatter(frontmatter, expect))
     violations.extend(_check_tag_rules(frontmatter, expect))
     if check_title_matches_filename:
+        if path is None:
+            raise ValueError("Path is required when check_title_matches_filename is enabled")
         violations.extend(_check_title_matches_filename(path, frontmatter))
 
     body_violations: list[Violation] = []
     if require_intro_before_first_heading and expect == "source":
         body_violations.extend(_check_intro_before_first_heading(body))
+    if expect == "structured-council-verdict":
+        body_violations.extend(_check_council_verdict_shape(body))
     body_violations.extend(_check_duplicate_headings(body))
     body_violations.extend(_check_required_headings(body, required_headings))
     body_violations.extend(_check_forbidden_headings(body, forbidden_headings))
@@ -620,7 +983,8 @@ def collect_violations(
     body_violations.extend(_check_blank_lines_before_lists(body))
     body_violations.extend(_check_double_blank_lines(body))
     body_violations.extend(_check_forbidden_terms(body, forbidden_terms))
-    body_violations.extend(_check_generic_latin_residue(body, allow_latin_terms))
+    if expect != "structured-council-verdict":
+        body_violations.extend(_check_generic_latin_residue(body, allow_latin_terms))
     body_violations.extend(_check_required_linked_phrases(body, required_linked_phrases))
     body_violations.extend(_check_required_examples(body, required_example_phrases))
     body_violations.extend(
@@ -646,7 +1010,11 @@ def collect_violations(
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("path", type=Path)
-    parser.add_argument("--expect", choices=("source", "concept"), default="source")
+    parser.add_argument(
+        "--expect",
+        choices=("source", "concept", "structured-council-verdict"),
+        default="source",
+    )
     parser.add_argument("--min-related-links", type=int, default=0)
     parser.add_argument("--forbid", action="append", default=[])
     parser.add_argument("--allow-latin-term", action="append", default=[])

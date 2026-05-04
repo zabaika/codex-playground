@@ -19,17 +19,18 @@ Do not draft notes from the video title, thumbnail, or short description alone. 
 
 ## Local Runtime Config
 
-1. Load [references/local-config.md](references/local-config.md) before running the pipeline.
-2. Prefer the existing local configs from sibling skills instead of duplicating machine-specific values:
+1. Read this skill's `config/runtime.local.toml` only when it exists.
+2. Use [config/runtime.example.toml](config/runtime.example.toml) as the canonical reference for wrapper config keys, defaults, and path-resolution notes.
+3. Prefer the existing local configs from sibling skills instead of duplicating machine-specific values:
    - in this skill's `config/runtime.local.toml`, point `youtube_transcribe_config` to `../../youtube-transcribe-skill/config/runtime.local.toml`
    - in this skill's `config/runtime.local.toml`, point `article_to_obsidian_config` to `../../article-to-obsidian-kb/config/runtime.local.toml`
-3. Treat this skill's own `config/runtime.local.toml` as optional.
-4. If this skill has a local config, use it only for:
+4. Treat this skill's own `config/runtime.local.toml` as optional.
+5. If this skill has a local config, use it only for:
    - pointing at the sibling skill configs
    - overriding the project-root-relative staging/log paths
-5. Never copy note-root values or transcript-provider settings into tracked files.
-6. If the sibling transcript config is missing, stop and tell the user that transcript extraction is not configured.
-7. If the sibling article config is missing or lacks `note_roots.article` and `note_roots.concept`, stop and tell the user that the Obsidian roots are not configured.
+6. Never copy note-root values or transcript-provider settings into tracked files.
+7. If the sibling transcript config is missing, stop and tell the user that transcript extraction is not configured.
+8. If the sibling article config is missing or lacks `note_roots.article` and `note_roots.concept`, stop and tell the user that the Obsidian roots are not configured.
 
 ## Default Workflow
 
@@ -53,7 +54,7 @@ python3 scripts/prepare_youtube_transcript.py --url "[VIDEO_URL]"
 6. After the helper succeeds, read the prepared markdown transcript as the source text.
 7. Then load the sibling article workflow in this order:
    - `../article-to-obsidian-kb/SKILL.md`
-   - `../article-to-obsidian-kb/references/local-config.md`
+   - `../article-to-obsidian-kb/config/runtime.example.toml`
    - `../article-to-obsidian-kb/scripts/detect_source_route.py`
    - `../article-to-obsidian-kb/references/vault-conventions.md`
    - `../article-to-obsidian-kb/references/language-normalization.md`

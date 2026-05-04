@@ -1,0 +1,76 @@
+{
+  "type": "council-verdict",
+  "title": "Проверка deanonymization",
+  "timestamp": "2026-05-03 16:44:03",
+  "year": "2026",
+  "question": "Вопрос",
+  "framed_question": "Формулировка",
+  "payload_source": "scratch/llm-council/council-payload-20260503-164403.json",
+  "verdict": {
+    "agrees": "Сильнее всего Response A.",
+    "clashes": "Сравни вариант A и вариант B.",
+    "blind_spots": "A/B test здесь не нужен.",
+    "recommendation": "Оставь Response A как ориентир.",
+    "first_step": "1. Проверь вариант A 2. Не делай A/B test"
+  },
+  "advisors": [
+    {
+      "name": "Contrarian",
+      "headline": "Короткий вывод",
+      "stance": "Keep bilingual",
+      "response": "resp"
+    },
+    {
+      "name": "Executor",
+      "headline": "Второй вывод",
+      "stance": "English-first with Russian support",
+      "response": "resp"
+    },
+    {
+      "name": "First Principles Thinker",
+      "headline": "Третий вывод",
+      "stance": "Keep bilingual",
+      "response": "resp"
+    },
+    {
+      "name": "Historian",
+      "headline": "Четвертый вывод",
+      "stance": "Keep bilingual",
+      "response": "resp"
+    },
+    {
+      "name": "Optimizer",
+      "headline": "Пятый вывод",
+      "stance": "Keep bilingual",
+      "response": "resp"
+    }
+  ],
+  "peer_reviews": [
+    {
+      "reviewer": "Reviewer 1",
+      "response": "Response A сильный, но вариант A отдельно тоже упомянут. A/B test не нужен."
+    }
+  ],
+  "anonymization_mapping": [
+    {
+      "label": "Response A",
+      "advisor": "Contrarian"
+    },
+    {
+      "label": "Response B",
+      "advisor": "Executor"
+    },
+    {
+      "label": "Response C",
+      "advisor": "First Principles Thinker"
+    },
+    {
+      "label": "Response D",
+      "advisor": "Historian"
+    },
+    {
+      "label": "Response E",
+      "advisor": "Optimizer"
+    }
+  ]
+}

@@ -30,12 +30,15 @@ Rules:
 - for any operational fact such as route decisions, chosen engines, selected inputs, or resolved config, define one canonical producer and treat every other layer as a consumer of that fact
 - do not create parallel summaries, shadow metadata, or alternate debug formats when the canonical producer already emits the needed information
 - if a wrapper or orchestration layer needs to expose upstream metadata, pass through or parse the canonical upstream artifact instead of reconstructing it with local placeholders or guessed values
+- if an orchestration or producer workflow already has a shared downstream writer for user-facing notes or documents, keep the producer responsible only for orchestration and structured payloads; do not let it own a second local copy of the final note contract
 - for user-facing output contracts such as final summaries, created-vs-updated reports, or section ordering, keep one canonical definition in the deepest owning workflow and make wrappers inherit it instead of restating the same format in multiple places
 - apply the same inheritance rule to final validation layers: if a wrapper delegates note creation, document rendering, or another structured-output workflow to a deeper canonical owner, the wrapper must inherit that owner's final compliance passes and quality gates instead of silently shortening the validation path
+- if a wrapper delegates note creation, document rendering, or another structured-output workflow to a deeper canonical owner, delegate the final write path as well instead of reusing only a local formatting helper from that owner while bypassing its route resolution, save logic, or final contract checks
 - when a workflow grows beyond a few pages of rules, split it into one thin entrypoint plus canonical reference docs; keep the entrypoint focused on sequencing and keep detailed policy in the deepest owning reference file
 - for each major rule family such as formatting, tag policy, update semantics, or test coverage, keep exactly one canonical documentation owner and make every other file point to it instead of restating the same contract in full
 - if an entrypoint file still repeats a rule family in short form, keep it as a brief guardrail summary only; the detailed wording, examples, and edge cases must still live in the canonical owner
 - when an entrypoint delegates formatting or content rules to a canonical reference document, it must still put every major rule family from that canonical owner onto the mandatory execution path of the workflow; a vague pointer like "apply conventions" is not enough when operators or agents could otherwise skip whole families such as links, closing-section hygiene, tag families, or language cleanup
+- when a workflow produces both a machine-readable payload and one or more human-readable derived artifacts, designate exactly one of them as the canonical source of truth and treat the others as derived views rather than parallel primary artifacts
 - when creating links between knowledge objects, prefer topical identity over lexical similarity; a shared author, podcast series, brand shell, or similar title is not enough to establish a durable relation on its own
 - when creating top-level knowledge objects, do not promote a narrow source-local decision filter or one-off heuristic into its own durable node unless it is likely to be reused across multiple future notes; if its best role is to sharpen one recommendation inside one source note, keep it there
 - when deciding whether to create a top-level knowledge object, prefer keeping material inside the source-derived note if it mainly restates that note's own thesis, reads like a detachable subsection, or would realistically have no meaningful backlinks beyond the current source and a couple of sibling nodes from the same run
@@ -49,7 +52,10 @@ Rules:
 - when a workflow also maintains a local contract checker or regression harness for those structured outputs, keep that harness focused on mechanically checkable constraints such as schema, formatting, links, and explicit preservation rules; do not pretend it can prove the full semantic quality of AI interpretation
 - when a new mechanically checkable output rule is added to such a workflow, update the checker or regression fixtures in the same change so the documented contract and the executable contract do not drift apart
 - when a workflow already has a local contract harness, any change to that workflow's output contract, checker, or contract-facing documentation should trigger the harness before the change is considered complete, even if the edit looks like "docs only"
+- when a workflow renders user-facing structured markdown through an executable template, keep a human-readable canonical reference that owns the note shape, section order, and section semantics; the template should remain a mechanical layout file rather than the only place where the document contract lives
+- when a workflow uses prompt-generated text as the upstream source for a structured artifact, make prompt rules the primary defense against formatting noise and keep any sanitizer or cleanup layer best-effort and non-editorial; cleanup may normalize residual presentation artifacts but must not become a second interpretation pass
 - when a workflow saves structured knowledge notes, the final prose should read as standalone knowledge rather than as commentary on source order, draft history, or merge mechanics; keep provenance in structured metadata and only mention the source in the body when it is itself a useful case or comparison
+- when a derived artifact is no longer part of the normal workflow, do not keep it as a half-supported required code path "just in case"; either demote it to an explicitly on-demand derived view or remove it from the main path entirely
 
 The rulebook is intentionally broader than Telegram projects. When a rule names Telegram, bot commands, channels, Telethon, or Bot API specifics, treat that as a domain-specific specialization of the broader engineering rule rather than as the only supported scope.
 
@@ -227,6 +233,7 @@ Rules:
 - keep runtime data inside the project unless there is a strong reason not to
 - if a daemon deploys code elsewhere, still point config and data back to the project root
 - for local tools and skills, prefer project-root-relative config paths such as `scratch/` or `data/` instead of absolute home-directory paths
+- when a workflow intentionally saves primary artifacts into an external knowledge vault, synced directory, or other non-project destination, it may use absolute destination paths in `runtime.local.toml` and generic absolute placeholders in `runtime.example.toml`, but that must be documented as an explicit exception instead of becoming the silent default for unrelated tools
 - for temporary and staging artifacts, prefer one shared project-local scratch root such as `scratch/` rather than creating many sibling `tmp/` or per-tool temporary folders across the repository
 - when a tool needs its own temporary area, place it under the shared scratch root, for example `scratch/<tool-name>/`, so periodic cleanup can happen by cleaning `scratch/` alone
 
@@ -292,6 +299,7 @@ Recommended logs:
 - `data/launchd/bridge.startup.log`
 - `data/launchd/bridge.stdout.log`
 - `data/launchd/bridge.stderr.log`
+- `data/launchd/<job>.last_attempt.json`
 
 The concrete filenames above are a Telegram service example. Reuse the same pattern for any local daemon, scheduler, skill, or automation: keep logs project-local, predictable, and separate from opaque launcher-owned directories.
 
@@ -299,6 +307,7 @@ Rules:
 
 - logs must not contain secrets
 - logs must not contain absolute private file paths when avoidable
+- for scheduled jobs, keep a separate machine-readable last-attempt audit artifact with start time, finish time, status, and concise context; overwrite it on each run instead of accumulating unbounded history there
 - logs must not contain raw external-provider updates or full sensitive request payloads
 - log command metadata, not full sensitive payloads
 - for local tools and skills, prefer one append-only log file per tool unless per-run log separation is operationally necessary
@@ -540,6 +549,7 @@ Rules:
   - delegate business behavior to the canonical CLI, module entrypoint, or main script instead of re-encoding defaults in shell
 - when a service root is used, pass the project root explicitly through an environment variable if the launcher needs project-local logs, data, or config-adjacent paths
 - treat project-local scheduler logs as canonical operational evidence and service-root-local logs as disposable staging at most
+- do not treat service-root-local scheduler logs as canonical if the same workflow already has project-local logs; prefer deleting or ignoring the service-root copies to avoid split-brain debugging
 - for once-per-day AI analysis on macOS, prefer a scheduler like `launchd` over introducing a second always-on AI daemon
 - keep scheduler command lines thin and config-driven; do not duplicate business defaults in multiple shell scripts
 - scheduled and background jobs must run with an explicit interpreter/runtime path when runtime dependencies are interpreter-specific
@@ -616,6 +626,7 @@ Documentation safety rules:
 - do not use absolute local filesystem paths in committed docs
 - do not mention home directory names, machine-specific usernames, or workstation-specific paths in committed docs
 - prefer relative paths, generic placeholders, or env variable names in documentation examples
+- if a project has a documented external-destination exception, keep committed examples generic, for example `/absolute/path/to/...`, and explain that the absolute form is intentional because the real artifact root lives outside the repository
 
 Repository-wide safety rule:
 

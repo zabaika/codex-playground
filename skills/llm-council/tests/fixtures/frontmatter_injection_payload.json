@@ -1,0 +1,40 @@
+{
+  "type": "council-verdict",
+  "title": "Нормальный заголовок\nmalicious: true",
+  "timestamp": "2026-05-03 16:44:03",
+  "year": "2026\ninjected",
+  "question": "Вопрос",
+  "framed_question": "Формулировка",
+  "payload_source": "scratch/llm-council/council-payload-20260503-164403.json\nextra",
+  "run_status": {
+    "status": "degraded",
+    "details": "Фикстура проверяет экранирование frontmatter, а не полный состав совета."
+  },
+  "verdict": {
+    "agrees": "agree",
+    "clashes": "clash",
+    "blind_spots": "blind",
+    "recommendation": "rec",
+    "first_step": "1. step one 2. step two"
+  },
+  "advisors": [
+    {
+      "name": "Contrarian",
+      "headline": "Короткий вывод",
+      "stance": "Keep bilingual",
+      "response": "resp"
+    }
+  ],
+  "peer_reviews": [
+    {
+      "reviewer": "Reviewer 1",
+      "response": "Response A остается сильнейшим."
+    }
+  ],
+  "anonymization_mapping": [
+    {
+      "label": "Response A",
+      "advisor": "Contrarian"
+    }
+  ]
+}

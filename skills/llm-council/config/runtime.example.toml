@@ -1,0 +1,39 @@
+# Copy this file to runtime.local.toml and fill in machine-specific values there.
+# Keep runtime.local.toml untracked.
+# Generic absolute placeholders are intentional here because council payloads
+# may still be staged outside the repository.
+# Final verdict-note placement is not configured here. It belongs to
+# article-to-obsidian-kb structured mode via `structured_note_roots.council_verdict`.
+
+[paths]
+# Absolute destination directory for temporary payload JSON files.
+# This directory is for canonical `council-payload-...json` artifacts only.
+# Treat it as a prepared local destination; the normal council run should not invent
+# or create new roots on the fly.
+# Canonical payload writes must stay under this root.
+temp_root = "/absolute/path/to/scratch/llm-council"
+
+[phases]
+# Anonymous peer-review batch size. If omitted, llm-council defaults to `3`.
+reviewer_count = 3
+
+[payload_cleanup]
+# Best-effort cleanup of residual decorative markdown in payload text fields.
+# Set to false only when debugging raw model output or preserving source text exactly.
+# Cleanup is a formatting-normalization step, not an editorial rewrite.
+enabled = true
+
+[roles.advisor]
+# If omitted, advisor agents inherit the parent session defaults.
+model = "gpt-5.4"
+reasoning_effort = "medium"
+
+[roles.reviewer]
+# If omitted, reviewer agents inherit the parent session defaults.
+model = "gpt-5.4"
+reasoning_effort = "medium"
+
+[roles.chairman]
+# If omitted, the chairman agent inherits the parent session defaults.
+model = "gpt-5.4"
+reasoning_effort = "high"

@@ -1,0 +1,4 @@
+interface:
+  display_name: "LLM Council"
+  short_description: "Pressure-test decisions and save a verdict"
+  default_prompt: "Use $llm-council to pressure-test this decision from multiple angles and save a markdown verdict note."

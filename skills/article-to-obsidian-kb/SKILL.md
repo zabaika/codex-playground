@@ -18,27 +18,36 @@ Turn a source article, transcript, or other long-form text into compact, Russian
 | [references/update-patterns.md](references/update-patterns.md) | Single source of truth for update behavior: `update vs create`, merge rules, chronology, dated logs, and provenance preservation during rewrites. |
 | [references/source-analysis-engineering.md](references/source-analysis-engineering.md) | Extraction contract for engineering-heavy sources. |
 | [references/source-analysis-general.md](references/source-analysis-general.md) | Extraction contract for general sources. |
+| [references/structured-note-types.md](references/structured-note-types.md) | Canonical contract for explicitly selected structured-note routes and their placement rules. |
 | [references/test-matrix.md](references/test-matrix.md) | Documentation for what the harness is expected to catch mechanically and which rule families must stay test-covered. |
 | [scripts/check_note_contract.py](scripts/check_note_contract.py) | Executable checker for mechanically verifiable note rules. |
+| [scripts/write_structured_note.py](scripts/write_structured_note.py) | Explicit structured-note writer used when the skill is invoked in `structured` mode. |
+| [templates/council-verdict.md.tmpl](templates/council-verdict.md.tmpl) | Mechanical render-layout for the `council-verdict` structured note. |
 | [tests/test_note_contract_regression.py](tests/test_note_contract_regression.py) | Regression coverage for the executable contract. |
 
 ## Local Runtime Config
 
-1. Load [references/local-config.md](references/local-config.md) before touching the vault.
-2. Resolve the skill directory from the location of this `SKILL.md`.
-3. Read `<skill-dir>/config/runtime.local.toml` when it exists.
+1. Resolve the skill directory from the location of this `SKILL.md`.
+2. Read `<skill-dir>/config/runtime.local.toml` when it exists.
+3. Use [config/runtime.example.toml](config/runtime.example.toml) as the canonical reference for config keys, defaults, and local-runtime notes.
 4. Treat that repo copy as the single editable local config. If an installed Codex copy exists under `~/.codex/skills`, it should point to the same file rather than keeping a second divergent copy.
-5. Use `note_roots.article` and `note_roots.concept` from that file for all search and save operations.
-6. Resolve `paths.scratch_root` from that file when it exists. If it is missing, default to `scratch/article-to-obsidian-kb` relative to the current project root.
-7. Resolve `paths.kb_index_config` from that file when it exists. Use it as the canonical entry point to `kb-index` for indexed retrieval.
-8. If temporary or staging files are needed at any point in the workflow, write them only under `paths.scratch_root`.
-9. Never create repo-local temporary folders under `tmp/` for this skill. Keep temporary artifacts consolidated under `scratch/` so they are easy to inspect and clean.
-10. Do not look for the config relative to the current working directory unless the skill directory itself is the current working directory.
-11. If `<skill-dir>/config/runtime.local.toml` exists and contains both required note roots, do not ask the user for those paths again.
-12. Never commit machine-specific paths, local roots, passwords, or tokens into `SKILL.md`, references, or tracked config files.
-13. If the local config is missing and the roots are not already obvious from the current task, pause and ask the user instead of guessing.
+5. Use `note_roots.article` and `note_roots.concept` from that file for all `source`-mode search and save operations.
+6. When `structured` mode is explicitly selected, resolve the destination for that structured type according to [references/structured-note-types.md](references/structured-note-types.md) instead of reusing the normal source-mode note roots.
+7. Resolve `paths.scratch_root` from that file when it exists. If it is missing, default to `scratch/article-to-obsidian-kb` relative to the current project root.
+8. Resolve `paths.project_root` from that file when it exists. Use it only as a project-root override for path normalization cases such as relativizing project-local `source` artifacts from an installed copy. If `CODEX_PLAYGROUND_PROJECT_ROOT` is set, prefer it over the config key.
+9. Resolve `paths.kb_index_config` from that file when it exists. Use it as the canonical entry point to `kb-index` for indexed retrieval.
+10. If temporary or staging files are needed at any point in the workflow, write them only under `paths.scratch_root`.
+11. Never create repo-local temporary folders under `tmp/` for this skill. Keep temporary artifacts consolidated under `scratch/` so they are easy to inspect and clean.
+12. Do not look for the config relative to the current working directory unless the skill directory itself is the current working directory.
+13. If `<skill-dir>/config/runtime.local.toml` exists and contains both required note roots, do not ask the user for those paths again.
+14. Never commit machine-specific paths, local roots, passwords, or tokens into `SKILL.md`, references, or tracked config files.
+15. If the local config is missing and the roots are not already obvious from the current task, pause and ask the user instead of guessing.
 
 ## Workflow
+
+Default mode: `source`.
+Use the numbered workflow below for `source` mode unless the caller explicitly selected `structured`.
+When `structured` mode is explicitly selected, route by [references/structured-note-types.md](references/structured-note-types.md) and use the dedicated structured-note writer instead of the source-analysis path below.
 
 1. Load the local runtime config and resolve the note roots.
    - Resolve the scratch staging root too.
@@ -148,21 +157,30 @@ python3 scripts/detect_source_route.py --source-file "[SOURCE_FILE]"
 13. When this skill's contract layer changes, run the local note-contract tests before finishing the change.
    - Treat changes to any of these files as a required test trigger:
      - `SKILL.md`
+     - `config/runtime.example.toml`
+     - `references/structured-note-types.md`
      - `references/vault-conventions.md`
      - `references/language-normalization.md`
      - `references/update-patterns.md`
      - `references/test-matrix.md`
+     - `templates/council-verdict.md.tmpl`
      - files under `tests/`
-     - the checker under `scripts/`
+     - `scripts/check_note_contract.py`
+     - `scripts/write_structured_note.py`
    - The current required command is:
 
 ```bash
-python3 -m unittest skills/article-to-obsidian-kb/tests/test_note_contract_regression.py -q
+python3 -m unittest discover -s skills/article-to-obsidian-kb/tests -q
 ```
 
    - Do not skip this test run just because the change is "only documentation" if that documentation changes the executable note contract.
 
 ## Content Routing
+
+- Treat `source` as the default workflow mode of this skill.
+- Switch to `structured` only when the caller explicitly selected that mode.
+- In `structured` mode, load [references/structured-note-types.md](references/structured-note-types.md) and route by `type`.
+- Do not auto-detect `structured` mode just because an input looks like JSON.
 
 - Choose the engineering path when the source contains at least two of the following:
   - a concrete company or system context
@@ -291,7 +309,7 @@ python3 -m unittest skills/article-to-obsidian-kb/tests/test_note_contract_regre
 
 ## Write Notes
 
-- Resolve the local roots through [references/local-config.md](references/local-config.md) before reading or writing files.
+- Resolve the local roots through `<skill-dir>/config/runtime.local.toml` before reading or writing files, using [config/runtime.example.toml](config/runtime.example.toml) as the canonical key reference.
 - Apply the canonical final-note contract from [references/vault-conventions.md](references/vault-conventions.md).
 - Apply the canonical language rules from [references/language-normalization.md](references/language-normalization.md).
 - Apply the canonical update contract from [references/update-patterns.md](references/update-patterns.md) whenever an existing note is touched.

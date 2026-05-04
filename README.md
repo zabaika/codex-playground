@@ -14,7 +14,7 @@ Workspace for local experiments, tools, and reusable operating conventions.
   Shared infrastructure primitives reused by the Telegram projects: config loading, secret resolution, bridge env helpers, Bot API helpers, formatting, redaction, and OpenAI usage/stats utilities.
 
 - [skills](./skills/README.md)  
-  Local Codex skill collection for workspace-specific workflows, including Obsidian knowledge-base generation from engineering articles.
+  Local Codex skill collection for workspace-specific workflows, including Obsidian knowledge-base generation from engineering articles and multi-agent decision review via `llm-council`.
 
 - [tools/kb-index](./tools/kb-index/README.md)  
   Local retrieval and indexing tool for the Obsidian knowledge base, built around SQLite/FTS note search and launchd-backed scheduled refresh.

@@ -1,8 +1,10 @@
 # Copy to runtime.local.toml only if you need local overrides for this orchestration layer.
 # Keep runtime.local.toml untracked.
+# Resolve this file relative to the active skill directory, not the current shell cwd.
 
 [skills]
 # Reuse the sibling skill configs instead of duplicating their machine-specific values here.
+# Keep these as config pointers only; do not copy transcript-engine settings or note roots here.
 youtube_transcribe_config = "../../youtube-transcribe-skill/config/runtime.local.toml"
 article_to_obsidian_config = "../../article-to-obsidian-kb/config/runtime.local.toml"
 
@@ -12,6 +14,9 @@ article_to_obsidian_config = "../../article-to-obsidian-kb/config/runtime.local.
 # 1. CODEX_PLAYGROUND_PROJECT_ROOT
 # 2. [paths].project_root
 # 3. current working directory
+# Leave `project_root` empty unless you need to override automatic resolution.
 project_root = ""
+# Prepared transcript markdown files should stay under scratch/, not repo-local tmp/.
 prepared_transcripts_dir = "scratch/youtube-to-obsidian-kb"
+# Keep wrapper logs under scratch/ too so cleanup remains one-directory scoped.
 log_file = "scratch/youtube-to-obsidian-kb.log"
