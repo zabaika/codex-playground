@@ -9,8 +9,8 @@ from pathlib import Path
 from types import SimpleNamespace
 
 
-MODULE_PATH = Path(__file__).resolve().parents[1] / "telegram_connector.py"
-SPEC = importlib.util.spec_from_file_location("telegram_connector_module", MODULE_PATH)
+MODULE_PATH = Path(__file__).resolve().parents[1] / "telegram_bridge.py"
+SPEC = importlib.util.spec_from_file_location("telegram_bridge_module", MODULE_PATH)
 telegram_connector = importlib.util.module_from_spec(SPEC)
 assert SPEC.loader is not None
 SPEC.loader.exec_module(telegram_connector)

@@ -15,7 +15,7 @@ from types import SimpleNamespace
 from typing import Any
 from urllib import error, request
 
-import telegram_connector as bridge
+import telegram_bridge as bridge
 import telegram_history_client as history_client
 from telegram_shared.openai_usage import OpenAIUsage
 from telegram_shared.openai_usage import PromptCacheInfo
@@ -970,6 +970,9 @@ def format_digest_summary_for_telegram(summary: str) -> str:
             return MAIN_TOPICS_DAY_HEADING
         return MAIN_TOPICS_DAY_HEADING
 
+    def is_popular_link_line(value: str) -> bool:
+        return bool(re.match(r"^<?https?://\S+>?\s*-\s+\S", value, flags=re.IGNORECASE))
+
     def resolve_heading(value: str) -> tuple[str, str] | None:
         heading_patterns = (
             (MAIN_TOPICS_DAY_HEADING, r"^(?:Главная тема дня|Главные темы дня|Главные темы)\b"),
@@ -1005,7 +1008,7 @@ def format_digest_summary_for_telegram(summary: str) -> str:
     for line in compact_lines:
         heading = resolve_heading(line)
         is_heading = heading is not None
-        is_list_item = line.startswith("- ") or line.startswith("• ") or line.startswith("<http")
+        is_list_item = line.startswith("- ") or line.startswith("• ") or is_popular_link_line(line)
 
         if is_heading:
             heading_line, body_line = heading

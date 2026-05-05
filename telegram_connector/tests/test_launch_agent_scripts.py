@@ -27,7 +27,7 @@ class LaunchAgentScriptTests(unittest.TestCase):
         self.assertIn(': "\\${TELEGRAM_CONNECTOR_PROJECT_ROOT:?TELEGRAM_CONNECTOR_PROJECT_ROOT is required}"', content)
         self.assertIn('printf \'[%s] starting telegram bridge from %s\\n\'', content)
         self.assertIn('STARTUP_LOG="\\$TELEGRAM_CONNECTOR_PROJECT_ROOT/data/launchd/bridge.startup.log"', content)
-        self.assertIn('exec "$PYTHON_BIN" "\\$ROOT/telegram_connector.py" listen --run-commands', content)
+        self.assertIn('exec "$PYTHON_BIN" "\\$ROOT/telegram_bridge.py" listen --run-commands', content)
         self.assertIn('exec /usr/bin/caffeinate -i "$PYTHON_BIN" "\\$ROOT/telegram_digest.py" run', content)
 
     def test_installer_sets_project_root_env_in_plist(self) -> None:

@@ -427,6 +427,32 @@ batch_digest_template = "Batch={batch_index}"
         self.assertIn("<b>Наиболее популярное</b>\nhttps://t.me/refugecard/1 - Пункт 1\nhttps://t.me/refugecard/2 - Пункт 2", formatted)
         self.assertIn("<b>Незакрытые вопросы/продолжения</b>\n- Вопрос 1\n\n- Вопрос 2", formatted)
 
+    def test_format_digest_summary_for_telegram_keeps_plain_popular_links_dense(self) -> None:
+        summary = "\n".join(
+            [
+                "Главные темы дня: тема.",
+                "Наиболее популярное",
+                "https://t.me/tlbootcamp/245438 - Продуктивность как ловушка",
+                "https://t.me/tlbootcamp/245467 - Ищу продактов для интервью о встречах",
+                "https://t.me/tlbootcamp/245472 - В канбане работа никогда не заканчивается",
+            ]
+        )
+
+        formatted = telegram_digest.format_digest_summary_for_telegram(summary)
+
+        self.assertIn(
+            "<b>Наиболее популярное</b>\n"
+            "https://t.me/tlbootcamp/245438 - Продуктивность как ловушка\n"
+            "https://t.me/tlbootcamp/245467 - Ищу продактов для интервью о встречах\n"
+            "https://t.me/tlbootcamp/245472 - В канбане работа никогда не заканчивается",
+            formatted,
+        )
+        self.assertNotIn(
+            "https://t.me/tlbootcamp/245438 - Продуктивность как ловушка\n\n"
+            "https://t.me/tlbootcamp/245467 - Ищу продактов для интервью о встречах",
+            formatted,
+        )
+
     def test_format_digest_summary_for_telegram_normalizes_lead_line_named_as_main_topics(self) -> None:
         formatted = telegram_digest.format_digest_summary_for_telegram(
             "\n".join(

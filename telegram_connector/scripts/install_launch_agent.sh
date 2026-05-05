@@ -77,7 +77,7 @@ rm -f "$PROJECT_LOG_DIR"/bridge.startup.log "$PROJECT_LOG_DIR"/bridge.stdout.log
 rm -f "$PROJECT_LOG_DIR"/digest.startup.log "$PROJECT_LOG_DIR"/digest.stdout.log "$PROJECT_LOG_DIR"/digest.stderr.log
 rm -f "$PROJECT_LOG_DIR"/digest.last_attempt.json
 
-cp "$SOURCE_ROOT/telegram_connector.py" "$SERVICE_ROOT/telegram_connector.py"
+cp "$SOURCE_ROOT/telegram_bridge.py" "$SERVICE_ROOT/telegram_bridge.py"
 cp "$SOURCE_ROOT/telegram_history_client.py" "$SERVICE_ROOT/telegram_history_client.py"
 cp "$SOURCE_ROOT/telegram_digest.py" "$SERVICE_ROOT/telegram_digest.py"
 rm -rf "$SERVICE_ROOT/telegram_shared"
@@ -109,7 +109,7 @@ STARTUP_LOG="\$TELEGRAM_CONNECTOR_PROJECT_ROOT/data/launchd/bridge.startup.log"
 
 cd "\$ROOT"
 printf '[%s] starting telegram bridge from %s\n' "\$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "\$ROOT" >> "\$STARTUP_LOG"
-exec "$PYTHON_BIN" "\$ROOT/telegram_connector.py" listen --run-commands
+exec "$PYTHON_BIN" "\$ROOT/telegram_bridge.py" listen --run-commands
 EOF
 
 chmod +x "$SERVICE_ROOT/scripts/run_telegram_bridge.sh"

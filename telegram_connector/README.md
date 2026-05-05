@@ -2,7 +2,7 @@
 
 Telegram toolkit with three local components:
 
-- `telegram_connector.py`: minimal Bot API bridge for inbound/outbound bot messages
+- `telegram_bridge.py`: minimal Bot API bridge for inbound/outbound bot messages
 - `telegram_history_client.py`: channel history ingester based on Telethon + SQLite + Tesseract
 - `telegram_digest.py`: config-driven digest orchestration and Telegram delivery
 
@@ -166,7 +166,7 @@ Secrets are resolved in this order:
 ### Runtime
 
 Telegram bot commands are executed only while the local bridge process is running.
-If `telegram_connector.py listen --run-commands` is not running, the bot can receive messages in Telegram but it will not execute history-client commands.
+If `telegram_bridge.py listen --run-commands` is not running, the bot can receive messages in Telegram but it will not execute history-client commands.
 
 Bridge commands are accepted in these forms:
 
@@ -216,7 +216,7 @@ Bot command notes:
 Start the bridge manually:
 
 ```bash
-python3 telegram_connector/telegram_connector.py listen --run-commands
+python3 telegram_connector/telegram_bridge.py listen --run-commands
 ```
 
 Install the macOS background service:
@@ -276,7 +276,7 @@ Check that the bot token works and return basic bot metadata.
 CLI:
 
 ```bash
-python3 telegram_connector/telegram_connector.py get-me
+python3 telegram_connector/telegram_bridge.py get-me
 ```
 
 Additional notes:
@@ -291,15 +291,15 @@ Run long polling for inbound Telegram bot updates.
 CLI:
 
 ```bash
-python3 telegram_connector/telegram_connector.py listen
+python3 telegram_connector/telegram_bridge.py listen
 ```
 
 Examples:
 
 ```bash
-python3 telegram_connector/telegram_connector.py listen --once
-python3 telegram_connector/telegram_connector.py listen --echo
-python3 telegram_connector/telegram_connector.py listen --run-commands
+python3 telegram_connector/telegram_bridge.py listen --once
+python3 telegram_connector/telegram_bridge.py listen --echo
+python3 telegram_connector/telegram_bridge.py listen --run-commands
 ```
 
 Additional notes:
@@ -315,13 +315,13 @@ Send a plain bot message to a Telegram chat.
 CLI:
 
 ```bash
-python3 telegram_connector/telegram_connector.py send --chat-id 123456789 "hello from Codex"
+python3 telegram_connector/telegram_bridge.py send --chat-id 123456789 "hello from Codex"
 ```
 
 Examples:
 
 ```bash
-python3 telegram_connector/telegram_connector.py send "hello from Codex"
+python3 telegram_connector/telegram_bridge.py send "hello from Codex"
 ```
 
 Additional notes:

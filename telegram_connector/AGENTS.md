@@ -16,7 +16,7 @@ It must stay operationally separate from `telegram_agent_bot`.
 ## Architecture
 
 - Keep a split architecture:
-  - `telegram_connector.py`: Bot API bridge and command surface
+  - `telegram_bridge.py`: Bot API bridge and command surface
   - `telegram_history_client.py`: Telethon ingestion, OCR, export, and SQLite system of record
   - `telegram_digest.py`: digest orchestration and Telegram delivery
 - Keep `telegram_shared` limited to infrastructure primitives.
@@ -35,6 +35,7 @@ If README, code, and tests disagree, update them together.
 ## Project Rules
 
 - Canonical CLI sync entrypoint is `sync --mode <backfill|tail|update>`.
+- Canonical bridge CLI entrypoint is `python3 telegram_connector/telegram_bridge.py listen --run-commands`.
 - Canonical digest CLI entrypoint is `python3 telegram_connector/telegram_digest.py run`.
 - Keep bot UX and CLI internals clearly separated.
 - Preserve config-driven defaults for digest, sync, OCR, and export flows.
