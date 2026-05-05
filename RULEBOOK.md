@@ -4,7 +4,7 @@ This rulebook captures the operational and security conventions used in this pro
 
 ## Purpose
 
-Use this document as a default template for local software, automations, skills, bots, bridge daemons, schedulers, and ingestion tools.
+Use this document as the repository-wide default for local software, automations, skills, daemons, schedulers, and other reusable engineering workflows.
 
 The goal is to standardize:
 
@@ -22,42 +22,35 @@ Keep documentation split by responsibility:
 - `<project>/AGENTS.md`: project-specific coding-agent contract, boundaries, and local checklists
 - `<project>/README.md`: operator-facing setup, config, commands, runtime behavior, and troubleshooting
 
-Rules:
+### Source of Truth
 
 - put a rule in only one primary place unless a short pointer is needed elsewhere
 - prefer links to duplication when a project follows a repository-wide rule
-- if behavior changes, update code, tests, and the relevant source-of-truth document in the same change
+- for each major rule family, keep exactly one canonical documentation owner and make every other file point to it instead of restating the same contract in full
 - for any operational fact such as route decisions, chosen engines, selected inputs, or resolved config, define one canonical producer and treat every other layer as a consumer of that fact
-- do not create parallel summaries, shadow metadata, or alternate debug formats when the canonical producer already emits the needed information
+- when a workflow produces both a machine-readable payload and one or more human-readable derived artifacts, designate exactly one of them as the canonical source of truth and treat the others as derived views rather than parallel primary artifacts
+
+### Wrapper and Orchestration Inheritance
+
 - if a wrapper or orchestration layer needs to expose upstream metadata, pass through or parse the canonical upstream artifact instead of reconstructing it with local placeholders or guessed values
 - if an orchestration or producer workflow already has a shared downstream writer for user-facing notes or documents, keep the producer responsible only for orchestration and structured payloads; do not let it own a second local copy of the final note contract
 - for user-facing output contracts such as final summaries, created-vs-updated reports, or section ordering, keep one canonical definition in the deepest owning workflow and make wrappers inherit it instead of restating the same format in multiple places
-- apply the same inheritance rule to final validation layers: if a wrapper delegates note creation, document rendering, or another structured-output workflow to a deeper canonical owner, the wrapper must inherit that owner's final compliance passes and quality gates instead of silently shortening the validation path
 - if a wrapper delegates note creation, document rendering, or another structured-output workflow to a deeper canonical owner, delegate the final write path as well instead of reusing only a local formatting helper from that owner while bypassing its route resolution, save logic, or final contract checks
+- apply the same inheritance rule to final validation layers: if a wrapper delegates note creation, document rendering, or another structured-output workflow to a deeper canonical owner, the wrapper must inherit that owner's final compliance passes and quality gates instead of silently shortening the validation path
+
+### Contract and Documentation Discipline
+
+- if behavior changes, update code, tests, and the relevant source-of-truth document in the same change
 - when a workflow grows beyond a few pages of rules, split it into one thin entrypoint plus canonical reference docs; keep the entrypoint focused on sequencing and keep detailed policy in the deepest owning reference file
-- for each major rule family such as formatting, tag policy, update semantics, or test coverage, keep exactly one canonical documentation owner and make every other file point to it instead of restating the same contract in full
 - if an entrypoint file still repeats a rule family in short form, keep it as a brief guardrail summary only; the detailed wording, examples, and edge cases must still live in the canonical owner
-- when an entrypoint delegates formatting or content rules to a canonical reference document, it must still put every major rule family from that canonical owner onto the mandatory execution path of the workflow; a vague pointer like "apply conventions" is not enough when operators or agents could otherwise skip whole families such as links, closing-section hygiene, tag families, or language cleanup
-- when a workflow produces both a machine-readable payload and one or more human-readable derived artifacts, designate exactly one of them as the canonical source of truth and treat the others as derived views rather than parallel primary artifacts
-- when creating links between knowledge objects, prefer topical identity over lexical similarity; a shared author, podcast series, brand shell, or similar title is not enough to establish a durable relation on its own
-- when creating top-level knowledge objects, do not promote a narrow source-local decision filter or one-off heuristic into its own durable node unless it is likely to be reused across multiple future notes; if its best role is to sharpen one recommendation inside one source note, keep it there
-- when deciding whether to create a top-level knowledge object, prefer keeping material inside the source-derived note if it mainly restates that note's own thesis, reads like a detachable subsection, or would realistically have no meaningful backlinks beyond the current source and a couple of sibling nodes from the same run
-- when a workflow relies on structured metadata such as frontmatter, route payloads, manifests, or config blocks, validate that metadata after the final manual rewrite or merge instead of trusting an earlier draft; a finished-looking body does not make partial metadata acceptable
-- when a new canonical document absorbs, renames, or replaces an older one, preserve the older document's surviving provenance in the new structured metadata instead of dropping source references, tags, or other still-valid context during the merge
-- when a workflow produces structured documents with formatting and schema rules, run one final holistic compliance pass after any late manual edit or merge instead of validating only the one thing that was just changed; re-check the whole document contract in its final form because small late fixes often regress unrelated rules
-- when those structured-document workflows are especially prone to late manual edits, formatting repairs, link cleanup, or language rewrites, add a second final regression sweep with the same coverage as the first compliance pass so the document survives two identical whole-note checks before it is considered done
-- when such a workflow updates an already existing structured document, apply both final whole-note passes to the fully merged saved artifact rather than only to the appended delta; touching a legacy document is an opportunity to bring the whole document up to the current contract instead of preserving stale violations outside the latest edit
-- when documenting a workflow rule, prefer concrete behavioral requirements over vague verbs such as `append`, `clean up`, `normalize`, `improve`, `update`, or `fix` when more than one exact operation is plausible
-- if a rule depends on position, ordering, insertion point, stop condition, or fallback behavior, spell that out explicitly instead of relying on implication or common sense
-- when a workflow also maintains a local contract checker or regression harness for those structured outputs, keep that harness focused on mechanically checkable constraints such as schema, formatting, links, and explicit preservation rules; do not pretend it can prove the full semantic quality of AI interpretation
+- when an entrypoint delegates formatting or content rules to a canonical reference document, it must still put every major rule family from that canonical owner onto the mandatory execution path of the workflow; a vague pointer like "apply conventions" is not enough when operators or agents could otherwise skip whole families
+- when a workflow relies on structured metadata such as frontmatter, route payloads, manifests, or config blocks, validate that metadata after the final manual rewrite or merge instead of trusting an earlier draft
+- when a workflow produces structured documents with formatting and schema rules, run one final holistic compliance pass after any late manual edit or merge instead of validating only the thing that was just changed
+- when a workflow also maintains a local contract checker or regression harness for those structured outputs, keep that harness focused on mechanically checkable constraints such as schema, formatting, links, and explicit preservation rules
 - when a new mechanically checkable output rule is added to such a workflow, update the checker or regression fixtures in the same change so the documented contract and the executable contract do not drift apart
 - when a workflow already has a local contract harness, any change to that workflow's output contract, checker, or contract-facing documentation should trigger the harness before the change is considered complete, even if the edit looks like "docs only"
-- when a workflow renders user-facing structured markdown through an executable template, keep a human-readable canonical reference that owns the note shape, section order, and section semantics; the template should remain a mechanical layout file rather than the only place where the document contract lives
-- when a workflow uses prompt-generated text as the upstream source for a structured artifact, make prompt rules the primary defense against formatting noise and keep any sanitizer or cleanup layer best-effort and non-editorial; cleanup may normalize residual presentation artifacts but must not become a second interpretation pass
-- when a workflow saves structured knowledge notes, the final prose should read as standalone knowledge rather than as commentary on source order, draft history, or merge mechanics; keep provenance in structured metadata and only mention the source in the body when it is itself a useful case or comparison
-- when a derived artifact is no longer part of the normal workflow, do not keep it as a half-supported required code path "just in case"; either demote it to an explicitly on-demand derived view or remove it from the main path entirely
-
-The rulebook is intentionally broader than Telegram projects. When a rule names Telegram, bot commands, channels, Telethon, or Bot API specifics, treat that as a domain-specific specialization of the broader engineering rule rather than as the only supported scope.
+- when documenting a workflow rule, prefer concrete behavioral requirements over vague verbs such as `append`, `clean up`, `normalize`, `improve`, `update`, or `fix` when more than one exact operation is plausible
+- if a rule depends on position, ordering, insertion point, stop condition, or fallback behavior, spell that out explicitly instead of relying on implication or common sense
 
 ## 1. Architecture Rules
 
@@ -79,11 +72,6 @@ Recommended pattern:
 - treat persisted raw data as the system of record and run expensive analysis as a second stage over stored data
 - if multiple sources are processed in one run, keep source-level work units isolated so failures and summaries can be reported per source
 - when outputs are independently useful, prefer progressive delivery per source over waiting for one final all-or-nothing payload
-
-Telegram-specific example:
-
-- keep Telegram Bot API logic in one script
-- keep Telethon or other heavy Telegram data logic in a separate script
 
 ## 2. Config Rules
 
@@ -109,43 +97,16 @@ Rules:
 - when several profiles share the same operator-facing knob, keep that knob in one shared config block and let per-profile sections override only the values that truly differ by profile
 - for local Codex skills, keep exactly one editable `config/runtime.local.toml` in the repository skill folder
 - for repository-managed local Codex skills, keep the repository copy under `skills/<skill-name>/` as the single editable source of truth for code, prompts, references, docs, and install helpers
-- for repository-managed local Codex skills, the minimum expected repository shape is `SKILL.md`, `README.md`, and `install-local.sh`
-- use `README.md` as the operator-facing local summary for purpose, source-of-truth, installation, runtime behavior, and main files
-- keep routine maintenance notes in the local `README.md` by default; split them into `AGENTS.md` only when the skill needs a separate future-agent maintenance contract
-- when a skill has a `references/` directory, document those reference files in the local `README.md` with one short explanation per file or per clearly grouped subset
-- keep reference-file links and explanations in the skill-local `README.md`, not in root catalog documents such as `skills/README.md`
-- add `AGENTS.md` only when the skill needs a separate maintenance contract for future agent edits beyond what `SKILL.md`, `README.md`, and `RULEBOOK.md` already cover
-- add audit, security-review, or third-party review documents only when the skill's provenance or risk profile justifies them
 - install repository-managed local Codex skills into `~/.codex/skills/<skill-name>` through a skill-local `install-local.sh` script rather than by ad hoc manual copying
 - treat the installed `~/.codex/skills/<skill-name>` copy as a deploy artifact, not as a second editable workspace
 - after changing a repository-managed skill, refresh the installed copy by rerunning its `install-local.sh` script instead of patching files under `~/.codex/skills` directly
 - keep the install pattern consistent across local skills: resolve the source directory from the script location, target `${CODEX_HOME:-$HOME/.codex}/skills/<skill-name>`, and make the script safe to rerun for normal refresh flows
-- when a local skill needs operator-facing maintenance docs, keep them in the repository copy and reinstall them together with the rest of the skill so the installed copy stays in sync
 - if the skill is also installed under `~/.codex/skills`, the installed copy should point to that same repo file instead of keeping a second divergent local config
 - if a skill is only an orchestration layer over other local skills, prefer pointing at the sibling skills' local configs instead of copying the same machine-specific values into another file
 - do not modify system-provided Codex skills in place as a normal customization path
 - when a system skill is missing a dependency, validation helper, or local convention, solve that through a project-local wrapper, companion skill, additional checker, or shared rulebook guidance instead of patching the system skill itself
 - treat edits to system skills as an explicit exception path only when a user directly requests that change and the operational tradeoff is understood
-
-Telegram-specific example:
-
-- if a command omits a channel, use configured defaults
-- if a command includes a channel or channel list, ignore config defaults
-
-Telegram-specific default channels format:
-
-```toml
-[channels]
-default_list = [
-  "@vcnews, vc.ru",
-  "@another_channel, Another Channel",
-]
-```
-
-Interpretation:
-
-- store entries as `"channel, display name"`
-- use only the channel reference in code unless display name is explicitly needed
+- for repository-managed local skill repository-shape and documentation-ownership rules, follow the canonical repo-level guidance in the repository root [AGENTS.md](./AGENTS.md)
 
 ## 3. Secrets Rules
 
@@ -155,14 +116,6 @@ Preferred storage:
 
 - macOS Keychain generic-password references via `keychain://<service>/<account>`
 - `op://...` remains acceptable as a legacy fallback, but not as the primary backend for unattended local daemons or scheduled jobs
-
-Suggested Keychain accounts:
-
-- `api_id`
-- `api_hash`
-- `bot_token`
-- `phone`
-- `user_password`
 
 Preferred resolution order:
 
@@ -198,14 +151,10 @@ Recommended daemon pattern:
 4. reuse cached secrets from the in-memory runtime bundle instead of re-resolving them on each handled action
 5. pass only the minimum secret subset to child workers through an allowlisted env
 
-Telegram-specific example:
-
-- reuse the cached bot token for Telegram polling and replies
-
 Implementation checklist for daemon code review:
 
 - the daemon entrypoint should construct a startup runtime bundle before the main loop starts
-- per-update handlers should accept the resolved runtime bundle instead of raw config whenever possible
+- per-request or per-event handlers should accept the resolved runtime bundle instead of raw config whenever possible
 - `op read` or equivalent secret-backend calls should not appear on the hot path for each handled message
 - tests should exercise the listener path and verify that multiple handled commands do not trigger repeated secret resolution
 - standalone one-shot worker CLIs may resolve their own secrets, but that must remain separate from the long-running daemon path
@@ -236,55 +185,14 @@ Rules:
 - when a workflow intentionally saves primary artifacts into an external knowledge vault, synced directory, or other non-project destination, it may use absolute destination paths in `runtime.local.toml` and generic absolute placeholders in `runtime.example.toml`, but that must be documented as an explicit exception instead of becoming the silent default for unrelated tools
 - for temporary and staging artifacts, prefer one shared project-local scratch root such as `scratch/` rather than creating many sibling `tmp/` or per-tool temporary folders across the repository
 - when a tool needs its own temporary area, place it under the shared scratch root, for example `scratch/<tool-name>/`, so periodic cleanup can happen by cleaning `scratch/` alone
-
-For knowledge-base notes, keep section design additive rather than repetitive:
-
-- each next section should add net-new knowledge instead of duplicating, inverting, or paraphrasing the previous section
-- if two sections would carry the same material, keep the stronger section and remove the weaker one
-- examples and cases should usually live next to the recommendation, lesson, or claim they support instead of being copied into a second standalone section
-- after restoring examples or late-editing a structured note, explicitly re-check section boundaries; preserving a useful example is not a reason to repeat the same example or claim across multiple sections
-- optional sections should be omitted when they do not add a distinct layer of value
-- tags should describe a specific retrieval axis rather than a broad topic "in general"
-- when an existing narrower tag already fits, prefer it over a broader umbrella tag
-- if a broad tag keeps covering several different retrieval intents, treat it as a candidate for a constrained family or for restricted-use rules rather than continuing to apply it by default
-- if a tag starts collecting notes from several different retrieval intents, stop treating it as a harmless default: narrow its meaning, move it into a constrained family, or split off one stable narrower tag before the umbrella meaning spreads further
-- when a workflow already has constrained tag families or restricted-use tags, reapply those family rules during the final save pass instead of letting late edits reintroduce umbrella tags
-- creating a new tag should be harder than reusing an existing one: admit a new tag only when no existing canonical tag or family member is close enough and the new tag is likely to be reused across multiple future notes
-- if one or two existing tags already describe the note accurately enough, prefer that combination over inventing a new tag
-- keep note tags sparse
-- default to the smallest tag set that still captures the note's independent retrieval value
-- when creating concepts, taxonomy nodes, or other durable knowledge entities, run a canonical-entity check before creating anything new
-- if a nearby existing entity already captures the same meaning, update the canonical existing entity instead of creating a synonym or near-duplicate
-- title differences, translations, word-order variants, and small framing changes are not enough to justify a new knowledge node
-- links, tags, and later references should point to the canonical existing entity rather than to a local duplicate name
-- when a knowledge workflow uses dated append-only log sections, define one canonical ordering policy and one canonical insertion point in the workflow-local contract instead of improvising append behavior during updates
-- when one note explicitly mentions another existing note, concept, or durable knowledge node in the prose, write it as a wikilink instead of plain text
 - for file-producing workflows that save into external, synced, or otherwise race-prone storage, finalize the artifact in staging, perform one destination write, then immediately read the destination back and verify the saved state before continuing; do not burn retries on blind rewrites against an unverified write result
-- when the canonical target title is longer, broader, translated, or otherwise less natural than the wording that appears in the prose, keep the canonical target but link through an alias instead of leaving the shorter wording as plain text
-- run this alias-link pass after final create-vs-update decisions so terms like abbreviations, English source labels, shortened metric names, or compact phrases still resolve to the canonical knowledge node
-- when a note already links to another knowledge object inline in the body, do not repeat the same link mechanically in a closing related-notes section; keep the closing block for net-new navigation context instead of duplicating already established graph edges
-- if the closing related-notes block becomes empty after deduplicating inline links, remove the block entirely instead of leaving an empty heading or padding it with weak filler links
-- when working in a knowledge vault, maintain one canonical navigation index as the default entry point for both humans and agents; prefer auto-updating indexes over manually rebuilt note lists whenever the platform supports them
-- when answering questions against a knowledge vault that has such an index, consult the canonical index first to scope the search and only then open the relevant notes directly for factual verification instead of relying on the index alone
-- when a knowledge-base workflow needs create-vs-update checks, related-note discovery, canonical concept checks, or other search-like steps, use the canonical index as the default retrieval layer and read only the shortlisted notes in full; do not fall back to broad vault scans unless the index is unavailable, broken, or provably stale
-- when writing Obsidian `query` blocks that reference paths or file names containing spaces, wrap the full value in quotes instead of relying on shell-style escaping so expressions like `path:"Ideas/AI prompts"` and `-file:"Индекс заметок"` stay reliable
+- when a workflow has a canonical index or metadata layer for discovery, use it as the default retrieval path and reserve broad filesystem scans for unavailable, broken, or provably stale index states
+- when a workflow separates indexed metadata inspection from full artifact reads, prefer the metadata layer for discovery and narrowing, then open only the shortlisted full artifacts for detailed verification or editing
 
 Recommended env override:
 
 - prefer a project-specific `*_PROJECT_ROOT` variable name
-- Telegram example: `TELEGRAM_CONNECTOR_PROJECT_ROOT`
-
-Use project-local directories:
-
-- `data/telegram_history.sqlite3`
-- `data/media/`
-- `data/exports/`
-- `data/sessions/`
-- `data/launchd/`
-- `data/inbox.jsonl`
-- `data/offset.local.json`
-
-The concrete paths above are Telegram-oriented examples. Preserve the same principle for other projects: one project-local `data/` root with predictable subpaths for databases, exports, sessions, scheduler logs, and cached inputs.
+- keep one project-local `data/` root with predictable subpaths for databases, exports, sessions, scheduler logs, and cached inputs
 
 Git rule:
 
@@ -296,12 +204,10 @@ Logs must stay inside the project, not inside opaque service folders.
 
 Recommended logs:
 
-- `data/launchd/bridge.startup.log`
-- `data/launchd/bridge.stdout.log`
-- `data/launchd/bridge.stderr.log`
+- `data/launchd/<job>.startup.log`
+- `data/launchd/<job>.stdout.log`
+- `data/launchd/<job>.stderr.log`
 - `data/launchd/<job>.last_attempt.json`
-
-The concrete filenames above are a Telegram service example. Reuse the same pattern for any local daemon, scheduler, skill, or automation: keep logs project-local, predictable, and separate from opaque launcher-owned directories.
 
 Rules:
 
@@ -316,85 +222,36 @@ Rules:
 - orchestration layers should reuse structured routing, engine, and selection diagnostics from the underlying tool that made the decision instead of inventing a second local schema
 - when replaying from cached or preexisting artifacts, recover engine or selection metadata from the original producer's persisted logs or metadata if available; only synthesize fallback values when no canonical source exists, and label such values explicitly as fallback
 - do not log convenience placeholders such as `unknown`, `existing-*`, or stub engine names when the real value can be recovered from an upstream source of truth with reasonable effort
+- for stored operator-event summaries, keep only the minimum actor, command, timestamp, and payload-size metadata needed for support and auditing unless a stronger product need is documented
 
-For inbox/update storage:
-
-- store only a redacted event summary
-- keep `chat_id`, `command`, timestamps, and text length if needed
-- avoid storing full message text unless there is a deliberate product need
-
-These field names are a Telegram example. For other integrations, keep only the minimum operator, command, timestamp, and payload-size metadata needed for support and auditing.
-
-## 6. Bot Command Rules
-
-The bot bridge should accept:
-
-- `/command ...`
-- `command ...`
-- `/command@botname ...`
+## 6. Command Surface Rules
 
 Rules:
 
-- only recognized commands should be normalized from bare text
-- regular non-command chat text must not trigger execution
-- only allow command execution from whitelisted chats
+- normalize only deliberately supported command invocations
+- ambiguous free-form input must not trigger execution
+- only allow command execution from explicitly authorized callers or contexts
+- if command execution is disabled for a surface, receiving inbound events must not silently trigger the underlying worker path anyway
 
-This section is Telegram-specific. Apply the same intent to any other command surface: normalize only deliberately supported invocations, reject ambiguous free-form input, and restrict execution to explicitly authorized callers or contexts.
-
-Recommended commands:
-
-- `help`
-- `backfill`
-- `tail`
-- `update`
-- `digest`
-- `ocrhistory`
-- `exportcsv`
-- `ocr`
-
-If command execution is disabled:
-
-- the bot may still receive messages
-- but it must not try to run the history client
-
-## 7. Authorization Rules
-
-Support separate auth modes:
-
-- `bot`
-- `user`
-- `auto`
+## 7. Authorization and Access Rules
 
 Rules:
 
-- default auth mode should be explicit in config
-- if omitted in bot commands, use the configured default
-- for historical channel reads, prefer `user`
-- for public-channel service operations, `bot` may still be useful
+- support separate auth modes when different capabilities or trust boundaries require them
+- make the default auth mode explicit in config
+- choose the least-privileged mode that can actually perform the requested operation
+- document capability differences between auth modes in the project-local operator docs instead of assuming operators will infer them
 
-Remember:
-
-- Bot API and bot-auth are not enough for full history access
-- full historical reads of Telegram channels usually require user auth
-
-This section is Telegram-specific. The general rule is to separate auth modes by capability and choose the least-privileged mode that can actually perform the requested operation.
-
-## 8. Data Ingestion Rules
-
-For message sync:
-
-- `backfill`: load historical data
-- `tail`: inspect the latest window of messages
-- `update`: fetch only new messages since the latest stored one
+## 8. Incremental Ingestion Rules
 
 Rules:
 
-- never duplicate already stored messages
-- when syncing, skip existing messages by primary key
-- for `update`, stop at the boundary of already-known history
-- keep sync state per channel
-- support multiple channels in one run
-- daily digest-style commands should take defaults from local config and allow explicit manual overrides to win when the operator passes them
+- define explicit incremental modes when a workflow supports historical load, latest-window inspection, and fetch-only-new updates
+- never duplicate already stored records
+- when syncing, skip existing records by primary key and stop cleanly at the known-history boundary where the mode requires it
+- keep sync state per source
+- support multiple sources in one run when the workflow allows it
+- operator-facing defaults may come from config, but explicit runtime overrides must win for that run
 - for long-running ingestion, commit database writes in batches instead of one row at a time
 - distinguish between a shared run budget and a per-source cap:
   the shared budget limits total work in one run, while the per-source cap limits how much one source may consume before the next source is considered
@@ -402,34 +259,7 @@ Rules:
 - if a shared run budget is used, stop the run cleanly when the budget is exhausted rather than overrunning it silently
 - keep batch size and total run budget as separate knobs; they solve different problems and should not be conflated
 
-Recommended database keys:
-
-- messages: `(channel_id, message_id)`
-- media assets: `(channel_id, message_id, ordinal)`
-- sync state: one row per channel
-
-The examples in this section are phrased for Telegram history sync, but the same rules apply to any ingestion pipeline: clear incremental modes, no duplicate persistence, explicit shared-vs-per-source budgets, and predictable source ordering.
-
-## 9. Media and OCR Rules
-
-Default behavior:
-
-- do not download media unless explicitly requested
-- do not run OCR unless explicitly requested
-
-Semantics:
-
-- `media` = download media only
-- `ocr` = download image media and run OCR
-
-Rules:
-
-- OCR should operate only on image media
-- if OCR is requested for already-stored messages without local files, allow media refresh without duplicating the message row
-- store OCR text separately from the original message text
-- store OCR failure state in a sanitized form
-
-AI processing guidance:
+## 9. AI Processing Guidance
 
 - prefer hierarchical batching for large inputs:
   summarize smaller batches first, then summarize the batch summaries
@@ -451,15 +281,13 @@ This section also applies to any workflow that downloads attachments, extracts t
 For CSV exports:
 
 - use `;` as the delimiter
-- support export by latest `N` messages
-- support export by `since`
-- make `until` optional
 
 Rules:
 
-- if `since` is set and `until` is omitted, export through the newest stored message
-- for multi-channel export, create one CSV per channel
-- if export is triggered through the bot, send all generated CSV files back to Telegram
+- support explicit time- or count-based export scopes when the source data model makes that meaningful
+- if a lower bound is set and no upper bound is provided, document whether export continues through the newest stored record
+- when multiple sources are exported, keep source boundaries explicit in the produced artifacts
+- deliver generated artifacts through the intended operator surface rather than by exposing local machine paths
 
 Avoid exporting:
 
@@ -467,11 +295,9 @@ Avoid exporting:
 - secrets
 - internal debug paths
 
-If the export target is not Telegram, preserve the same rule: generated artifacts should be delivered through the intended operator channel, not by leaking local machine paths.
-
 ## 11. Security Hardening Rules
 
-Never send raw subprocess `stdout/stderr` directly to an operator-facing surface such as Telegram, CLI passthrough, webhook response, or UI error panel.
+Never send raw subprocess `stdout/stderr` directly to an operator-facing surface such as a chat surface, CLI passthrough, webhook response, or UI error panel.
 
 Rules:
 
@@ -498,20 +324,10 @@ Nullability convention:
 - apply this consistently to ids, usernames, display names, signatures, local paths, mime types, OCR text, and similar optional string fields
 - only use empty strings when an empty string is a deliberate business value, not a placeholder for absence
 
-Explicit exception:
-
-- `messages.text` may be stored as `""` when Telegram explicitly provides no text body for the message
-- this is intentional because `""` means “the message has no text”, while `NULL` would suggest “text was not loaded or is unknown”
-- keeping `messages.text` non-null also simplifies exports, filtering, length checks, and downstream text-processing code
-
-Telegram-specific note:
-
-- the `messages.text = ""` exception is specific to Telegram ingestion semantics and should not be copied blindly into unrelated schemas
-
 Stored data minimization:
 
 - store minimized metadata instead of full raw provider payloads when possible
-- avoid storing full raw update bodies in logs
+- avoid storing full raw inbound-event or provider-payload bodies in logs
 - store only what is operationally needed
 
 ## 12. Daemon and Service Rules
@@ -521,36 +337,38 @@ Use a system-managed background process for reliable command handling.
 For macOS:
 
 - use `launchd`
-- install via a project script
-- restart via a project script
 
 Rules:
+
+Deployment shape:
 
 - committed plist/templates must not contain machine-specific paths
 - templates may contain placeholders
 - installer may render runtime-specific paths locally
 - service bundle may live outside the repo
 - but config and data should still point back to the project
-- prefer the same deployment shape used by the repository's working local services:
+- prefer one deployment shape:
   - keep the executable runtime bundle in a copied service root such as `~/Library/Application Support/<service_name>`
   - keep canonical config, databases, exports, and logs under `project_root/data/` and `project_root/config/`
   - let the service root execute code, but make it consume project-root data and project-root logs
-- provide one canonical install or redeploy script that:
-  - syncs code into the service root
-  - syncs the effective local config into the service root when needed
-  - regenerates runner scripts and rendered plist files
-  - reloads or bootstraps the launcher
+- when a service root is used, pass the project root explicitly through an environment variable if the launcher needs project-local logs, data, or config-adjacent paths
+- treat project-local scheduler logs as canonical operational evidence and service-root-local logs as disposable staging at most
+- do not treat service-root-local scheduler logs as canonical if the same workflow already has project-local logs; prefer deleting or ignoring the service-root copies to avoid split-brain debugging
+
+Lifecycle operations:
+
+- provide one canonical install or redeploy script that syncs code, syncs effective local config when needed, regenerates runner scripts and rendered launcher artifacts, and reloads or bootstraps the launcher
 - keep restart as a narrower operation than redeploy:
   - restart may reload an already installed plist or process
   - restart must not be assumed to sync fresh code, fresh config, or regenerated launcher artifacts unless it explicitly does so
+- after code changes, reinstall or redeploy the service bundle before the narrower restart or bootstrap step
+
+Runner and launcher discipline:
+
 - keep runner scripts thin:
   - resolve the interpreter explicitly
   - set only the minimum required environment variables
   - delegate business behavior to the canonical CLI, module entrypoint, or main script instead of re-encoding defaults in shell
-- when a service root is used, pass the project root explicitly through an environment variable if the launcher needs project-local logs, data, or config-adjacent paths
-- treat project-local scheduler logs as canonical operational evidence and service-root-local logs as disposable staging at most
-- do not treat service-root-local scheduler logs as canonical if the same workflow already has project-local logs; prefer deleting or ignoring the service-root copies to avoid split-brain debugging
-- for once-per-day AI analysis on macOS, prefer a scheduler like `launchd` over introducing a second always-on AI daemon
 - keep scheduler command lines thin and config-driven; do not duplicate business defaults in multiple shell scripts
 - scheduled and background jobs must run with an explicit interpreter/runtime path when runtime dependencies are interpreter-specific
 - when moving a workflow under `launchd` or another scheduler, verify the real launcher environment end-to-end instead of assuming the interactive shell environment matches it
@@ -558,6 +376,10 @@ Rules:
   - check the chosen interpreter or binary path
   - check that required dependencies are available in that runtime
   - check that config, secrets, and project-root resolution work from the deployed service bundle
+
+Operational reliability:
+
+- for infrequent scheduled analysis on macOS, prefer a scheduler like `launchd` over introducing a second always-on AI daemon
 - for long-polling listeners, scheduled jobs, and external API integrations, treat transient network failures as an operational condition, not an automatic process-fatal error
 - if a timeout or short-lived transport error is safe to retry, prefer bounded retry with a small backoff for one-shot external calls
 - for interactive or scheduled external API calls, 2-3 retry attempts is a good default starting point for timeout and other short-lived transport failures
@@ -569,11 +391,6 @@ Rules:
   - exit code is successful
   - the expected side effect of the job actually happened
 - for machines that may sleep, validate both the scheduler path and the wake/resume behavior separately; a healthy job definition is not enough if the host never wakes in time
-
-After code changes:
-
-- reinstall or redeploy the service bundle
-- then restart or bootstrap the daemon
 
 The macOS `launchd` bullets are platform-specific examples. The broader rule is to use a real system scheduler or service manager, keep deployed runtime verification explicit, and treat redeploy and restart as separate lifecycle steps when they are not the same operation.
 
@@ -587,12 +404,12 @@ Minimum expectations:
 - config parsing tests
 - secret resolution tests
 - security redaction tests
-- CSV export tests
-- OCR-related logic tests
-- launchd installer/restart script tests
-- multi-channel behavior tests
+- output-format tests for every user-facing artifact format the project emits
+- derived-artifact tests for extraction, OCR, enrichment, or other secondary content-generation paths when those exist
+- runtime lifecycle tests for installer, redeploy, restart, scheduler, or service-manager flows when those exist
+- multi-source behavior tests when the project can process more than one source, channel, tenant, or input set in one run
 
-Use the subset that matches the project. For example, a local skill may not need CSV export tests, while a daemonless automation may not need service-manager tests; but every listed capability that does exist should have corresponding tests.
+Use the subset that matches the project. For example, a local skill may not need output-format or service-lifecycle tests, while a daemonless automation may not need scheduler or service-manager coverage; but every listed capability that does exist should have corresponding tests.
 
 Rules:
 
@@ -613,13 +430,6 @@ README must explicitly document:
 - the supported invocation forms on the exposed operator surface
 - the default target or source config format when the project has one
 - the differences between adjacent modes that could be confused by operators
-
-Telegram-specific additions:
-
-- that bot commands require the listener daemon
-- whether `/command`, `command`, and `/command@botname` are supported
-- the default channels config format
-- the difference between `media` and `ocr`
 
 Documentation safety rules:
 
@@ -652,6 +462,12 @@ Before pushing:
 - search for tokens or passwords
 - ensure service templates are generic
 
+Commit message rules:
+
+- use commit subjects that uniquely identify the change within nearby project history
+- prefer commit messages that name the actual behavior, subsystem, or contract being changed
+- avoid generic subjects such as `fix`, `cleanup`, `updates`, `refine`, `misc`, or similarly low-information summaries
+
 ## 16. Operational Checklist
 
 When creating a new local program, skill, automation, or service, verify:
@@ -661,35 +477,10 @@ When creating a new local program, skill, automation, or service, verify:
 3. operator-facing replies or outputs are sanitized
 4. SQL is parameterized
 5. runtime data stays in project-local `data/`
-6. service-manager or rerun scripts exist when the runtime model needs them
+6. install, redeploy, restart, or rerun scripts exist when the runtime model needs them
 7. README explains real startup and runtime behavior
 8. tests cover parser, config, security, and export behavior
 9. explicit command args override config defaults
-10. the real deployed or scheduled runtime path has been refreshed after code changes
-
-Telegram-specific additions:
-
-- bot replies are sanitized
-- daemon install/restart scripts exist
-- the daemon has been redeployed after code changes
-
-## 17. Reuse Guidance
-
-If you bootstrap a new project, skill, or automation from this repository, copy these ideas first:
-
-- local `runtime.example.toml` + ignored `runtime.local.toml`
-- Keychain-backed secret resolution
-- project-root env override
-- sanitized operator-surface responses
-- redacted inbound-event logging
-- system-scheduler or service-manager install and restart scripts when the runtime model needs them
-- whole-`data/` gitignore rule
-- parser tests for every user-facing command nuance
-
-Telegram-specific examples:
-
-- sanitized bridge responses
-- redacted inbox logging
-- launchd installer and restart scripts
+10. the real deployed or scheduled runtime path has been reinstalled, redeployed, or otherwise refreshed after code changes
 
 This rulebook is intended to be stricter than convenience defaults. If a future project needs to relax a rule, document why.

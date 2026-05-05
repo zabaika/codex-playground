@@ -27,6 +27,7 @@ It must stay operationally separate from `telegram_agent_bot`.
 When working in `telegram_connector`, prefer these sources in this order:
 
 - [README.md](./README.md) for current user-facing behavior and command surface
+- [AGENTS.md](./AGENTS.md) for project-specific coding boundaries and maintenance rules
 - [../RULEBOOK.md](../RULEBOOK.md) for cross-project rules
 - tests in [tests](./tests) for executable expectations
 
@@ -52,6 +53,7 @@ If README, code, and tests disagree, update them together.
 - Never commit machine-specific paths, usernames, or plaintext secrets.
 - `runtime.local.toml` is local-only and must stay ignored.
 - Runtime data belongs under `data/`.
+- Treat `messages.text` as a Telegram-specific schema exception: it may remain `""` when Telegram explicitly provides no text body, while other optional string fields should still follow the repository-wide `NULL`-for-missing convention.
 - Bridge and digest logs must not leak secrets or full raw updates.
 - Bridge secret resolution should happen at daemon startup, not on every handled update.
 - Child subprocesses must receive only the allowlisted env subset they need.

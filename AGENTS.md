@@ -15,21 +15,9 @@ Use it as an entry guide. For repository-wide engineering policy, safety rules, 
 - [skills](./skills): local skills and related documentation
 - [tools/kb-index](./tools/kb-index): local retrieval and indexing tool for the Obsidian knowledge base
 
-## Main Working Area
-
-Most active code currently lives in:
-- [telegram_connector/README.md](./telegram_connector/README.md)
-- [telegram_connector/AGENTS.md](./telegram_connector/AGENTS.md)
-- [telegram_connector/telegram_connector.py](./telegram_connector/telegram_connector.py)
-- [telegram_connector/telegram_history_client.py](./telegram_connector/telegram_history_client.py)
-- [telegram_connector/telegram_digest.py](./telegram_connector/telegram_digest.py)
-- [telegram_connector/tests](./telegram_connector/tests)
-- [telegram_agent_bot/README.md](./telegram_agent_bot/README.md)
-- [telegram_agent_bot/AGENTS.md](./telegram_agent_bot/AGENTS.md)
-- [telegram_agent_bot/telegram_agent_bridge.py](./telegram_agent_bot/telegram_agent_bridge.py)
-- [telegram_agent_bot/telegram_agent_worker.py](./telegram_agent_bot/telegram_agent_worker.py)
-- [telegram_agent_bot/tests](./telegram_agent_bot/tests)
-- [telegram_shared](./telegram_shared)
+Keep this block current as the repository evolves:
+- when a new major program, service, tool, or top-level workflow becomes a meaningful part of the repository, add it here
+- when a listed project is removed, renamed, or stops being a meaningful navigation anchor, update this block in the same change
 
 ## Source Of Truth
 
@@ -69,4 +57,11 @@ If README, code, and tests disagree, update them together rather than fixing onl
 - keep local config and generated runtime artifacts out of commits
 - when a project has its own `AGENTS.md`, prefer that file for operational details, commands, runtime semantics, and verification steps
 - for repository-managed local skills, treat the copy under `skills/<skill-name>/` as the editable source of truth and treat `~/.codex/skills/<skill-name>` as an installed copy refreshed from the repository
+- for repository-managed local skills, the minimum expected repository shape is `SKILL.md`, `README.md`, and `install-local.sh`
+- use a skill-local `README.md` as the operator-facing summary for purpose, source-of-truth, installation, runtime behavior, and main files
+- keep routine skill maintenance notes in the local `README.md` by default; add a skill-local `AGENTS.md` only when the skill needs a separate future-agent maintenance contract beyond `SKILL.md`, `README.md`, and `RULEBOOK.md`
+- when a skill has a `references/` directory, document those reference files in the local `README.md` with one short explanation per file or per clearly grouped subset
+- keep reference-file links and explanations in the skill-local `README.md`, not in root catalog documents such as `skills/README.md`
+- add audit, security-review, or third-party review documents for a skill only when its provenance or risk profile justifies them
+- when a local skill needs operator-facing maintenance docs, keep them in the repository copy and reinstall them together with the rest of the skill so the installed copy stays in sync
 - before finishing behavior changes, update docs in the same change and verify the relevant tests pass
