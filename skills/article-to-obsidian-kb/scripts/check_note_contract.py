@@ -20,6 +20,7 @@ LATIN_TOKEN_RE = re.compile(
     r"[A-Za-z]+(?:[/-][A-Za-z0-9]+)*|[A-Za-z]+(?:[/-][A-Za-z0-9]+)*-[А-Яа-яЁё]+|[А-Яа-яЁё]+-[A-Za-z]+(?:[/-][A-Za-z0-9]+)*"
 )
 DATED_BULLET_RE = re.compile(r"^-\s+(\d{4}-\d{2}-\d{2}):")
+PARTIAL_DATED_BULLET_RE = re.compile(r"^-\s+(\d{4}-\d{2}(?:-\d{2})?):")
 
 
 @dataclass(frozen=True)
@@ -879,6 +880,76 @@ def _check_dated_log_order(
     return violations
 
 
+def _check_multisource_evidence_dates(
+    frontmatter: dict[str, object],
+    body: str,
+    expect: str,
+) -> list[Violation]:
+    violations: list[Violation] = []
+    if expect != "source":
+        return violations
+    sources = frontmatter.get("source")
+    if not isinstance(sources, list) or len(sources) < 2:
+        return violations
+    line_no, tail = _find_heading_block(body, "## Evidence")
+    if line_no is None:
+        return violations
+    for offset, line in enumerate(tail, start=1):
+        stripped = line.strip()
+        if stripped.startswith("#"):
+            break
+        if not stripped:
+            continue
+        if stripped.startswith("- ") and not PARTIAL_DATED_BULLET_RE.match(stripped):
+            violations.append(
+                Violation(
+                    "chronology.multisource-evidence-missing-date",
+                    "В multi-source заметке каждый bullet под `## Evidence` должен начинаться с даты источника в формате `YYYY-MM-DD:` или `YYYY-MM:`.",
+                    line_no + offset,
+                )
+            )
+    return violations
+
+
+def _check_multisource_frontmatter_date_matches_evidence(
+    frontmatter: dict[str, object],
+    body: str,
+    expect: str,
+) -> list[Violation]:
+    violations: list[Violation] = []
+    if expect != "source":
+        return violations
+    sources = frontmatter.get("source")
+    if not isinstance(sources, list) or len(sources) < 2:
+        return violations
+    date_value = frontmatter.get("date")
+    if not isinstance(date_value, str) or not re.fullmatch(r"\d{4}", date_value):
+        return violations
+    line_no, tail = _find_heading_block(body, "## Evidence")
+    if line_no is None:
+        return violations
+    years: list[str] = []
+    for line in tail:
+        stripped = line.strip()
+        if stripped.startswith("#"):
+            break
+        match = PARTIAL_DATED_BULLET_RE.match(stripped)
+        if match:
+            years.append(match.group(1)[:4])
+    if not years:
+        return violations
+    newest_year = max(years)
+    if date_value != newest_year:
+        violations.append(
+            Violation(
+                "frontmatter.multisource-date-mismatch",
+                f"В multi-source заметке `frontmatter.date` должен совпадать с годом самого нового источника из `## Evidence`, здесь ожидается `{newest_year}`.",
+                1,
+            )
+        )
+    return violations
+
+
 def collect_violations(
     path: Path,
     *,
@@ -1003,7 +1074,15 @@ def collect_violations_from_text(
         )
     )
     body_violations.extend(_check_dated_log_order(body, chronology_headings))
+    body_violations.extend(_check_multisource_evidence_dates(frontmatter, body, expect))
     violations.extend(_offset_violations(body_violations, body_line_offset))
+    violations.extend(
+        _check_multisource_frontmatter_date_matches_evidence(
+            frontmatter,
+            body,
+            expect,
+        )
+    )
     return violations
 
 

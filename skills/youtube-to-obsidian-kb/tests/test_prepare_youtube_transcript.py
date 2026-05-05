@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import importlib.util
+import io
 import sys
+from contextlib import redirect_stdout
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
@@ -55,6 +57,23 @@ class YoutubeRuntimePathTests(unittest.TestCase):
             resolved = YOUTUBE.project_root({}, youtube_skill_dir, article_config_path)
 
             self.assertEqual(resolved, project_root)
+
+
+class YoutubeHumanOutputTests(unittest.TestCase):
+    def test_print_route_block_emits_expected_lines(self) -> None:
+        buffer = io.StringIO()
+
+        with redirect_stdout(buffer):
+            YOUTUBE.print_route_block(
+                "engineering",
+                "source combines a concrete company or system context with operating-model details",
+            )
+
+        self.assertEqual(
+            buffer.getvalue(),
+            "Route used: engineering\n"
+            "Route reason: source combines a concrete company or system context with operating-model details\n",
+        )
 
 
 if __name__ == "__main__":

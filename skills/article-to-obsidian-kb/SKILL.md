@@ -161,11 +161,16 @@ python3 scripts/detect_source_route.py --source-file "[SOURCE_FILE]"
    - Apply the canonical final-note contract from [references/vault-conventions.md](references/vault-conventions.md) instead of restating those rules locally.
    - Apply the canonical update contract from [references/update-patterns.md](references/update-patterns.md) whenever an existing note is touched.
    - If you need intermediate files, previews, or staged markdown, store them only under the resolved scratch root and never under repo-local `tmp/`.
-8. Before saving, run the canonical tag pass from [references/vault-conventions.md](references/vault-conventions.md).
-9. Re-check final titles, tags, links, duplicate risk, and chronology against the canonical contracts before saving.
+8. Resolve source dates before final frontmatter normalization.
+   - Build a source-date map for every source that materially contributes to the saved note.
+   - For single-source notes, verify the source date before assigning `frontmatter.date`.
+   - For multi-source notes, write dated bullets in `## Evidence` first, then derive `frontmatter.date` from the newest dated evidence source instead of setting it from memory.
+   - If a source date is unclear, verify it from the source page before saving rather than guessing.
+9. Before saving, run the canonical tag pass from [references/vault-conventions.md](references/vault-conventions.md).
+10. Re-check final titles, tags, links, duplicate risk, and chronology against the canonical contracts before saving.
    - Re-run the canonical closing-section deduplication pass after inline wikilinks are finalized.
-10. After each destination write, run the canonical post-write verification from [references/update-patterns.md](references/update-patterns.md) before continuing with more checks, searches, or reporting.
-11. After all destination writes are complete, refresh `kb-index` once when and only when all of these are true:
+11. After each destination write, run the canonical post-write verification from [references/update-patterns.md](references/update-patterns.md) before continuing with more checks, searches, or reporting.
+12. After all destination writes are complete, refresh `kb-index` once when and only when all of these are true:
    - the run actually created or updated at least one note
    - `paths.kb_index_config` is present
    - the run is not a dry-run or analysis-only pass
@@ -177,7 +182,7 @@ python3 scripts/detect_source_route.py --source-file "[SOURCE_FILE]"
 
    - Treat this as a best-effort post-write sync, not as part of note generation itself.
    - If the index refresh fails, do not roll back already-saved notes. Report the failure briefly in the final response and let the scheduled auto-update recover later.
-12. When you add or tighten a mechanically checkable note-contract rule in this skill, update the local contract harness in the same change.
+13. When you add or tighten a mechanically checkable note-contract rule in this skill, update the local contract harness in the same change.
    - This applies to rules about frontmatter, tags, headings, spacing, closing sections, wikilinks, language cleanup, emphasis, or preservation of explicitly required examples.
    - Update at least one of:
      - the checker under `scripts/`
@@ -185,7 +190,7 @@ python3 scripts/detect_source_route.py --source-file "[SOURCE_FILE]"
      - a clean passing fixture
      - a `unittest` that proves the new rule is enforced
    - Do not treat semantic source understanding as testable by this harness. The harness exists to protect deterministic output constraints after note drafting, not to prove that every future source was interpreted perfectly.
-13. When this skill's contract layer changes, run the local note-contract tests before finishing the change.
+14. When this skill's contract layer changes, run the local note-contract tests before finishing the change.
    - Treat changes to any of these files as a required test trigger:
      - `SKILL.md`
      - `config/runtime.example.toml`
@@ -310,6 +315,7 @@ python3 -m unittest discover -s skills/article-to-obsidian-kb/tests -q
   - `## Инструменты и фреймворки` appears only when at least two named tools, methods, or frameworks are independently useful and the block adds clear new information beyond `## Практика`
   - `## Подводные камни и антипаттерны` appears only when the source discusses at least three distinct mistakes or false approaches with their own consequences, not just the inverse wording of `## Практика`
   - `## Что можно применить сразу` captures a short prioritized starter subset and should be omitted if it would just restate `## Практика`
+  - for any non-`concept` note with `## Практика` or another clearly applied section, apply the checklist materialization rule from [references/vault-conventions.md](references/vault-conventions.md): materialize checklists only when they preserve real decision structure, and keep them non-duplicative with the surrounding applied prose
 - Title the note with the main topic and context, using the same inverted-pyramid rule as other source-derived notes.
 - Preserve surviving `source` provenance when converting, renaming, or restructuring any existing note into `general`; keep old source links even when the body and title are substantially rewritten.
 
@@ -358,6 +364,9 @@ python3 -m unittest discover -s skills/article-to-obsidian-kb/tests -q
   - this pass is mandatory for every major rule family in that canonical contract, not just for the family you touched most recently
   - if the note was manually rewritten, merged, or changed late in the run, re-run the full contract after that late edit
   - if you updated an existing note, run this pass against the whole merged note rather than only the latest fragment
+  - treat source-scaffolding cleanup for the main note body as part of this existing pass rather than as a separate extra pass; keep dated provenance sections such as `Evidence`, `Additional insights`, and `Observed practices` exempt from that cleanup
+  - if the note is non-`concept` and has `## Практика` or another clearly applied section, re-check the checklist rule from [references/vault-conventions.md](references/vault-conventions.md): checklists should preserve real decision structure, and surrounding applied prose should not duplicate the same actions or criteria
+  - re-check role and artifact terminology where the source contains neighboring English terms such as product, product manager, design, or platform; keep the Russian wording semantically separated instead of collapsing distinct roles into one overloaded noun
   - do not mark a note complete until it passes this full-note contract in its final saved form
 - Run one final regression-sweep pass immediately after the note-compliance pass:
   - re-run the same full final-note contract a second time with identical coverage after all fixes are done

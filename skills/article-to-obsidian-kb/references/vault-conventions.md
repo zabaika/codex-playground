@@ -72,6 +72,10 @@ date: <year>
 ---
 ```
 
+- For single-source source-derived notes, set `date` to the publication year of that source.
+- For multi-source source-derived notes, set `date` to the year of the newest source that materially contributes to the saved note.
+- Do not use `date` as a last-edited marker for the agent run itself; chronology of later reinforcement belongs in dated body sections such as `## Evidence` or `## Additional insights`.
+
 ### Concept notes
 
 ```yaml
@@ -204,10 +208,29 @@ Frontmatter is part of the note schema, not optional decoration.
 - In `general` notes, do not strip useful examples out of `## Ключевые тезисы` or `## Практика` if that would leave only abstract restatements.
 - In `general` notes, do not let `## Практика` restate the same source case that already sits in `## Ключевые тезисы`; if the case is needed in both places, keep the concrete example in the stronger section and rewrite the other bullet so it adds a new action or a different implication.
 - In `general` notes, after restoring examples, explicitly compare `## Ключевые тезисы` and `## Практика` for near-duplicate bullets or repeated mini-cases.
+- For any non-`concept` note that has `## Практика` or another clearly applied section, do not add checklists by default.
+- Add a checklist only when the source contains operational decision structure that would lose value if flattened into prose.
+- A checklist is warranted when at least one of these is true:
+  - the source gives 3 or more concrete decision criteria
+  - the source compares practical alternatives such as `A vs B`, `buy vs build`, `RAG vs fine-tuning`, or `local vs cloud`
+  - the source describes an ordered sequence of actions
+  - the source gives applied gates or constraints such as latency, cost, privacy, capacity, reliability, review burden, or support requirements
+- When a checklist is added to `## Практика` or an analogous applied section:
+  - place it inside that section or immediately below it
+  - use a short heading like `### Чеклист ...`
+  - size the checklist by the amount of real decision structure in the source
+  - make each item one complete and important action, criterion, or diagnostic question
+  - preserve decision logic and specificity instead of replacing concrete trade-offs with generic advice
+  - avoid duplication between the checklist and the surrounding applied prose; keep framing, edge cases, and advice that do not fit checklist form, but do not restate the same actions or criteria in both places
+  - split into multiple short checklists if one list starts mixing different decision surfaces
+- Do not add a checklist when it would only restate the same applied advice already present in prose, or when the source offers general principles without a clear decision surface.
 - Treat dated log sections such as `## Additional insights`, `## Evidence`, and `## Observed practices` as chronological append-only logs by default.
 - Keep dated bullets in ascending chronological order unless the user explicitly asks for latest-first ordering.
 - Insert a new dated bullet after the last existing dated bullet in that section and before the next heading or end-of-file.
 - Do not prepend a new dated bullet to the top of a log section unless latest-first ordering was explicitly requested.
+- In multi-source source-derived notes, make every bullet under `## Evidence` explicitly dated.
+- Use `YYYY-MM-DD` when the source date is known precisely and `YYYY-MM` when only the month is reliable.
+- Treat this as mandatory whenever the note frontmatter contains two or more `source` entries and the note keeps an `## Evidence` section.
 - Add `## Инструменты и фреймворки` only when it contributes a clearly separate layer of knowledge beyond `## Практика`.
 - Add `## Подводные камни и антипаттерны` only when the source discusses distinct mistakes with their own consequences; do not use it for negative rewrites of recommendations.
 - Omit `## Что можно применить сразу` when it would only repeat the same actions from `## Практика`.
@@ -218,7 +241,12 @@ Frontmatter is part of the note schema, not optional decoration.
 - Do not repeat `title` or `source` from frontmatter inside the body.
 - Make every saved note read as a standalone knowledge object, not as a diary of how it was produced.
 - Do not keep process-language in the prose such as `в этом выпуске`, `во втором видео`, `исходная заметка`, `старый материал`, or similar assembly comments when the sentence can be rewritten as direct knowledge.
+- In the main note body, also remove source-scaffolding phrases such as `в подкасте`, `в статье`, `в выпуске`, `автор говорит`, or `спикер отмечает` when the sentence can be rewritten as standalone knowledge without losing meaning.
 - Keep provenance in frontmatter and use source mentions in the body only when the source itself is a useful case, scenario, or comparison rather than a process footnote.
+- Do not apply that source-scaffolding cleanup to dated log sections such as `## Evidence`, `## Additional insights`, and `## Observed practices`; in those sections, references to `статья`, `подкаст`, `выпуск`, or similar source-type labels are useful provenance and should normally stay.
+- Keep role names and artifact names semantically distinct in Russian when the English source uses nearby terms that would otherwise collapse into one word.
+- In particular, reserve `продукт` for the software product, product work, or product-side concerns, and spell the role out explicitly as `Product Manager` when that exact role is meant.
+- Do not use `продукт` or `продукты` as a shorthand for `Product Manager` inside note prose, because that blurs role boundaries and makes responsibility lines harder to read.
 - Do not rewrite several concrete observations into one abstract sentence if that would hide how the system actually operates.
 - For source-derived notes, prefer short sections with 2-4 bullets when the source provides multiple concrete points for the same topic.
 - Prefer Russian lesson headings and Russian section bullets unless the English wording is the canonical name of a framework, metric, tool, or code-level term.

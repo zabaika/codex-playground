@@ -347,6 +347,11 @@ def build_transcript_markdown(
     return "\n".join(lines)
 
 
+def print_route_block(route_used: str, route_reason: str) -> None:
+    print(f"Route used: {route_used}")
+    print(f"Route reason: {route_reason}")
+
+
 def ensure_article_config_is_ready(article_config_path: Path) -> None:
     if not article_config_path.exists():
         raise SystemExit(
@@ -575,6 +580,7 @@ def main() -> int:
         print(summary_json)
         return 0
 
+    print_route_block(route_used, route_reason)
     print(f"Prepared transcript file: {summary['prepared_transcript_file']}")
     print(f"Subtitle file: {summary['subtitle_file']}")
     print(f"Engine used: {summary['engine_used']}")

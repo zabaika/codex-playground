@@ -191,6 +191,148 @@ date: 2026
         )
         self.assertEqual([], violations)
 
+    def test_multisource_evidence_requires_dated_bullets(self) -> None:
+        content = """---
+title: Multi-source evidence regression
+source:
+  - https://example.com/a
+  - https://example.com/b
+type: operating-model
+tags:
+  - infrastructure
+date: 2026
+---
+Короткое вступление.
+## Ключевые тезисы
+- **Тезис.** Полезный вывод.
+## Практика
+- **Практика.** Полезное действие.
+## Evidence
+- Первый источник без даты.
+- 2026-05: Второй источник с датой.
+"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            fixture = Path(tmpdir) / "Multi-source evidence regression.md"
+            fixture.write_text(content, encoding="utf-8")
+            violations = collect_violations(
+                fixture,
+                expect="source",
+                required_headings=[
+                    "## Ключевые тезисы",
+                    "## Практика",
+                    "## Evidence",
+                ],
+                allow_latin_terms=["Evidence"],
+            )
+        codes = {violation.code for violation in violations}
+        self.assertIn("chronology.multisource-evidence-missing-date", codes)
+
+    def test_multisource_evidence_with_dated_bullets_passes(self) -> None:
+        content = """---
+title: Multi-source evidence clean
+source:
+  - https://example.com/a
+  - https://example.com/b
+type: operating-model
+tags:
+  - infrastructure
+date: 2026
+---
+Короткое вступление.
+## Ключевые тезисы
+- **Тезис.** Полезный вывод.
+## Практика
+- **Практика.** Полезное действие.
+## Evidence
+- 2024-10-03: Первый источник.
+- 2026-05: Второй источник.
+"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            fixture = Path(tmpdir) / "Multi-source evidence clean.md"
+            fixture.write_text(content, encoding="utf-8")
+            violations = collect_violations(
+                fixture,
+                expect="source",
+                required_headings=[
+                    "## Ключевые тезисы",
+                    "## Практика",
+                    "## Evidence",
+                ],
+                allow_latin_terms=["Evidence"],
+            )
+        self.assertEqual([], violations)
+
+    def test_multisource_frontmatter_date_must_match_newest_evidence_year(self) -> None:
+        content = """---
+title: Multi-source date mismatch
+source:
+  - https://example.com/a
+  - https://example.com/b
+type: operating-model
+tags:
+  - infrastructure
+date: 2024
+---
+Короткое вступление.
+## Ключевые тезисы
+- **Тезис.** Полезный вывод.
+## Практика
+- **Практика.** Полезное действие.
+## Evidence
+- 2024-10-03: Первый источник.
+- 2025-03-26: Второй источник.
+"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            fixture = Path(tmpdir) / "Multi-source date mismatch.md"
+            fixture.write_text(content, encoding="utf-8")
+            violations = collect_violations(
+                fixture,
+                expect="source",
+                required_headings=[
+                    "## Ключевые тезисы",
+                    "## Практика",
+                    "## Evidence",
+                ],
+                allow_latin_terms=["Evidence"],
+            )
+        codes = {violation.code for violation in violations}
+        self.assertIn("frontmatter.multisource-date-mismatch", codes)
+
+    def test_multisource_frontmatter_date_matches_newest_evidence_year(self) -> None:
+        content = """---
+title: Multi-source date clean
+source:
+  - https://example.com/a
+  - https://example.com/b
+type: operating-model
+tags:
+  - infrastructure
+date: 2025
+---
+Короткое вступление.
+## Ключевые тезисы
+- **Тезис.** Полезный вывод.
+## Практика
+- **Практика.** Полезное действие.
+## Evidence
+- 2024-10-03: Первый источник.
+- 2025-03-26: Второй источник.
+"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            fixture = Path(tmpdir) / "Multi-source date clean.md"
+            fixture.write_text(content, encoding="utf-8")
+            violations = collect_violations(
+                fixture,
+                expect="source",
+                required_headings=[
+                    "## Ключевые тезисы",
+                    "## Практика",
+                    "## Evidence",
+                ],
+                allow_latin_terms=["Evidence"],
+            )
+        self.assertEqual([], violations)
+
     def test_management_tag_is_rejected(self) -> None:
         content = """---
 title: Test concept
