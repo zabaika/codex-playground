@@ -359,13 +359,19 @@ python3 -m unittest discover -s skills/article-to-obsidian-kb/tests -q
 - Use the chosen analysis reference only to extract signal from the source:
   - [references/source-analysis-engineering.md](references/source-analysis-engineering.md)
   - [references/source-analysis-general.md](references/source-analysis-general.md)
+- Before finalizing the note structure, run a specificity pass on the draft:
+  - re-check whether the main lessons or applied sections have been flattened into generic claims during summarization
+  - when the source contains concrete anchors such as examples, numbers, pipelines, decision rules, explicit limitations, or concrete failure mechanisms, preserve them in `## Ключевые тезисы`, `## Практика`, `## Подводные камни и антипаттерны`, or a similar section if they materially improve actionability
+  - treat this as an early synthesis guardrail, not only as a late cleanup step
 - Run one final note-compliance pass before saving any touched note:
   - apply the full final-note contract from [references/vault-conventions.md](references/vault-conventions.md) to the final saved artifact
   - this pass is mandatory for every major rule family in that canonical contract, not just for the family you touched most recently
   - if the note was manually rewritten, merged, or changed late in the run, re-run the full contract after that late edit
   - if you updated an existing note, run this pass against the whole merged note rather than only the latest fragment
-  - treat source-scaffolding cleanup for the main note body as part of this existing pass rather than as a separate extra pass; keep dated provenance sections such as `Evidence`, `Additional insights`, and `Observed practices` exempt from that cleanup
+  - re-check the main note body for source-scaffolding and rewrite source-first sentences into idea-first knowledge statements whenever meaning is preserved; this includes source-type phrasings such as `в статье`, `в подкасте`, or `в транскрипте`; keep dated provenance sections such as `Evidence`, `Additional insights`, and `Observed practices` exempt from that cleanup
   - if the note is non-`concept` and has `## Практика` or another clearly applied section, re-check the checklist rule from [references/vault-conventions.md](references/vault-conventions.md): checklists should preserve real decision structure, and surrounding applied prose should not duplicate the same actions or criteria
+  - re-check whether the main lessons or applied sections have been flattened into generic claims; when the source contains concrete anchors such as examples, numbers, pipelines, decision rules, explicit limitations, or concrete failure mechanisms, preserve them in the note if they materially improve actionability
+  - a strong practical note should usually contain at least some source-native specificity, not only abstract restatements
   - re-check role and artifact terminology where the source contains neighboring English terms such as product, product manager, design, or platform; keep the Russian wording semantically separated instead of collapsing distinct roles into one overloaded noun
   - do not mark a note complete until it passes this full-note contract in its final saved form
 - Run one final regression-sweep pass immediately after the note-compliance pass:
@@ -412,6 +418,10 @@ python3 -m unittest discover -s skills/article-to-obsidian-kb/tests -q
   - `индекс был обновлён успешно`
   - `в индекс вошли N изменённые заметки`
 - Use the actual `updated_notes_count` returned by the canonical `update_kb_index` command for `N`.
+- Treat that `updated_notes_count` as the canonical source of truth for the index-sync report.
+- Do not reconcile it against the notes the assistant believes it touched in this run or against recent filesystem mtimes.
+- Assume the index may have picked up concurrent or manual vault edits too.
+- Investigate a mismatch only when the user explicitly asks for that investigation.
 - Do not mention index errors in the normal success case.
 - Mention an index-refresh problem only if the post-write sync actually failed, and keep that failure note brief.
 - Output only files that were created or updated.

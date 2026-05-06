@@ -241,9 +241,23 @@ Frontmatter is part of the note schema, not optional decoration.
 - Do not repeat `title` or `source` from frontmatter inside the body.
 - Make every saved note read as a standalone knowledge object, not as a diary of how it was produced.
 - Do not keep process-language in the prose such as `в этом выпуске`, `во втором видео`, `исходная заметка`, `старый материал`, or similar assembly comments when the sentence can be rewritten as direct knowledge.
-- In the main note body, also remove source-scaffolding phrases such as `в подкасте`, `в статье`, `в выпуске`, `автор говорит`, or `спикер отмечает` when the sentence can be rewritten as standalone knowledge without losing meaning.
+- In the main note body, prefer idea-first sentences over source-first sentences.
+- Treat `source-scaffolding` as phrasing where the source, speaker, author, article, podcast, or similar material is doing the talking for the idea even though the sentence is really expressing reusable knowledge.
+- If the sentence still makes full sense after replacing the source with the claim itself, rewrite it as standalone knowledge.
+- This includes phrases such as `источник показывает`, `автор выделяет`, or `в транскрипте` when they can be rewritten as direct knowledge.
 - Keep provenance in frontmatter and use source mentions in the body only when the source itself is a useful case, scenario, or comparison rather than a process footnote.
 - Do not apply that source-scaffolding cleanup to dated log sections such as `## Evidence`, `## Additional insights`, and `## Observed practices`; in those sections, references to `статья`, `подкаст`, `выпуск`, or similar source-type labels are useful provenance and should normally stay.
+- Before finalizing a source-derived note, check whether the draft has flattened the source into generic statements.
+- For each major point in `## Ключевые тезисы`, `## Практика`, `## Подводные камни и антипаттерны`, or a similar section, try to preserve at least one concrete anchor from the source when it is available:
+  - an example scenario
+  - a number or rough quantitative benchmark
+  - a step sequence or pipeline
+  - a decision rule such as `when A vs when B`
+  - a boundary, caveat, or failure mode
+- Prefer concrete anchors that change how the reader would act, decide, estimate, or scope the problem.
+- Do not add decorative detail that does not improve practical understanding.
+- In `## Подводные камни и антипаттерны`, avoid reducing the section to bare one-line mistake labels when the source gives a mechanism, consequence, or concrete failure pattern that explains why the mistake matters.
+- This pass is especially important for transcripts and long-form spoken sources, where the most useful specificity is often distributed across the material rather than concentrated in the opening section.
 - Keep role names and artifact names semantically distinct in Russian when the English source uses nearby terms that would otherwise collapse into one word.
 - In particular, reserve `продукт` for the software product, product work, or product-side concerns, and spell the role out explicitly as `Product Manager` when that exact role is meant.
 - Do not use `продукт` or `продукты` as a shorthand for `Product Manager` inside note prose, because that blurs role boundaries and makes responsibility lines harder to read.
