@@ -27,6 +27,18 @@ max_tool_rounds = "8"
 web_search_limit = "5"
 # Maximum number of plain-text characters kept from one fetched page.
 fetch_char_limit = "12000"
+# Maximum number of local search hits returned by one search_local_files call.
+# Increase carefully: larger values make tool outputs heavier and can increase token cost.
+max_local_matches = "50"
+# Maximum number of numbered lines returned by one read_local_file call.
+# Increase carefully for large files; this affects both latency and payload size.
+max_file_lines = "400"
+# Maximum number of files/folders returned by one list_local_files call.
+# Keep this moderate so directory listings stay readable in Telegram and in tool context.
+max_directory_entries = "200"
+# Maximum number of characters sent back to OpenAI for one tool result.
+# This is the main guardrail against HTTP 400 from oversized function_call_output payloads.
+max_tool_output_chars = "50000"
 # Prompt-cache scope for OpenAI requests: "global" reuses cache across all chats on this bot,
 # "chat" isolates cache keys per Telegram chat_id.
 prompt_cache_scope = "global"

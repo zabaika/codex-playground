@@ -48,9 +48,10 @@ DEFAULT_AGENT_MODEL = "gpt-5.4-mini"
 DEFAULT_MAX_TOOL_ROUNDS = 8
 DEFAULT_WEB_SEARCH_LIMIT = 5
 DEFAULT_FETCH_CHAR_LIMIT = 12000
-MAX_LOCAL_MATCHES = 50
-MAX_FILE_LINES = 400
-MAX_DIRECTORY_ENTRIES = 200
+DEFAULT_MAX_LOCAL_MATCHES = 50
+DEFAULT_MAX_FILE_LINES = 400
+DEFAULT_MAX_DIRECTORY_ENTRIES = 200
+DEFAULT_MAX_TOOL_OUTPUT_CHARS = 50000
 OP_REFERENCE_PREFIX = shared_secrets.OP_REFERENCE_PREFIX
 _SECRET_CACHE = shared_secrets._SECRET_CACHE
 
@@ -202,6 +203,30 @@ def resolve_runtime() -> dict[str, Any]:
         "max_tool_rounds": parse_int(get_config_value(config, "agent", "max_tool_rounds"), DEFAULT_MAX_TOOL_ROUNDS, min_value=1, max_value=16),
         "web_search_limit": parse_int(get_config_value(config, "agent", "web_search_limit"), DEFAULT_WEB_SEARCH_LIMIT, min_value=1, max_value=10),
         "fetch_char_limit": parse_int(get_config_value(config, "agent", "fetch_char_limit"), DEFAULT_FETCH_CHAR_LIMIT, min_value=1000, max_value=30000),
+        "max_local_matches": parse_int(
+            get_config_value(config, "agent", "max_local_matches"),
+            DEFAULT_MAX_LOCAL_MATCHES,
+            min_value=1,
+            max_value=200,
+        ),
+        "max_file_lines": parse_int(
+            get_config_value(config, "agent", "max_file_lines"),
+            DEFAULT_MAX_FILE_LINES,
+            min_value=1,
+            max_value=2000,
+        ),
+        "max_directory_entries": parse_int(
+            get_config_value(config, "agent", "max_directory_entries"),
+            DEFAULT_MAX_DIRECTORY_ENTRIES,
+            min_value=1,
+            max_value=1000,
+        ),
+        "max_tool_output_chars": parse_int(
+            get_config_value(config, "agent", "max_tool_output_chars"),
+            DEFAULT_MAX_TOOL_OUTPUT_CHARS,
+            min_value=1000,
+            max_value=200000,
+        ),
         "prompt_cache_scope": (get_config_value(config, "agent", "prompt_cache_scope") or "global").strip().lower(),
         "allowed_roots": parse_allowed_roots(config),
     }
@@ -303,19 +328,51 @@ def truncate_text(text: str, max_chars: int) -> str:
     return text[: max_chars - 20].rstrip() + "\n\n...[truncated]"
 
 
-def list_local_files(path: str, allowed_roots: list[Path], limit: int = 50) -> dict[str, Any]:
+def serialize_tool_result(result: dict[str, Any], max_chars: int = DEFAULT_MAX_TOOL_OUTPUT_CHARS) -> str:
+    serialized = json.dumps(result, ensure_ascii=False)
+    if len(serialized) <= max_chars:
+        return serialized
+    preview_budget = max(256, max_chars - 200)
+    truncated = {
+        "truncated": True,
+        "original_chars": len(serialized),
+        "preview": truncate_text(serialized, preview_budget),
+    }
+    limited = json.dumps(truncated, ensure_ascii=False)
+    if len(limited) <= max_chars:
+        return limited
+    overflow = len(limited) - max_chars
+    reduced_budget = max(128, preview_budget - overflow - 32)
+    truncated["preview"] = truncate_text(serialized, reduced_budget)
+    return json.dumps(truncated, ensure_ascii=False)
+
+
+def list_local_files(
+    path: str,
+    allowed_roots: list[Path],
+    limit: int = 50,
+    *,
+    max_entries: int = DEFAULT_MAX_DIRECTORY_ENTRIES,
+) -> dict[str, Any]:
     target = resolve_user_path(path, allowed_roots)
     if not target.exists():
         raise ValueError(f"Path does not exist: {target}")
     if not target.is_dir():
         raise ValueError(f"Path is not a directory: {target}")
     entries = []
-    for child in sorted(target.iterdir(), key=lambda item: (not item.is_dir(), item.name.lower()))[: min(MAX_DIRECTORY_ENTRIES, max(1, limit))]:
+    for child in sorted(target.iterdir(), key=lambda item: (not item.is_dir(), item.name.lower()))[: min(max_entries, max(1, limit))]:
         entries.append({"name": child.name, "path": str(child), "kind": "dir" if child.is_dir() else "file"})
     return {"path": str(target), "entries": entries}
 
 
-def read_local_file(path: str, allowed_roots: list[Path], start_line: int = 1, max_lines: int = 120) -> dict[str, Any]:
+def read_local_file(
+    path: str,
+    allowed_roots: list[Path],
+    start_line: int = 1,
+    max_lines: int = 120,
+    *,
+    hard_max_lines: int = DEFAULT_MAX_FILE_LINES,
+) -> dict[str, Any]:
     target = resolve_user_path(path, allowed_roots)
     if not target.exists():
         raise ValueError(f"File does not exist: {target}")
@@ -324,7 +381,7 @@ def read_local_file(path: str, allowed_roots: list[Path], start_line: int = 1, m
     text = target.read_text(encoding="utf-8", errors="replace")
     lines = text.splitlines()
     start_index = max(0, start_line - 1)
-    end_index = min(len(lines), start_index + min(MAX_FILE_LINES, max(1, max_lines)))
+    end_index = min(len(lines), start_index + min(hard_max_lines, max(1, max_lines)))
     selected = [f"{index + 1}: {lines[index]}" for index in range(start_index, end_index)]
     return {
         "path": str(target),
@@ -334,9 +391,16 @@ def read_local_file(path: str, allowed_roots: list[Path], start_line: int = 1, m
     }
 
 
-def search_local_files(query: str, allowed_roots: list[Path], root: str = ".", limit: int = 20) -> dict[str, Any]:
+def search_local_files(
+    query: str,
+    allowed_roots: list[Path],
+    root: str = ".",
+    limit: int = 20,
+    *,
+    max_matches: int = DEFAULT_MAX_LOCAL_MATCHES,
+) -> dict[str, Any]:
     target_root = resolve_user_path(root, allowed_roots)
-    result_limit = min(MAX_LOCAL_MATCHES, max(1, limit))
+    result_limit = min(max_matches, max(1, limit))
     try:
         completed = subprocess.run(
             [
@@ -462,7 +526,7 @@ def fetch_url_text(url: str, *, max_chars: int) -> dict[str, Any]:
     return {"url": url, "content_type": content_type, "text": truncate_text(text, max_chars)}
 
 
-def tool_definitions() -> list[dict[str, Any]]:
+def tool_definitions(runtime: dict[str, Any]) -> list[dict[str, Any]]:
     return [
         {
             "type": "function",
@@ -472,7 +536,7 @@ def tool_definitions() -> list[dict[str, Any]]:
                 "type": "object",
                 "properties": {
                     "path": {"type": "string"},
-                    "limit": {"type": "integer", "minimum": 1, "maximum": MAX_DIRECTORY_ENTRIES},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": runtime["max_directory_entries"]},
                 },
                 "required": ["path"],
                 "additionalProperties": False,
@@ -487,7 +551,7 @@ def tool_definitions() -> list[dict[str, Any]]:
                 "properties": {
                     "path": {"type": "string"},
                     "start_line": {"type": "integer", "minimum": 1},
-                    "max_lines": {"type": "integer", "minimum": 1, "maximum": MAX_FILE_LINES},
+                    "max_lines": {"type": "integer", "minimum": 1, "maximum": runtime["max_file_lines"]},
                 },
                 "required": ["path"],
                 "additionalProperties": False,
@@ -502,7 +566,7 @@ def tool_definitions() -> list[dict[str, Any]]:
                 "properties": {
                     "query": {"type": "string"},
                     "root": {"type": "string"},
-                    "limit": {"type": "integer", "minimum": 1, "maximum": MAX_LOCAL_MATCHES},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": runtime["max_local_matches"]},
                 },
                 "required": ["query"],
                 "additionalProperties": False,
@@ -516,7 +580,7 @@ def tool_definitions() -> list[dict[str, Any]]:
                 "type": "object",
                 "properties": {
                     "query": {"type": "string"},
-                    "limit": {"type": "integer", "minimum": 1, "maximum": 10},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": runtime["web_search_limit"]},
                 },
                 "required": ["query"],
                 "additionalProperties": False,
@@ -530,7 +594,7 @@ def tool_definitions() -> list[dict[str, Any]]:
                 "type": "object",
                 "properties": {
                     "url": {"type": "string"},
-                    "max_chars": {"type": "integer", "minimum": 1000, "maximum": 30000},
+                    "max_chars": {"type": "integer", "minimum": 1000, "maximum": runtime["fetch_char_limit"]},
                 },
                 "required": ["url"],
                 "additionalProperties": False,
@@ -554,7 +618,28 @@ def api_request(payload: dict[str, Any], api_key: str) -> dict[str, Any]:
         with request.urlopen(req, timeout=180) as resp:
             response = json.loads(resp.read().decode("utf-8"))
     except error.HTTPError as exc:
-        raise SystemExit(f"OpenAI API HTTP {exc.code} while running telegram agent worker.") from exc
+        detail = ""
+        try:
+            body = exc.read().decode("utf-8", errors="replace").strip()
+        except Exception:
+            body = ""
+        if body:
+            try:
+                parsed = json.loads(body)
+            except json.JSONDecodeError:
+                detail = truncate_text(body, 500)
+            else:
+                message = (
+                    parsed.get("error", {}).get("message")
+                    if isinstance(parsed, dict) and isinstance(parsed.get("error"), dict)
+                    else ""
+                )
+                if isinstance(message, str) and message.strip():
+                    detail = truncate_text(message.strip(), 500)
+                else:
+                    detail = truncate_text(body, 500)
+        suffix = f": {detail}" if detail else ""
+        raise SystemExit(f"OpenAI API HTTP {exc.code} while running telegram agent worker{suffix}") from exc
     except error.URLError as exc:
         raise SystemExit("OpenAI API request failed while running telegram agent worker.") from exc
     response["_latency_ms"] = max(0, int((time.perf_counter() - started_at) * 1000))
@@ -728,13 +813,19 @@ def execute_tool(call: dict[str, Any], runtime: dict[str, Any]) -> dict[str, Any
     arguments = json.loads(raw_arguments)
     allowed_roots = runtime["allowed_roots"]
     if name == "list_local_files":
-        return list_local_files(str(arguments["path"]), allowed_roots, limit=int(arguments.get("limit", 50)))
+        return list_local_files(
+            str(arguments["path"]),
+            allowed_roots,
+            limit=int(arguments.get("limit", runtime["max_directory_entries"])),
+            max_entries=runtime["max_directory_entries"],
+        )
     if name == "read_local_file":
         return read_local_file(
             str(arguments["path"]),
             allowed_roots,
             start_line=int(arguments.get("start_line", 1)),
             max_lines=int(arguments.get("max_lines", 120)),
+            hard_max_lines=runtime["max_file_lines"],
         )
     if name == "search_local_files":
         return search_local_files(
@@ -742,6 +833,7 @@ def execute_tool(call: dict[str, Any], runtime: dict[str, Any]) -> dict[str, Any
             allowed_roots,
             root=str(arguments.get("root", ".")),
             limit=int(arguments.get("limit", 20)),
+            max_matches=runtime["max_local_matches"],
         )
     if name == "web_search":
         return web_search(str(arguments["query"]), min(runtime["web_search_limit"], int(arguments.get("limit", runtime["web_search_limit"]))))
@@ -798,7 +890,7 @@ def run_agent(prompt: str, chat_id: str, username: str) -> dict[str, Any]:
                 "model": runtime["model"],
                 "instructions": runtime["system_instructions"],
                 "input": current_input,
-                "tools": tool_definitions(),
+                "tools": tool_definitions(runtime),
                 "tool_choice": "auto",
                 "prompt_cache_key": cache_key,
             }
@@ -867,7 +959,7 @@ def run_agent(prompt: str, chat_id: str, username: str) -> dict[str, Any]:
                     {
                         "type": "function_call_output",
                         "call_id": call["call_id"],
-                        "output": json.dumps(result, ensure_ascii=False),
+                        "output": serialize_tool_result(result, runtime["max_tool_output_chars"]),
                     }
                 )
             current_input = tool_outputs

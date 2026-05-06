@@ -1,9 +1,11 @@
 import importlib.util
+import io
 import json
 import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
+from urllib import error
 
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "telegram_agent_worker.py"
@@ -80,6 +82,10 @@ class TelegramAgentWorkerTests(unittest.TestCase):
             "max_tool_rounds": 4,
             "web_search_limit": 5,
             "fetch_char_limit": 12000,
+            "max_local_matches": 50,
+            "max_file_lines": 400,
+            "max_directory_entries": 200,
+            "max_tool_output_chars": 50000,
             "prompt_cache_scope": "global",
             "allowed_roots": [(telegram_agent_worker.BASE_DIR / "tests").resolve()],
         }
@@ -244,6 +250,87 @@ class TelegramAgentWorkerTests(unittest.TestCase):
         self.assertEqual(row["cached_input_tokens"], 8)
         self.assertEqual(row["prompt_cache_key"], "agent:test-cache")
         self.assertEqual(row["feature"], "agent")
+
+    def test_serialize_tool_result_truncates_oversized_payload(self) -> None:
+        result = {"content": "x" * (telegram_agent_worker.DEFAULT_MAX_TOOL_OUTPUT_CHARS + 5000)}
+        serialized = telegram_agent_worker.serialize_tool_result(result)
+        parsed = json.loads(serialized)
+        self.assertTrue(parsed["truncated"])
+        self.assertGreater(parsed["original_chars"], telegram_agent_worker.DEFAULT_MAX_TOOL_OUTPUT_CHARS)
+        self.assertIn("...[truncated]", parsed["preview"])
+        self.assertLessEqual(len(serialized), telegram_agent_worker.DEFAULT_MAX_TOOL_OUTPUT_CHARS)
+
+    def test_resolve_runtime_reads_limit_overrides_from_config(self) -> None:
+        original_load_runtime_config = telegram_agent_worker.load_runtime_config
+        original_resolve_secret_value = telegram_agent_worker.resolve_secret_value
+        telegram_agent_worker.load_runtime_config = lambda: {
+            "agent": {
+                "max_tool_rounds": "6",
+                "web_search_limit": "4",
+                "fetch_char_limit": "15000",
+                "max_local_matches": "12",
+                "max_file_lines": "250",
+                "max_directory_entries": "80",
+                "max_tool_output_chars": "42000",
+                "allowed_roots": ["."],
+            },
+            "secrets": {"openai_api_key": "dummy-key"},
+        }
+        telegram_agent_worker.resolve_secret_value = lambda raw_value, label: raw_value
+        try:
+            runtime = telegram_agent_worker.resolve_runtime()
+        finally:
+            telegram_agent_worker.load_runtime_config = original_load_runtime_config
+            telegram_agent_worker.resolve_secret_value = original_resolve_secret_value
+        self.assertEqual(runtime["max_tool_rounds"], 6)
+        self.assertEqual(runtime["web_search_limit"], 4)
+        self.assertEqual(runtime["fetch_char_limit"], 15000)
+        self.assertEqual(runtime["max_local_matches"], 12)
+        self.assertEqual(runtime["max_file_lines"], 250)
+        self.assertEqual(runtime["max_directory_entries"], 80)
+        self.assertEqual(runtime["max_tool_output_chars"], 42000)
+
+    def test_api_request_without_http_body_keeps_base_error_message(self) -> None:
+        def fake_urlopen(_req: object, timeout: int = 180) -> object:
+            raise error.HTTPError(
+                url="https://api.openai.com/v1/responses",
+                code=400,
+                msg="Bad Request",
+                hdrs=None,
+                fp=None,
+            )
+
+        original_urlopen = telegram_agent_worker.request.urlopen
+        telegram_agent_worker.request.urlopen = fake_urlopen
+        try:
+            with self.assertRaises(SystemExit) as ctx:
+                telegram_agent_worker.api_request({"model": "gpt-5.4-mini"}, "key")
+        finally:
+            telegram_agent_worker.request.urlopen = original_urlopen
+        self.assertEqual(str(ctx.exception), "OpenAI API HTTP 400 while running telegram agent worker")
+
+    def test_api_request_includes_openai_error_message_from_body(self) -> None:
+        def fake_urlopen(_req: object, timeout: int = 180) -> object:
+            body = io.BytesIO(b'{"error":{"message":"Input is too large."}}')
+            raise error.HTTPError(
+                url="https://api.openai.com/v1/responses",
+                code=400,
+                msg="Bad Request",
+                hdrs=None,
+                fp=body,
+            )
+
+        original_urlopen = telegram_agent_worker.request.urlopen
+        telegram_agent_worker.request.urlopen = fake_urlopen
+        try:
+            with self.assertRaises(SystemExit) as ctx:
+                telegram_agent_worker.api_request({"model": "gpt-5.4-mini"}, "key")
+        finally:
+            telegram_agent_worker.request.urlopen = original_urlopen
+        self.assertEqual(
+            str(ctx.exception),
+            "OpenAI API HTTP 400 while running telegram agent worker: Input is too large.",
+        )
 
     def test_validate_public_http_url_rejects_localhost(self) -> None:
         with self.assertRaises(ValueError):

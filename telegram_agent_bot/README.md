@@ -49,6 +49,10 @@ model = "<OpenAI model>"
 max_tool_rounds = "<maximum tool rounds in one run>"
 web_search_limit = "<maximum web hits returned by one search tool call>"
 fetch_char_limit = "<maximum fetched page chars kept in one tool call>"
+max_local_matches = "<maximum local search hits returned by one search_local_files call>"
+max_file_lines = "<maximum numbered lines returned by one read_local_file call>"
+max_directory_entries = "<maximum files/folders returned by one list_local_files call>"
+max_tool_output_chars = "<maximum chars sent back to OpenAI for one tool result>"
 prompt_cache_scope = "<global|chat>"
 allowed_roots = [
   ".",
@@ -76,6 +80,8 @@ Notes:
 - `bridge.agent_stats_row_limit` limits `/agent-stats` to the latest N rows from `ai_usage_log`, so the command stays fast as the database grows
 - `agent.allowed_roots` is the allowlist for local file access
 - `agent.model` defaults to `gpt-5.4-mini` in the example config
+- `agent.max_local_matches`, `agent.max_file_lines`, and `agent.max_directory_entries` control how much local context one tool call may return
+- `agent.max_tool_output_chars` is the main payload guardrail for `function_call_output`; keep it conservative to avoid oversized OpenAI requests
 - `agent.prompt_cache_scope = "global"` maximizes prompt-cache reuse for one-owner bots; use `"chat"` only if you want separate cache keys per Telegram chat
 - the bridge resolves bot/OpenAI secrets once at startup and passes only the minimum required env vars to the worker, matching the neighbor project's secret-handling pattern
 - the worker resolves secrets in this order:
