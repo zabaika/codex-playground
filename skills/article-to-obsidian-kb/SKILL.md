@@ -14,6 +14,7 @@ Turn a source article, transcript, or other long-form text into compact, Russian
 | File | Canonical responsibility |
 | --- | --- |
 | [SKILL.md](SKILL.md) | Workflow entrypoint: load config, choose route, search vault, decide `update vs create`, apply canonical contracts, run final passes, and format the final user-facing report. |
+| [config/note_schema.yaml](config/note_schema.yaml) | Single source of truth for canonical section-heading strings and note-shape heading identifiers used by the checker, writer, tests, and docs. |
 | [references/vault-conventions.md](references/vault-conventions.md) | Single source of truth for final note contract: frontmatter, titles, tags, language, links, spacing, closing section, and final note-shape rules. |
 | [references/update-patterns.md](references/update-patterns.md) | Single source of truth for update behavior: `update vs create`, merge rules, chronology, dated logs, and provenance preservation during rewrites. |
 | [references/source-analysis-engineering.md](references/source-analysis-engineering.md) | Extraction contract for engineering-heavy sources. |
@@ -164,11 +165,12 @@ python3 scripts/detect_source_route.py --source-file "[SOURCE_FILE]"
 8. Resolve source dates before final frontmatter normalization.
    - Build a source-date map for every source that materially contributes to the saved note.
    - For single-source notes, verify the source date before assigning `frontmatter.date`.
-   - For multi-source notes, write dated bullets in `## Evidence` first, then derive `frontmatter.date` from the newest dated evidence source instead of setting it from memory.
+   - For multi-source notes, write dated bullets in the schema-defined `headings.evidence` section first, then derive `frontmatter.date` from the newest dated evidence source instead of setting it from memory.
    - If a source date is unclear, verify it from the source page before saving rather than guessing.
 9. Before saving, run the canonical tag pass from [references/vault-conventions.md](references/vault-conventions.md).
 10. Re-check final titles, tags, links, duplicate risk, and chronology against the canonical contracts before saving.
    - Re-run the canonical closing-section deduplication pass after inline wikilinks are finalized.
+   - Treat existing note titles inside wikilinks as canonical identifiers; do not translate, prune, or de-anglicize links just because their titles contain English terms.
 11. After each destination write, run the canonical post-write verification from [references/update-patterns.md](references/update-patterns.md) before continuing with more checks, searches, or reporting.
 12. After all destination writes are complete, refresh `kb-index` once when and only when all of these are true:
    - the run actually created or updated at least one note
@@ -310,12 +312,12 @@ python3 -m unittest discover -s skills/article-to-obsidian-kb/tests -q
 - Prefer embedding a compact example directly under the relevant thesis or recommendation instead of collecting examples in a detached dump section.
 - Use this split when several blocks are present:
   - the first paragraph explains the source and its main problem instead of using a separate `## Суть` heading
-  - `## Ключевые тезисы` captures the core ideas and claims, not action steps, but may keep a compact source example when that example is the shortest path to understanding the claim
-  - `## Практика` captures reusable action steps and attaches the relevant examples, scenarios, numbers, or illustrations directly to the recommendation they support
-  - `## Инструменты и фреймворки` appears only when at least two named tools, methods, or frameworks are independently useful and the block adds clear new information beyond `## Практика`
-  - `## Подводные камни и антипаттерны` appears only when the source discusses at least three distinct mistakes or false approaches with their own consequences, not just the inverse wording of `## Практика`
-  - `## Что можно применить сразу` captures a short prioritized starter subset and should be omitted if it would just restate `## Практика`
-  - for any non-`concept` note with `## Практика` or another clearly applied section, apply the checklist materialization rule from [references/vault-conventions.md](references/vault-conventions.md): materialize checklists only when they preserve real decision structure, and keep them non-duplicative with the surrounding applied prose
+  - `headings.key_theses` captures the core ideas and claims, not action steps, but may keep a compact source example when that example is the shortest path to understanding the claim
+  - `headings.practice` captures reusable action steps and attaches the relevant examples, scenarios, numbers, or illustrations directly to the recommendation they support
+  - `headings.tools_frameworks` appears only when at least two named tools, methods, or frameworks are independently useful and the block adds clear new information beyond `headings.practice`
+  - `headings.pitfalls` appears only when the source discusses at least three distinct mistakes or false approaches with their own consequences, not just the inverse wording of `headings.practice`
+  - `headings.apply_immediately` captures a short prioritized starter subset and should be omitted if it would just restate `headings.practice`
+  - for any non-`concept` note with `headings.practice` or another clearly applied section, apply the checklist materialization rule from [references/vault-conventions.md](references/vault-conventions.md): materialize checklists only when they preserve real decision structure, and keep them non-duplicative with the surrounding applied prose
 - Title the note with the main topic and context, using the same inverted-pyramid rule as other source-derived notes.
 - Preserve surviving `source` provenance when converting, renaming, or restructuring any existing note into `general`; keep old source links even when the body and title are substantially rewritten.
 
@@ -331,7 +333,7 @@ python3 -m unittest discover -s skills/article-to-obsidian-kb/tests -q
 - A good concept note should still feel meaningful if the current source-derived note disappeared; if it mostly reads like a detached paragraph from that one source, keep it embedded there instead.
 - Keep the concept definition tight and additive: define the concept once, then let later sections add observations or evidence rather than restating the definition in new words.
 - Use two concept-note shapes:
-  - `compact` is the default: one tight definition, then `## Additional insights`, then `# Связанные заметки`
+  - `compact` is the default: one tight definition, then the schema-defined `headings.additional_insights`, then the schema-defined `headings.related_notes`
   - `expanded` is required when the reader would likely misunderstand the concept without one more explanatory layer
 - Promote a concept note from `compact` to `expanded` when at least one of these is true:
   - the concept is primarily comparative or contrastive, such as `X vs Y`
@@ -353,6 +355,9 @@ python3 -m unittest discover -s skills/article-to-obsidian-kb/tests -q
 - Apply the canonical final-note contract from [references/vault-conventions.md](references/vault-conventions.md).
 - Apply the canonical language rules from [references/language-normalization.md](references/language-normalization.md).
 - Apply the canonical update contract from [references/update-patterns.md](references/update-patterns.md) whenever an existing note is touched.
+- Treat [config/note_schema.yaml](config/note_schema.yaml) as the single source of truth for canonical section-heading strings. In code, tests, and docs, prefer `headings.*` schema keys over repeated raw heading literals, and do not translate or locally rename schema-defined headings in individual notes.
+- If an update to an existing note turns into a `scope fork` because unrelated legacy cleanup is uncovered, stop and ask the user which path to take instead of silently choosing between full cleanup, rollback, or rerouting the new material.
+- If the chosen path is `full cleanup`, show a short cleanup plan for that note and wait for explicit agreement before rewriting the whole note.
 - Treat verbs like `append`, `merge`, `normalize`, `clean up`, and `update` as insufficient on their own when the operation has more than one plausible interpretation.
 - When the intended behavior depends on exact position or ordering, define the insertion point and order explicitly and follow the stricter rule from the references instead of improvising.
 - When migrating a legacy note into the current schema, preserve surviving frontmatter provenance such as `source` across the rewrite regardless of whether the final note is source-derived or `concept`.
@@ -361,15 +366,17 @@ python3 -m unittest discover -s skills/article-to-obsidian-kb/tests -q
   - [references/source-analysis-general.md](references/source-analysis-general.md)
 - Before finalizing the note structure, run a specificity pass on the draft:
   - re-check whether the main lessons or applied sections have been flattened into generic claims during summarization
-  - when the source contains concrete anchors such as examples, numbers, pipelines, decision rules, explicit limitations, or concrete failure mechanisms, preserve them in `## Ключевые тезисы`, `## Практика`, `## Подводные камни и антипаттерны`, or a similar section if they materially improve actionability
+  - when the source contains concrete anchors such as examples, numbers, pipelines, decision rules, explicit limitations, or concrete failure mechanisms, preserve them in `headings.key_theses`, `headings.practice`, `headings.pitfalls`, or a similar section if they materially improve actionability
   - treat this as an early synthesis guardrail, not only as a late cleanup step
 - Run one final note-compliance pass before saving any touched note:
   - apply the full final-note contract from [references/vault-conventions.md](references/vault-conventions.md) to the final saved artifact
   - this pass is mandatory for every major rule family in that canonical contract, not just for the family you touched most recently
   - if the note was manually rewritten, merged, or changed late in the run, re-run the full contract after that late edit
   - if you updated an existing note, run this pass against the whole merged note rather than only the latest fragment
-  - re-check the main note body for source-scaffolding and rewrite source-first sentences into idea-first knowledge statements whenever meaning is preserved; this includes source-type phrasings such as `в статье`, `в подкасте`, or `в транскрипте`; keep dated provenance sections such as `Evidence`, `Additional insights`, and `Observed practices` exempt from that cleanup
-  - if the note is non-`concept` and has `## Практика` or another clearly applied section, re-check the checklist rule from [references/vault-conventions.md](references/vault-conventions.md): checklists should preserve real decision structure, and surrounding applied prose should not duplicate the same actions or criteria
+  - re-check the main note body for source-scaffolding and rewrite source-first sentences into idea-first knowledge statements whenever meaning is preserved; this includes source-type phrasings such as `в статье`, `в подкасте`, or `в транскрипте`; keep schema-defined dated provenance sections such as `headings.evidence`, `headings.additional_insights`, and `headings.observed_practices` exempt from that cleanup
+  - re-check the prose for metaphorical or fashionable jargon and prefer literal operational wording; when a term does not name a concrete role, artifact, step, criterion, mechanism, or constraint, rewrite it into one that does
+  - if the note is non-`concept` and has `headings.practice` or another clearly applied section, re-check the checklist rule from [references/vault-conventions.md](references/vault-conventions.md): checklists should preserve real decision structure, and surrounding applied prose should not duplicate the same actions or criteria
+  - compare `headings.key_theses`, `headings.practice`, and `headings.pitfalls` for cross-section duplication; if an anti-pattern only mirrors an earlier recommendation, rewrite it into a concrete failure mode or remove it
   - re-check whether the main lessons or applied sections have been flattened into generic claims; when the source contains concrete anchors such as examples, numbers, pipelines, decision rules, explicit limitations, or concrete failure mechanisms, preserve them in the note if they materially improve actionability
   - a strong practical note should usually contain at least some source-native specificity, not only abstract restatements
   - re-check role and artifact terminology where the source contains neighboring English terms such as product, product manager, design, or platform; keep the Russian wording semantically separated instead of collapsing distinct roles into one overloaded noun
@@ -407,7 +414,7 @@ python3 -m unittest discover -s skills/article-to-obsidian-kb/tests -q
   - `Новые теги` for genuinely new frontmatter tags introduced in this run
 - In `Созданы` and `Новые концепты`, give each file a one-line explanation of what it is about.
 - In `Обновлены`, group updated files together and briefly say what changed or what new signal was appended.
-- If this run removed, replaced, or materially pruned links from `# Связанные заметки` in any touched note, explicitly mention that in the relevant line under `Обновлены` when the change altered the note's meaningful graph.
+- If this run removed, replaced, or materially pruned links from the schema-defined closing section `headings.related_notes` in any touched note, explicitly mention that in the relevant line under `Обновлены` when the change altered the note's meaningful graph.
 - For each such note, state which links were removed or replaced and give one short reason when the change was substantive, for example weaker than new nearby links or deliberate narrowing of the closing section.
 - Do not require enumerating removals that happened only because a link was already present inline and the closing section was deduplicated mechanically.
 - Do not hide substantive link-pruning side effects behind generic phrases like `cleaned up links` when specific removed links materially changed the note's graph.

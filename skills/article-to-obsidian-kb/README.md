@@ -47,6 +47,8 @@ Treat the repository copy of `config/runtime.local.toml` as the single editable 
 ## Main Files
 
 - `SKILL.md`: runtime workflow entrypoint
+- `config/note_schema.yaml`: single source of truth for canonical section headings used by the note contract
+- `scripts/note_schema.py`: shared schema accessor for local Python consumers
 - `scripts/check_note_contract.py`: mechanical note-contract checker
 - `scripts/detect_source_route.py`: source routing helper
 - `scripts/write_structured_note.py`: explicit structured-note writer for non-source payloads such as `council-verdict`
@@ -66,3 +68,4 @@ Treat the repository copy of `config/runtime.local.toml` as the single editable 
 
 - Keep this README operator-facing and brief.
 - Keep detailed workflow and note-contract rules in `SKILL.md` and canonical reference files.
+- Treat `config/note_schema.yaml` as the canonical owner for schema-defined headings. Do not translate or locally rename those headings in individual notes; change the schema first and migrate consumers together.

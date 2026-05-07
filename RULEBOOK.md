@@ -29,6 +29,8 @@ Keep documentation split by responsibility:
 - for each major rule family, keep exactly one canonical documentation owner and make every other file point to it instead of restating the same contract in full
 - for any operational fact such as route decisions, chosen engines, selected inputs, or resolved config, define one canonical producer and treat every other layer as a consumer of that fact
 - when a workflow produces both a machine-readable payload and one or more human-readable derived artifacts, designate exactly one of them as the canonical source of truth and treat the others as derived views rather than parallel primary artifacts
+- when a workflow depends on canonical labels, headings, section names, statuses, field names, or other repeated identifiers, keep those literals in one machine-readable schema, manifest, or config owner and make every other layer reference that owner instead of duplicating the same strings by hand
+- treat local renaming, translation, or stylistic rewriting of schema-owned identifiers as a contract change rather than as ordinary content editing; update the canonical owner first, then update every consumer as one explicit migration
 
 ### Wrapper and Orchestration Inheritance
 

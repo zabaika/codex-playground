@@ -20,7 +20,21 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 from check_note_contract import collect_violations, collect_violations_from_text
+from note_schema import heading
 from runtime_paths import load_toml, resolve_project_root as resolve_project_root_path
+
+
+RELATED_NOTES_HEADING = heading("related_notes")
+RUN_STATUS_HEADING = heading("run_status")
+COUNCIL_QUESTION_HEADING = heading("council_question")
+COUNCIL_VERDICT_HEADING = heading("council_verdict")
+COUNCIL_AGREE_HEADING = heading("council_agree")
+COUNCIL_CLASHES_HEADING = heading("council_clashes")
+COUNCIL_BLIND_SPOTS_HEADING = heading("council_blind_spots")
+COUNCIL_RECOMMENDATION_HEADING = heading("council_recommendation")
+COUNCIL_FIRST_STEP_HEADING = heading("council_first_step")
+COUNCIL_ADVISOR_POSITIONS_HEADING = heading("council_advisor_positions")
+COUNCIL_PEER_REVIEW_HEADING = heading("council_peer_review")
 
 
 def resolve_council_payload_schema_script() -> Path:
@@ -172,7 +186,7 @@ def render_run_status_block(payload: dict[str, object]) -> str:
     if run_status["status"] != "degraded":
         return ""
     details = text_block(run_status["details"]) if run_status["details"] else ""
-    lines = ["## Статус прогона", "Этот прогон был деградированным."]
+    lines = [RUN_STATUS_HEADING, "Этот прогон был деградированным."]
     if details:
         lines.append(details)
     return "\n".join(lines)
@@ -218,7 +232,7 @@ def render_related_block(payload: dict[str, object]) -> str:
             notes.append(note)
     if not notes:
         return ""
-    lines = ["", "# Связанные заметки"]
+    lines = ["", RELATED_NOTES_HEADING]
     lines.extend(f"[[{note}]]" for note in notes)
     return "\n".join(lines)
 
@@ -228,6 +242,15 @@ def build_markdown(payload: dict[str, object], config: dict[str, object] | None 
     template = (TEMPLATE_DIR / "council-verdict.md.tmpl").read_text(encoding="utf-8")
     rendered = template.format(
         frontmatter=render_frontmatter(payload, config=config),
+        council_question_heading=COUNCIL_QUESTION_HEADING,
+        council_verdict_heading=COUNCIL_VERDICT_HEADING,
+        council_agree_heading=COUNCIL_AGREE_HEADING,
+        council_clashes_heading=COUNCIL_CLASHES_HEADING,
+        council_blind_spots_heading=COUNCIL_BLIND_SPOTS_HEADING,
+        council_recommendation_heading=COUNCIL_RECOMMENDATION_HEADING,
+        council_first_step_heading=COUNCIL_FIRST_STEP_HEADING,
+        council_advisor_positions_heading=COUNCIL_ADVISOR_POSITIONS_HEADING,
+        council_peer_review_heading=COUNCIL_PEER_REVIEW_HEADING,
         question=text_block(payload["question"]),
         run_status_block=render_run_status_block(payload),
         framed_question=text_block(payload["framed_question"]),

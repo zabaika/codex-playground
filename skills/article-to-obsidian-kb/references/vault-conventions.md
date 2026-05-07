@@ -1,6 +1,7 @@
 # Vault Conventions
 
 This file is the single source of truth for the final note contract used by `article-to-obsidian-kb`.
+Canonical section-heading strings live in [config/note_schema.yaml](../config/note_schema.yaml). Treat those `headings.*` values as schema labels, not editable prose.
 
 ## Scope
 
@@ -74,7 +75,7 @@ date: <year>
 
 - For single-source source-derived notes, set `date` to the publication year of that source.
 - For multi-source source-derived notes, set `date` to the year of the newest source that materially contributes to the saved note.
-- Do not use `date` as a last-edited marker for the agent run itself; chronology of later reinforcement belongs in dated body sections such as `## Evidence` or `## Additional insights`.
+- Do not use `date` as a last-edited marker for the agent run itself; chronology of later reinforcement belongs in schema-defined dated sections such as `headings.evidence` or `headings.additional_insights`.
 
 ### Concept notes
 
@@ -184,6 +185,9 @@ Frontmatter is part of the note schema, not optional decoration.
 - Keep the structure compact, but do not over-compress the content.
 - The final markdown must be save-ready and must not require an extra cleanup pass for spacing, headings, or section hygiene.
 - Prefer concrete behavioral requirements over vague words like `append`, `clean up`, `improve`, or `normalize` when the workflow depends on one exact operation.
+- Prefer literal, operational wording over metaphorical or fashionable jargon in note prose.
+- If a term does not name a concrete role, artifact, step, criterion, mechanism, or constraint, rewrite it into one that does.
+- Avoid vague metaphorical or fashionable stand-ins when a direct formulation names the real role, action, decision, mechanism, or constraint more clearly.
 - When a rule can be interpreted in more than one plausible way, spell out the intended insertion point, ordering, and stopping condition instead of relying on implication.
 - Preserve concrete mechanisms when the source states them explicitly, especially team scope, owned systems, partner teams, named metrics, prioritization logic, AI/platform details, and major constraints.
 - Preserve concrete examples, mini-cases, numbers, and before/after transitions when they materially improve understanding of the idea instead of merely decorating it.
@@ -195,7 +199,7 @@ Frontmatter is part of the note schema, not optional decoration.
 - In `lessons` notes, merge overlapping lessons instead of keeping two nearby principles with different wording.
 - In `operating-model` notes, make each section cover a distinct part of how the organization or system works.
 - In `concept` notes, keep the definition compact and avoid restating it in later sections; later additions should extend the note with evidence, observed practices, or adjacent insight.
-- Treat `compact` as the default concept-note shape: one tight definition, `## Additional insights`, and `# Связанные заметки`.
+- Treat `compact` as the default concept-note shape: one tight definition, then the schema-defined `headings.additional_insights`, then the schema-defined `headings.related_notes`.
 - Switch a concept note to an `expanded` shape only when the compact form would leave a real comprehension gap.
 - Prefer `expanded` concept notes for comparative concepts, easy-to-confuse neighboring concepts, abbreviations or shorthand metric names, and concepts whose recommendation would remain unclear without one more explanatory layer.
 - In an `expanded` concept note, add only one or two short clarifying sections that answer the missing question directly, for example `## Чем отличается`, `## Когда полезен`, or `## Почему метрика шумная`.
@@ -204,18 +208,18 @@ Frontmatter is part of the note schema, not optional decoration.
 - Before creating a new concept file, run a canonical concept check against the existing vault and reuse the canonical note when the meaning already exists.
 - When indexed retrieval is configured, run that canonical concept check through the shared `kb-index` shortlist first and read only the strongest returned notes before deciding that the concept is new.
 - Do not let a nicer title, a translation, or a local wording variant justify a duplicate concept node when the durable idea is already present.
-- In `general` notes, fold examples and cases into the relevant recommendation inside `## Практика` instead of giving them a standalone section.
-- In `general` notes, do not strip useful examples out of `## Ключевые тезисы` or `## Практика` if that would leave only abstract restatements.
-- In `general` notes, do not let `## Практика` restate the same source case that already sits in `## Ключевые тезисы`; if the case is needed in both places, keep the concrete example in the stronger section and rewrite the other bullet so it adds a new action or a different implication.
-- In `general` notes, after restoring examples, explicitly compare `## Ключевые тезисы` and `## Практика` for near-duplicate bullets or repeated mini-cases.
-- For any non-`concept` note that has `## Практика` or another clearly applied section, do not add checklists by default.
+- In `general` notes, fold examples and cases into the relevant recommendation inside `headings.practice` instead of giving them a standalone section.
+- In `general` notes, do not strip useful examples out of `headings.key_theses` or `headings.practice` if that would leave only abstract restatements.
+- In `general` notes, do not let `headings.practice` restate the same source case that already sits in `headings.key_theses`; if the case is needed in both places, keep the concrete example in the stronger section and rewrite the other bullet so it adds a new action or a different implication.
+- In `general` notes, after restoring examples, explicitly compare `headings.key_theses` and `headings.practice` for near-duplicate bullets or repeated mini-cases.
+- For any non-`concept` note that has `headings.practice` or another clearly applied section, do not add checklists by default.
 - Add a checklist only when the source contains operational decision structure that would lose value if flattened into prose.
 - A checklist is warranted when at least one of these is true:
   - the source gives 3 or more concrete decision criteria
   - the source compares practical alternatives such as `A vs B`, `buy vs build`, `RAG vs fine-tuning`, or `local vs cloud`
   - the source describes an ordered sequence of actions
   - the source gives applied gates or constraints such as latency, cost, privacy, capacity, reliability, review burden, or support requirements
-- When a checklist is added to `## Практика` or an analogous applied section:
+- When a checklist is added to `headings.practice` or an analogous applied section:
   - place it inside that section or immediately below it
   - use a short heading like `### Чеклист ...`
   - size the checklist by the amount of real decision structure in the source
@@ -224,16 +228,16 @@ Frontmatter is part of the note schema, not optional decoration.
   - avoid duplication between the checklist and the surrounding applied prose; keep framing, edge cases, and advice that do not fit checklist form, but do not restate the same actions or criteria in both places
   - split into multiple short checklists if one list starts mixing different decision surfaces
 - Do not add a checklist when it would only restate the same applied advice already present in prose, or when the source offers general principles without a clear decision surface.
-- Treat dated log sections such as `## Additional insights`, `## Evidence`, and `## Observed practices` as chronological append-only logs by default.
+- Treat schema-defined dated log sections such as `headings.additional_insights`, `headings.evidence`, and `headings.observed_practices` as chronological append-only logs by default.
 - Keep dated bullets in ascending chronological order unless the user explicitly asks for latest-first ordering.
 - Insert a new dated bullet after the last existing dated bullet in that section and before the next heading or end-of-file.
 - Do not prepend a new dated bullet to the top of a log section unless latest-first ordering was explicitly requested.
-- In multi-source source-derived notes, make every bullet under `## Evidence` explicitly dated.
+- In multi-source source-derived notes, make every bullet under `headings.evidence` explicitly dated.
 - Use `YYYY-MM-DD` when the source date is known precisely and `YYYY-MM` when only the month is reliable.
-- Treat this as mandatory whenever the note frontmatter contains two or more `source` entries and the note keeps an `## Evidence` section.
-- Add `## Инструменты и фреймворки` only when it contributes a clearly separate layer of knowledge beyond `## Практика`.
-- Add `## Подводные камни и антипаттерны` only when the source discusses distinct mistakes with their own consequences; do not use it for negative rewrites of recommendations.
-- Omit `## Что можно применить сразу` when it would only repeat the same actions from `## Практика`.
+- Treat this as mandatory whenever the note frontmatter contains two or more `source` entries and the note keeps a `headings.evidence` section.
+- Add `headings.tools_frameworks` only when it contributes a clearly separate layer of knowledge beyond `headings.practice`.
+- Add `headings.pitfalls` only when the source discusses distinct mistakes with their own consequences; do not use it for negative rewrites of recommendations.
+- Omit `headings.apply_immediately` when it would only repeat the same actions from `headings.practice`.
 - Use bold only for key terms, short labels, or the leading clause of a bullet.
 - Use enough bold emphasis that dense sections remain easy to scan, but do not bold entire list items.
 - After a late manual rewrite or merge, re-check bold emphasis explicitly; it often disappears when frontmatter, links, or structure are fixed in a second pass.
@@ -246,9 +250,9 @@ Frontmatter is part of the note schema, not optional decoration.
 - If the sentence still makes full sense after replacing the source with the claim itself, rewrite it as standalone knowledge.
 - This includes phrases such as `источник показывает`, `автор выделяет`, or `в транскрипте` when they can be rewritten as direct knowledge.
 - Keep provenance in frontmatter and use source mentions in the body only when the source itself is a useful case, scenario, or comparison rather than a process footnote.
-- Do not apply that source-scaffolding cleanup to dated log sections such as `## Evidence`, `## Additional insights`, and `## Observed practices`; in those sections, references to `статья`, `подкаст`, `выпуск`, or similar source-type labels are useful provenance and should normally stay.
+- Do not apply that source-scaffolding cleanup to schema-defined dated log sections such as `headings.evidence`, `headings.additional_insights`, and `headings.observed_practices`; in those sections, references to `статья`, `подкаст`, `выпуск`, or similar source-type labels are useful provenance and should normally stay.
 - Before finalizing a source-derived note, check whether the draft has flattened the source into generic statements.
-- For each major point in `## Ключевые тезисы`, `## Практика`, `## Подводные камни и антипаттерны`, or a similar section, try to preserve at least one concrete anchor from the source when it is available:
+- For each major point in `headings.key_theses`, `headings.practice`, `headings.pitfalls`, or a similar section, try to preserve at least one concrete anchor from the source when it is available:
   - an example scenario
   - a number or rough quantitative benchmark
   - a step sequence or pipeline
@@ -256,7 +260,13 @@ Frontmatter is part of the note schema, not optional decoration.
   - a boundary, caveat, or failure mode
 - Prefer concrete anchors that change how the reader would act, decide, estimate, or scope the problem.
 - Do not add decorative detail that does not improve practical understanding.
-- In `## Подводные камни и антипаттерны`, avoid reducing the section to bare one-line mistake labels when the source gives a mechanism, consequence, or concrete failure pattern that explains why the mistake matters.
+- In `headings.pitfalls`, avoid reducing the section to bare one-line mistake labels when the source gives a mechanism, consequence, or concrete failure pattern that explains why the mistake matters.
+- Keep `headings.key_theses`, `headings.practice`, and `headings.pitfalls` functionally distinct.
+- `headings.key_theses` should carry the main ideas, distinctions, and decision logic.
+- `headings.practice` should turn those ideas into actions, heuristics, checklists, or examples.
+- `headings.pitfalls` should focus on failure modes, misleading shortcuts, and concrete ways the approach breaks in practice.
+- Do not restate the same point across these sections with only a polarity flip or minor rewording.
+- If an anti-pattern is only the inverse of an earlier recommendation, either remove it or rewrite it to include a specific mechanism, risk, tradeoff, or consequence that is not already stated above.
 - This pass is especially important for transcripts and long-form spoken sources, where the most useful specificity is often distributed across the material rather than concentrated in the opening section.
 - Keep role names and artifact names semantically distinct in Russian when the English source uses nearby terms that would otherwise collapse into one word.
 - In particular, reserve `продукт` for the software product, product work, or product-side concerns, and spell the role out explicitly as `Product Manager` when that exact role is meant.
@@ -278,16 +288,18 @@ Frontmatter is part of the note schema, not optional decoration.
 - Use Obsidian wikilinks for related notes.
 - Keep link labels short and consistent with filenames.
 - Reuse the exact existing title when linking to an existing note.
+- Do not rename, translate, or remove a wikilink just because the note title contains English terms; note titles are canonical graph identifiers and may legitimately be mixed-language.
+- Do not translate, rename, or stylistically rewrite schema-defined section headings in individual notes. If a canonical heading should change, update [config/note_schema.yaml](../config/note_schema.yaml), the checker, tests, and affected notes together as one explicit schema migration.
 - Link concept notes by title only, even though they live in `Ideas/Concepts`.
 - When the body text explicitly mentions another existing note or concept as a knowledge reference, turn that mention into a wikilink instead of leaving it as plain text.
-- Prefer inline wikilinks at the point of mention, not only in `# Связанные заметки`.
+- Prefer inline wikilinks at the point of mention, not only in `headings.related_notes`.
 - Treat inline wikilinks as the primary graph edges.
-- Do not mechanically repeat the same note in `# Связанные заметки` when it was already linked in the body.
+- Do not mechanically repeat the same note in `headings.related_notes` when it was already linked in the body.
 - Use the closing section for net-new navigation links, not as a duplicate dump of all inline references.
 
 ## Required Closing Section
 
-- End the note with `# Связанные заметки` only when at least one net-new navigation link remains after final deduplication.
+- End the note with `headings.related_notes` only when at least one net-new navigation link remains after final deduplication.
 - Remove the closing heading entirely when deduplication leaves it empty.
 - Add 3-10 wikilinks when that many net-new relevant notes exist.
 - Prefer links to touched concept notes, source-derived notes, and the closest existing concepts in the vault.

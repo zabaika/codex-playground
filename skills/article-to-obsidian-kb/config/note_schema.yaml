@@ -1,0 +1,31 @@
+{
+  "headings": {
+    "key_theses": "## Ключевые тезисы",
+    "practice": "## Практика",
+    "pitfalls": "## Подводные камни и антипаттерны",
+    "tools_frameworks": "## Инструменты и фреймворки",
+    "apply_immediately": "## Что можно применить сразу",
+    "evidence": "## Evidence",
+    "additional_insights": "## Additional insights",
+    "observed_practices": "## Observed practices",
+    "run_status": "## Статус прогона",
+    "related_notes": "# Связанные заметки",
+    "council_question": "## Формулировка вопроса для совета",
+    "council_verdict": "## Вердикт совета",
+    "council_agree": "### Где совет согласен",
+    "council_clashes": "### Где мнения расходятся",
+    "council_blind_spots": "### Какие слепые зоны нашел совет",
+    "council_recommendation": "### Рекомендация",
+    "council_first_step": "### Что сделать первым",
+    "council_advisor_positions": "## Позиции советников",
+    "council_peer_review": "## Взаимная проверка"
+  },
+  "note_shapes": {
+    "concept": {
+      "compact": [
+        "additional_insights",
+        "related_notes"
+      ]
+    }
+  }
+}

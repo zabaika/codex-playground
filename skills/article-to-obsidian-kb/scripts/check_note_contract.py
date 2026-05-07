@@ -9,6 +9,12 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+from note_schema import heading
+
 
 SOURCE_NOTE_TYPES = {"lessons", "general", "operating-model"}
 STRUCTURED_NOTE_TYPES = {"council-verdict"}
@@ -21,6 +27,26 @@ LATIN_TOKEN_RE = re.compile(
 )
 DATED_BULLET_RE = re.compile(r"^-\s+(\d{4}-\d{2}-\d{2}):")
 PARTIAL_DATED_BULLET_RE = re.compile(r"^-\s+(\d{4}-\d{2}(?:-\d{2})?):")
+
+RELATED_NOTES_HEADING = heading("related_notes")
+KEY_THESES_HEADING = heading("key_theses")
+PRACTICE_HEADING = heading("practice")
+PITFALLS_HEADING = heading("pitfalls")
+TOOLS_FRAMEWORKS_HEADING = heading("tools_frameworks")
+APPLY_IMMEDIATELY_HEADING = heading("apply_immediately")
+ADDITIONAL_INSIGHTS_HEADING = heading("additional_insights")
+EVIDENCE_HEADING = heading("evidence")
+OBSERVED_PRACTICES_HEADING = heading("observed_practices")
+RUN_STATUS_HEADING = heading("run_status")
+COUNCIL_QUESTION_HEADING = heading("council_question")
+COUNCIL_VERDICT_HEADING = heading("council_verdict")
+COUNCIL_AGREE_HEADING = heading("council_agree")
+COUNCIL_CLASHES_HEADING = heading("council_clashes")
+COUNCIL_BLIND_SPOTS_HEADING = heading("council_blind_spots")
+COUNCIL_RECOMMENDATION_HEADING = heading("council_recommendation")
+COUNCIL_FIRST_STEP_HEADING = heading("council_first_step")
+COUNCIL_ADVISOR_POSITIONS_HEADING = heading("council_advisor_positions")
+COUNCIL_PEER_REVIEW_HEADING = heading("council_peer_review")
 
 
 @dataclass(frozen=True)
@@ -106,7 +132,7 @@ def _find_heading_block(body: str, heading: str) -> tuple[int | None, list[str]]
 
 
 def _closing_links_count(body: str) -> tuple[int | None, int]:
-    line_no, tail = _find_heading_block(body, "# Связанные заметки")
+    line_no, tail = _find_heading_block(body, RELATED_NOTES_HEADING)
     if line_no is None:
         return None, 0
     count = 0
@@ -242,15 +268,15 @@ def _check_council_verdict_shape(body: str) -> list[Violation]:
     violations: list[Violation] = []
     normalized_body = body.lstrip("\n")
     required_headings = [
-        "## Формулировка вопроса для совета",
-        "## Вердикт совета",
-        "## Позиции советников",
-        "## Взаимная проверка",
-        "### Где совет согласен",
-        "### Где мнения расходятся",
-        "### Какие слепые зоны нашел совет",
-        "### Рекомендация",
-        "### Что сделать первым",
+        COUNCIL_QUESTION_HEADING,
+        COUNCIL_VERDICT_HEADING,
+        COUNCIL_ADVISOR_POSITIONS_HEADING,
+        COUNCIL_PEER_REVIEW_HEADING,
+        COUNCIL_AGREE_HEADING,
+        COUNCIL_CLASHES_HEADING,
+        COUNCIL_BLIND_SPOTS_HEADING,
+        COUNCIL_RECOMMENDATION_HEADING,
+        COUNCIL_FIRST_STEP_HEADING,
     ]
     violations.extend(_check_required_headings(body, required_headings))
 
@@ -270,12 +296,13 @@ def _check_council_verdict_shape(body: str) -> list[Violation]:
                 1,
             )
         )
-    if re.search(r"(?m)^# (?!Связанные заметки$)", body):
+    related_h1_title = re.escape(RELATED_NOTES_HEADING.removeprefix("# ").strip())
+    if re.search(rf"(?m)^# (?!{related_h1_title}$)", body):
         line = _body_line_number(body, "# ")
         violations.append(
             Violation(
                 "structure.unexpected-h1-in-body",
-                "В теле council verdict note не должно быть отдельного H1-заголовка кроме `# Связанные заметки`.",
+                f"В теле council verdict note не должно быть отдельного H1-заголовка кроме `{RELATED_NOTES_HEADING}`.",
                 line,
             )
         )
@@ -297,15 +324,15 @@ def _check_council_verdict_section_order(body: str) -> list[Violation]:
     violations: list[Violation] = []
     heading_lines = _heading_line_map(body)
     ordered = [
-        "## Формулировка вопроса для совета",
-        "## Вердикт совета",
-        "### Где совет согласен",
-        "### Где мнения расходятся",
-        "### Какие слепые зоны нашел совет",
-        "### Рекомендация",
-        "### Что сделать первым",
-        "## Позиции советников",
-        "## Взаимная проверка",
+        COUNCIL_QUESTION_HEADING,
+        COUNCIL_VERDICT_HEADING,
+        COUNCIL_AGREE_HEADING,
+        COUNCIL_CLASHES_HEADING,
+        COUNCIL_BLIND_SPOTS_HEADING,
+        COUNCIL_RECOMMENDATION_HEADING,
+        COUNCIL_FIRST_STEP_HEADING,
+        COUNCIL_ADVISOR_POSITIONS_HEADING,
+        COUNCIL_PEER_REVIEW_HEADING,
     ]
     previous_line = None
     previous_heading = None
@@ -325,13 +352,13 @@ def _check_council_verdict_section_order(body: str) -> list[Violation]:
         previous_line = current_line
         previous_heading = heading
 
-    related_line = heading_lines.get("# Связанные заметки")
-    peer_review_line = heading_lines.get("## Взаимная проверка")
+    related_line = heading_lines.get(RELATED_NOTES_HEADING)
+    peer_review_line = heading_lines.get(COUNCIL_PEER_REVIEW_HEADING)
     if related_line is not None and peer_review_line is not None and related_line <= peer_review_line:
         violations.append(
             Violation(
                 "structure.invalid-related-section-order",
-                "`# Связанные заметки` должен идти только после `## Взаимная проверка`.",
+                f"`{RELATED_NOTES_HEADING}` должен идти только после `{COUNCIL_PEER_REVIEW_HEADING}`.",
                 related_line,
             )
         )
@@ -359,8 +386,8 @@ def _check_council_verdict_degraded_status_block(body: str) -> list[Violation]:
     lines = body.splitlines()
     start_line, section_lines = _section_slice(
         lines,
-        "## Статус прогона",
-        {"## Формулировка вопроса для совета"},
+        RUN_STATUS_HEADING,
+        {COUNCIL_QUESTION_HEADING},
     )
     if start_line is None:
         return violations
@@ -369,7 +396,7 @@ def _check_council_verdict_degraded_status_block(body: str) -> list[Violation]:
         violations.append(
             Violation(
                 "structure.empty-degraded-status-block",
-                "После `## Статус прогона` должен быть marker line и объяснение причины деградации.",
+                f"После `{RUN_STATUS_HEADING}` должен быть marker line и объяснение причины деградации.",
                 start_line,
             )
         )
@@ -399,8 +426,8 @@ def _check_council_verdict_advisor_blocks(body: str) -> list[Violation]:
     lines = body.splitlines()
     start_line, section_lines = _section_slice(
         lines,
-        "## Позиции советников",
-        {"## Взаимная проверка"},
+        COUNCIL_ADVISOR_POSITIONS_HEADING,
+        {COUNCIL_PEER_REVIEW_HEADING},
     )
     if start_line is None:
         return violations
@@ -462,10 +489,10 @@ def _check_council_verdict_advisor_blocks(body: str) -> list[Violation]:
         violations.append(
             Violation(
                 "structure.missing-advisor-blocks",
-                "Под `## Позиции советников` должен быть хотя бы один advisor block.",
-                start_line,
+                    f"Под `{COUNCIL_ADVISOR_POSITIONS_HEADING}` должен быть хотя бы один advisor block.",
+                    start_line,
+                )
             )
-        )
     return violations
 
 
@@ -474,8 +501,8 @@ def _check_council_verdict_peer_review_blocks(body: str) -> list[Violation]:
     lines = body.splitlines()
     start_line, section_lines = _section_slice(
         lines,
-        "## Взаимная проверка",
-        {"# Связанные заметки"},
+        COUNCIL_PEER_REVIEW_HEADING,
+        {RELATED_NOTES_HEADING},
     )
     if start_line is None:
         return violations
@@ -519,10 +546,10 @@ def _check_council_verdict_peer_review_blocks(body: str) -> list[Violation]:
         violations.append(
             Violation(
                 "structure.missing-peer-review-blocks",
-                "Под `## Взаимная проверка` должен быть хотя бы один peer-review block.",
-                start_line,
+                    f"Под `{COUNCIL_PEER_REVIEW_HEADING}` должен быть хотя бы один peer-review block.",
+                    start_line,
+                )
             )
-        )
     return violations
 
 
@@ -672,7 +699,10 @@ def _check_generic_latin_residue(
     allow_terms = {term for term in allow_latin_terms}
     allow_terms.update(term.lower() for term in allow_latin_terms)
     for idx, line in enumerate(body.splitlines(), start=1):
-        visible = _visible_text(line)
+        # Note titles inside wikilinks are canonical graph identifiers and may
+        # legitimately contain English terms, so do not treat them as latin residue.
+        line_without_wikilinks = WIKILINK_RE.sub("", line)
+        visible = _visible_text(line_without_wikilinks)
         for match in LATIN_TOKEN_RE.finditer(visible):
             token = match.group(0)
             if _is_allowed_latin_token(token, allow_terms):
@@ -756,7 +786,7 @@ def _check_required_related_links(
     body: str, required_related_links: list[str]
 ) -> list[Violation]:
     violations: list[Violation] = []
-    _, tail = _find_heading_block(body, "# Связанные заметки")
+    _, tail = _find_heading_block(body, RELATED_NOTES_HEADING)
     tail_text = "\n".join(tail)
     for target in required_related_links:
         if f"[[{target}]]" not in tail_text:
@@ -771,10 +801,10 @@ def _check_required_related_links(
 
 def _check_related_links_dedup(body: str) -> list[Violation]:
     violations: list[Violation] = []
-    heading_line, tail = _find_heading_block(body, "# Связанные заметки")
+    heading_line, tail = _find_heading_block(body, RELATED_NOTES_HEADING)
     if heading_line is None:
         return violations
-    body_before_closing = body.split("# Связанные заметки", 1)[0]
+    body_before_closing = body.split(RELATED_NOTES_HEADING, 1)[0]
     inline_targets = set(_extract_wikilink_targets(body_before_closing))
     for offset, line in enumerate(tail, start=1):
         stripped = line.strip()
@@ -790,7 +820,7 @@ def _check_related_links_dedup(body: str) -> list[Violation]:
             violations.append(
                 Violation(
                     f"closing.duplicate-inline-link:{target}",
-                    f"Ссылка `[[{target}]]` уже есть в теле заметки и не должна механически повторяться в `# Связанные заметки`.",
+                    f"Ссылка `[[{target}]]` уже есть в теле заметки и не должна механически повторяться в `{RELATED_NOTES_HEADING}`.",
                     heading_line + offset,
                 )
             )
@@ -818,7 +848,7 @@ def _check_closing_section(
         violations.append(
             Violation(
                 "closing.empty-related-section",
-                "Пустой блок `# Связанные заметки` нужно удалить целиком, а не оставлять пустой heading.",
+                f"Пустой блок `{RELATED_NOTES_HEADING}` нужно удалить целиком, а не оставлять пустой heading.",
                 heading_line,
             )
         )
@@ -826,17 +856,17 @@ def _check_closing_section(
         violations.append(
             Violation(
                 "closing.too-few-related-links",
-                f"В `# Связанные заметки` найдено только {links_count} ссылок, нужно минимум {min_related_links}.",
+                f"В `{RELATED_NOTES_HEADING}` найдено только {links_count} ссылок, нужно минимум {min_related_links}.",
                 heading_line,
             )
         )
     if require_related_section_final:
         headings = _extract_headings(body)
-        if headings and headings[-1][1] != "# Связанные заметки":
+        if headings and headings[-1][1] != RELATED_NOTES_HEADING:
             violations.append(
                 Violation(
                     "closing.related-section-not-final",
-                    "Блок `# Связанные заметки` должен быть последним heading в заметке.",
+                    f"Блок `{RELATED_NOTES_HEADING}` должен быть последним heading в заметке.",
                     heading_line,
                 )
             )
@@ -891,7 +921,7 @@ def _check_multisource_evidence_dates(
     sources = frontmatter.get("source")
     if not isinstance(sources, list) or len(sources) < 2:
         return violations
-    line_no, tail = _find_heading_block(body, "## Evidence")
+    line_no, tail = _find_heading_block(body, EVIDENCE_HEADING)
     if line_no is None:
         return violations
     for offset, line in enumerate(tail, start=1):
@@ -904,7 +934,7 @@ def _check_multisource_evidence_dates(
             violations.append(
                 Violation(
                     "chronology.multisource-evidence-missing-date",
-                    "В multi-source заметке каждый bullet под `## Evidence` должен начинаться с даты источника в формате `YYYY-MM-DD:` или `YYYY-MM:`.",
+                    f"В multi-source заметке каждый bullet под `{EVIDENCE_HEADING}` должен начинаться с даты источника в формате `YYYY-MM-DD:` или `YYYY-MM:`.",
                     line_no + offset,
                 )
             )
@@ -925,7 +955,7 @@ def _check_multisource_frontmatter_date_matches_evidence(
     date_value = frontmatter.get("date")
     if not isinstance(date_value, str) or not re.fullmatch(r"\d{4}", date_value):
         return violations
-    line_no, tail = _find_heading_block(body, "## Evidence")
+    line_no, tail = _find_heading_block(body, EVIDENCE_HEADING)
     if line_no is None:
         return violations
     years: list[str] = []
@@ -943,7 +973,7 @@ def _check_multisource_frontmatter_date_matches_evidence(
         violations.append(
             Violation(
                 "frontmatter.multisource-date-mismatch",
-                f"В multi-source заметке `frontmatter.date` должен совпадать с годом самого нового источника из `## Evidence`, здесь ожидается `{newest_year}`.",
+                f"В multi-source заметке `frontmatter.date` должен совпадать с годом самого нового источника из `{EVIDENCE_HEADING}`, здесь ожидается `{newest_year}`.",
                 1,
             )
         )

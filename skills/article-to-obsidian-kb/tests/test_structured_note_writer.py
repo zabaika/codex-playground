@@ -26,6 +26,10 @@ def load_module(path: Path, name: str):
 
 WRITER = load_module(SCRIPT_PATH, "write_structured_note")
 CHECKER = load_module(CHECKER_PATH, "structured_check_note_contract")
+RELATED_NOTES_HEADING = CHECKER.RELATED_NOTES_HEADING
+COUNCIL_VERDICT_HEADING = CHECKER.COUNCIL_VERDICT_HEADING
+COUNCIL_ADVISOR_POSITIONS_HEADING = CHECKER.COUNCIL_ADVISOR_POSITIONS_HEADING
+COUNCIL_PEER_REVIEW_HEADING = CHECKER.COUNCIL_PEER_REVIEW_HEADING
 
 
 class StructuredNoteWriterTests(unittest.TestCase):
@@ -85,9 +89,9 @@ class StructuredNoteWriterTests(unittest.TestCase):
             self.assertIn("type: council-verdict", text)
             self.assertIn("scratch/llm-council/council-payload-20260503-231500.json", text)
             self.assertNotIn("/Users/andrejzabaev/Documents/Playground/scratch/llm-council", text)
-            self.assertIn("## Вердикт совета", text)
-            self.assertIn("## Позиции советников", text)
-            self.assertIn("## Взаимная проверка", text)
+            self.assertIn(COUNCIL_VERDICT_HEADING, text)
+            self.assertIn(COUNCIL_ADVISOR_POSITIONS_HEADING, text)
+            self.assertIn(COUNCIL_PEER_REVIEW_HEADING, text)
             self.assertIn("[[#Executor|Executor]]", text)
 
             violations = CHECKER.collect_violations(
@@ -173,7 +177,7 @@ class StructuredNoteWriterTests(unittest.TestCase):
 
     def test_writer_does_not_create_destination_file_when_prewrite_validation_fails(self) -> None:
         payload = WRITER.load_payload(FIXTURE_PAYLOAD)
-        invalid_markdown = "---\ntitle: 'bad'\nsource:\n  - 'scratch/x.json'\ntype: council-verdict\ntags:\n  - council-verdict\ndate: '2026'\n---\n## Вердикт совета\n"
+        invalid_markdown = f"---\ntitle: 'bad'\nsource:\n  - 'scratch/x.json'\ntype: council-verdict\ntags:\n  - council-verdict\ndate: '2026'\n---\n{COUNCIL_VERDICT_HEADING}\n"
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp_root = Path(tmpdir)
             output_path = tmp_root / "invalid.md"
@@ -188,9 +192,9 @@ class StructuredNoteWriterTests(unittest.TestCase):
 
     def test_checker_rejects_council_section_order_regression(self) -> None:
         markdown = self._valid_council_markdown()
-        advisors_start = markdown.index("## Позиции советников")
-        reviews_start = markdown.index("## Взаимная проверка")
-        related_start = markdown.index("# Связанные заметки")
+        advisors_start = markdown.index(COUNCIL_ADVISOR_POSITIONS_HEADING)
+        reviews_start = markdown.index(COUNCIL_PEER_REVIEW_HEADING)
+        related_start = markdown.index(RELATED_NOTES_HEADING)
         advisors_block = markdown[advisors_start:reviews_start]
         reviews_block = markdown[reviews_start:related_start]
         markdown = (
