@@ -8,7 +8,7 @@ Standalone Telegram task agent focused on conversational work:
 Project-wide implementation rules and reusable conventions are documented in `../RULEBOOK.md`.
 Project-specific bot and maintenance rules live in [./AGENTS.md](./AGENTS.md).
 
-## What It Does
+## What it does
 
 - checks bot connectivity with `getMe`
 - receives incoming messages with long polling via `getUpdates`
@@ -22,12 +22,14 @@ Project-specific bot and maintenance rules live in [./AGENTS.md](./AGENTS.md).
 
 ## Config
 
-Use [../RULEBOOK.md](../RULEBOOK.md) as the source of truth for repository-wide conventions:
+Use [../RULEBOOK.md](../RULEBOOK.md) for repository-wide config, secret, path, and logging conventions. This section documents only `telegram_agent_bot`-specific runtime settings and operator-facing behavior.
 
-- local-vs-committed config layout
-- secret handling
-- runtime file placement
-- logging and storage safety rules
+Main config groups:
+
+- `[telegram]`, `[bridge]`: Telegram delivery, access control, default command, and reply chunking
+- `[agent]`: OpenAI model and tool/output guardrails
+- `[agent_prompts]`: worker system instructions
+- `[secrets]`: secret references or local secret values
 
 Config shape:
 
@@ -77,19 +79,15 @@ Notes:
 - `bridge.allowed_usernames` may be a comma-separated value or a `keychain://...` reference that resolves to a comma-separated list
 - `bridge.default_command = "agent"` means plain text is treated as `/agent ...`; set it empty to require explicit commands
 - `bridge.text_chunk_size` controls Telegram reply chunking
-- `bridge.agent_stats_row_limit` limits `/agent-stats` to the latest N rows from `ai_usage_log`, so the command stays fast as the database grows
+- `bridge.agent_stats_row_limit` limits `/agent-stats` to a recent window from `ai_usage_log`
 - `agent.allowed_roots` is the allowlist for local file access
 - `agent.model` defaults to `gpt-5.4-mini` in the example config
 - `agent.max_local_matches`, `agent.max_file_lines`, and `agent.max_directory_entries` control how much local context one tool call may return
 - `agent.max_tool_output_chars` is the main payload guardrail for `function_call_output`; keep it conservative to avoid oversized OpenAI requests
 - `agent.prompt_cache_scope = "global"` maximizes prompt-cache reuse for one-owner bots; use `"chat"` only if you want separate cache keys per Telegram chat
-- the bridge resolves bot/OpenAI secrets once at startup and passes only the minimum required env vars to the worker, matching the neighbor project's secret-handling pattern
-- the worker resolves secrets in this order:
-  1. environment variable
-  2. `keychain://...` reference
-  3. `op://...` reference
-  4. plain local value from `runtime.local.toml`
-- the worker logs each OpenAI request round into `data/telegram_agent.sqlite3` inside `ai_usage_log`, including `prompt_cache_key`, prompt hashes, cached input tokens, and prefix overlap with the previous request for the same cache key
+- the bridge resolves bot/OpenAI secrets once at startup and passes only the minimum required env vars to the worker
+- the worker resolves secrets in this order: environment variable, `keychain://...`, `op://...`, plain local value
+- the worker logs each OpenAI request round into `data/telegram_agent.sqlite3` inside `ai_usage_log`
 
 ### macOS Keychain
 
@@ -97,9 +95,7 @@ Suggested generic-password layout in Keychain:
 
 - service: `telegram-agent-bot`
 - accounts:
-  - `bot_token`
-  - `openai_api_key`
-  - later, add extra accounts only when the bot explicitly asks for a new secret
+  - store each secret under its own account name, for example `bot_token`
 
 Then set these refs in `runtime.local.toml`:
 
@@ -123,42 +119,15 @@ Before running the scripts:
 Telegram bot commands are executed only while the local bridge process is running.
 If `telegram_agent_bridge.py listen --run-commands` is not running, the bot can receive messages in Telegram but it will not execute the agent worker.
 
-Bridge commands are accepted in these forms:
-
-- `/agent найди обработку OCR`
-- `найди обработку OCR`
-- `agent найди обработку OCR`
-- `/agent@your_bot_username найди обработку OCR`
-- `/reset`
-- `reset`
-
+Bridge commands are accepted with or without the leading `/`.
 Only `chat_id` values from `[bridge].allowed_chat_ids` and the configured Telegram user allowlist may run commands.
-The leading `/` is optional for supported commands.
 
 Bot command quick reference:
 
-- `/help`
-  show command help
-- `/agent <task>`
-  run the task agent and answer back into Telegram
-- `/agent-stats`
-  show local OpenAI usage and prompt-cache summary from `ai_usage_log`
-- `/reset`
-  clear saved conversation context for the current chat
-
-Bot command notes:
-
-- regular non-command chat text does not trigger execution
-- if `bridge.default_command` is configured, plain text is automatically routed to that command
-- the default agent instructions force Russian answers and require asking before file creation or access expansion
-- `/agent` keeps one OpenAI response thread per Telegram chat in `data/agent_sessions.local.json`
-- `/agent` may inspect only `agent.allowed_roots`
-- `/agent` uses public web search/fetch plus local read-only tools, then synthesizes the answer with the configured OpenAI model
-- `/agent-stats` is handled locally by the bridge and does not spend OpenAI tokens
-- `/agent-stats` reports over a bounded recent window, not over the whole table
-- the bridge sends Telegram replies with explicit `HTML` parse mode and post-processes text for stable readability
-- outbound Telegram replies are written to `data/outbox.jsonl` as redacted summaries
-- `sendMessage` retries transient failures before giving up and logs reply-send errors into launchd stderr
+- `/help`: show command help
+- `/agent <task>`: run the task agent and answer back into Telegram
+- `/agent-stats`: show local OpenAI usage and prompt-cache summary from `ai_usage_log`
+- `/reset`: clear saved conversation context for the current chat
 
 Start the bridge manually:
 
@@ -178,16 +147,29 @@ Restart the background service:
 bash telegram_agent_bot/scripts/restart_launch_agent.sh
 ```
 
+Service update rule:
+
+- rerun `install_launch_agent.sh` after code, config, or prompt changes
+- use `restart_launch_agent.sh` only when the installed code and config are already up to date
+
 Daemon logs:
 
 - `telegram_agent_bot/data/launchd/bridge.startup.log`
 - `telegram_agent_bot/data/launchd/bridge.stdout.log`
 - `telegram_agent_bot/data/launchd/bridge.stderr.log`
 
+Shared command rules:
+
+- regular non-command chat text does not trigger execution unless `bridge.default_command` routes it automatically
+- `/agent` keeps one OpenAI response thread per Telegram chat in `data/agent_sessions.local.json`
+- `/agent` may inspect only `agent.allowed_roots`
+- `/agent-stats` is handled locally by the bridge and does not spend OpenAI tokens
+- outbound Telegram replies are written to `data/outbox.jsonl` as redacted summaries
+
 Example prompts:
 
 ```text
-/agent найди в проекте обработку OCR и коротко объясни архитектуру
-/agent проверь последние новости OpenAI за сегодня и дай 5 пунктов с ссылками
+/agent find the OCR handling in this project and briefly explain the architecture
+/agent check the latest OpenAI news today and give me 5 bullet points with links
 /reset
 ```

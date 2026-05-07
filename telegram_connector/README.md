@@ -21,16 +21,14 @@ Project-specific coding guidance is documented in [./AGENTS.md](./AGENTS.md).
 - downloads channel media locally
 - runs OCR for downloaded images with Tesseract
 - exports saved channel history to CSV
-- can build and deliver a config-driven daily AI digest to Telegram
+- builds config-driven OpenAI digests over stored channel history
+- delivers per-channel digest summaries to Telegram
+- records AI usage for digest and related analysis runs in SQLite
+- exposes a local `/top-models` bridge command backed by the configured external ranking API
 
 ## Config
 
-Use [../RULEBOOK.md](../RULEBOOK.md) as the source of truth for repository-wide conventions:
-
-- local-vs-committed config layout
-- secret handling
-- runtime file placement
-- logging and storage safety rules
+Use [../RULEBOOK.md](../RULEBOOK.md) for repository-wide config, secret, path, and logging conventions. This section documents only `telegram_connector`-specific runtime settings and operator-facing behavior.
 
 Canonical config files:
 
@@ -38,84 +36,85 @@ Canonical config files:
 - local machine-specific runtime values: `config/runtime.local.toml`
 - version-controlled digest prompt bundle referenced from runtime config: [config/digest_prompts.toml](./config/digest_prompts.toml)
 
-Config ownership:
+Main config groups:
 
-- `[processing]`: cross-cutting analysis defaults such as model and OCR
-- `[digest]`: digest schedule, default window, and delivery behavior
-- `[digest_ai]`: digest-wide AI pass limits shared by every period
-- `[digest_limits.*]`: profile-based digest sync limits
+- `[telethon]`, `[auth]`, `[channels]`: Telegram account, auth mode, and default channel selection
+- `[processing]`, `[ocr]`: shared analysis defaults, including model and OCR behavior
+- `[digest]`, `[digest_ai]`, `[digest_limits.*]`, `[digest_prompts]`: digest windows, AI batching, sync limits, and prompt bundle
 - `[sync]`: non-digest sync limits and SQLite commit batching
-- `[digest_prompts].file`: path to the version-controlled prompt bundle
-- `[bridge]`: bot access control, chunking, `/agent-stats`, and `/top-models`
-- `[paths]`, `[ocr]`, `[secrets]`: local paths, OCR prompt, and secret references
+- `[bridge]`: bot access control, reply chunking, `/agent-stats`, and `/top-models`
+- `[paths]`, `[secrets]`: local runtime paths and secret references
 
 `default_chat_id` can stay empty until you send at least one message to the bot and discover your chat id through `listen`.
 
-For the history client:
+### History client and auth
 
 - `telethon.api_id` and `secrets.api_hash` come from [my.telegram.org](https://my.telegram.org)
-- `telethon.api_id`, `telethon.phone` and `secrets.*` can be plain local values, but the preferred mode is a Keychain reference like `keychain://telegram-connector/bot_token`
-- `telethon.phone` is the phone number of the Telegram user account that will read channel history; it can also be a Keychain reference
+- prefer Keychain references like `keychain://telegram-connector/bot_token` for `telethon.phone` and `secrets.*`
+- `telethon.phone` is the phone number of the Telegram user account that reads channel history
 - `secrets.user_password` is optional and only needed when Telegram account 2FA is enabled
 - for private channels, that user account must already be a member of the channel
 - `telethon.user_session_name` and `telethon.bot_session_name` keep separate Telethon sessions
 - `auth.default_mode = "user"` makes user-auth the default when a command does not specify auth explicitly
 - you can still force `bot` or `auto` per command when needed
+
+### Default channels
+
 - `channels.default_list` is optional and stores default channels in the format `"channel, display name"`
 - public channels can be listed as `@username`
 - private groups and channels without a public username can be listed by their Bot API-style numeric id, for example `-1001449711572, Private Group`
 - if a command does not include `--channel` or `/... @channel`, the history client uses `channels.default_list`
-- if a command explicitly includes one channel or a comma-separated channel list, that explicit value overrides the config list
-- `[processing]` stores cross-cutting defaults shared by analysis flows
+- any explicit channel or comma-separated channel list overrides the config list
+
+### Processing and bridge defaults
+
 - `processing.model` is the default OpenAI model used by digest and other analysis commands
 - `processing.ocr` controls whether processing flows should download image media and run OCR by default
 - `bridge.allowed_chat_ids` restricts which Telegram chats may invoke bridge commands; if it is empty, the bridge falls back to `telegram.default_chat_id` when that value is set
-- `bridge.allowed_user_ids` additionally restricts bot-triggered commands to specific sender ids
-- `bridge.allowed_usernames` additionally restricts bot-triggered commands to specific sender usernames; `@name` and `name` are treated the same
+- `bridge.allowed_user_ids` and `bridge.allowed_usernames` further restrict which senders may trigger bot commands; `@name` and `name` are treated the same
 - `bridge.text_chunk_size` controls how long Telegram text replies may grow before the bot splits them into multiple messages
-- `bridge.agent_stats_row_limit` limits `/agent-stats` to the latest N rows from `ai_usage_log`, so the command stays fast as the database grows
-- `bridge.top_models_api_url` configures the external ranking source used by `/top-models`
-- `bridge.top_models_timeout_seconds` bounds one `/top-models` fetch attempt
-- `bridge.top_models_default_limit` controls how many models `/top-models` returns when limit is omitted
-- `bridge.top_models_cache_ttl_seconds` caches the last `/top-models` payload in the running bridge process for a short period
-- `[digest]` stores default daily-digest behavior
+- `bridge.agent_stats_row_limit` limits `/agent-stats` to a recent window from `ai_usage_log`
+- `bridge.top_models_*` controls the external ranking source, timeout, cache TTL, and default result limit for `/top-models`
+
+### Digest defaults
+
 - `digest.separator_text` optionally appends the configured divider twice to the end of each digest message; leave it empty to disable the separator
 - `digest.since` and `digest.until` define the default analysis window; `yesterday` is the recommended morning default
 - `digest.until` uses the same aliases as `since`, but date-only values are expanded to the end of that UTC day
 - `digest.min_messages_for_ai` sets the per-channel minimum required for OpenAI analysis; below that threshold digest still syncs messages but sends only a short Telegram note without AI processing
-- supported date aliases for `since` / `until`: `today`, `yesterday`, `week`, `month`, `-Nd`
-- `-Nd` means “N days back from the current UTC date”, so with current UTC date `2026-03-23`, `-3d` resolves to `2026-03-20`
+- supported date aliases for `since` / `until` include `today` and `-Nd`
 - the same alias logic now applies consistently to `sync`, `export-csv`, `ocr-pending`, and `digest`
 - `digest.mark_read` enables the existing mark-as-read mechanism for digest prep-sync; it only has effect in `user` auth mode
-- `[digest_prompts].file` points to the version-controlled TOML bundle that stores the AI system instructions and per-channel prompt templates
-- `digest_limits.day`, `digest_limits.week`, and `digest_limits.month` override digest limits automatically based on the chosen date window
-- `digest_limits.day` applies to any one-day window, including `today`, `yesterday`, or an explicit single date like `since=2026-03-18 until=2026-03-18`
-- when more than one channel is selected for `digest`, the active digest `sync_limit` is distributed across them inside that run so that every selected channel gets a share of the budget
-- `digest_ai.messages_per_ai_pass` is the maximum number of stored Telegram messages allowed in one AI pass; if the full channel window stays within this count and also fits the shared block budget, digest uses one direct AI request, otherwise the same value becomes the fallback chunk size
-- `digest_ai.message_text_max_chars` is the maximum number of characters kept from the main Telegram message text for one stored message row
-- `digest_ai.message_ocr_max_chars` is the maximum number of characters kept from OCR text for one stored message row
-- metadata such as `id`, `date`, `sender`, `link`, `forwards`, and `replies` are always included and are not charged against the text or OCR limits
-- `digest_ai.message_block_max_chars` is the maximum rendered character budget for one AI input block for one channel, regardless of whether the digest window is day, week, or month
-- current starting point in config therefore uses `digest_ai.messages_per_ai_pass = 500`, `digest_ai.message_text_max_chars = 450`, `digest_ai.message_ocr_max_chars = 300`, and `digest_ai.message_block_max_chars = 100000`
-- `[sync].batch_size` is the shared SQLite commit batch size for all sync flows, including digest-prep sync
-- `[sync].sync_limit` is the shared Telegram download cap for non-digest sync commands; it is applied across all selected channels in one run
-- `digest_limits.*.sync_limit` and `[sync].batch_size` do different jobs:
-  `digest_limits.*.sync_limit` caps how many Telegram messages a digest run may fetch for the chosen window profile, while `[sync].batch_size` only controls how many downloaded rows are written before the next SQLite commit
-- for multi-channel sync, channels are processed strictly in the order you pass them, or in config order when the channel list comes from defaults
-- `[sync].sync_limit` and a command-level `--limit` both apply for non-digest sync:
-  channels are processed in the order you requested, each channel may use up to its own command `--limit`, and the whole run stops once the shared `[sync].sync_limit` budget is exhausted
-- for non-digest sync, `--limit 0` removes the per-channel cap entirely; in that case only the shared `[sync].sync_limit` still limits the overall run
-- `digest_prompts.file` should usually be `digest_prompts.toml`; relative paths are resolved from the config directory that contains `runtime.local.toml`
+- `[digest_prompts].file` points to the version-controlled TOML bundle that stores the AI system instructions and per-channel prompt templates; relative paths are resolved from the config directory that contains `runtime.local.toml`
 - `digest` overrides for `channel`, `since`, `until`, and auth mode win over config defaults when you pass them explicitly
-- `message_block` already includes a direct Telegram message link, `message_id`, UTC date, sender display name, sender username, `forwards`, `replies`, text, and OCR text when available
-- for private groups and channels without a public username, `channels.username` may stay empty in SQLite; this is expected and not an error
-- when `channels.username` is empty, digest links fall back to the private-message format `https://t.me/c/<internal_chat_id>/<message_id>`
-- `tail`, `update`, and `backfill` already stream messages from Telegram incrementally through Telethon; `[sync].batch_size` affects local DB commit batching, not the underlying Telegram API paging
-- AI batching in `digest` is done per channel, not across channels: each selected channel first attempts a single direct AI pass when the full rendered window fits within the configured budgets; otherwise it falls back to the batch chain and final channel summary
-- digest delivery is also per channel: as soon as one channel summary is ready, it is sent to Telegram as a separate message
-- a final digest status message is sent only if one or more channels failed during sync or analysis
-- every OpenAI digest call logs usage into SQLite table `ai_usage_log`, including input tokens, cached input tokens, output tokens, total tokens, latency, stage, status, `response_id`, `prompt_cache_key`, and shared-prefix diagnostics
-- `ai_usage_log` is stored inside SQLite database `telegram_connector/data/telegram_history.sqlite3`; it is not a file under `data/launchd`
+
+### Digest limits and AI batching
+
+- `digest_limits.day`, `digest_limits.week`, and `digest_limits.month` override digest limits automatically based on the chosen date window
+- when more than one channel is selected for `digest`, the active digest `sync_limit` is distributed across them inside that run
+- `digest_ai.messages_per_ai_pass` is the per-channel message cap for one direct AI pass; if the full rendered window does not fit, the same value becomes the fallback chunk size
+- `digest_ai.message_text_max_chars` and `digest_ai.message_ocr_max_chars` cap how much text from one stored row reaches the prompt
+- `digest_ai.message_block_max_chars` is the maximum rendered character budget for one AI input block for one channel
+- metadata such as `id`, `date`, `sender`, `link`, `forwards`, and `replies` are always included and do not count against text or OCR limits
+- current starting point in config uses `digest_ai.messages_per_ai_pass = 500`, `digest_ai.message_text_max_chars = 450`, `digest_ai.message_ocr_max_chars = 300`, and `digest_ai.message_block_max_chars = 100000`
+
+### Sync behavior
+
+- `[sync].batch_size` controls SQLite commit batching for all sync flows, including digest-prep sync
+- `[sync].sync_limit` is the shared Telegram download cap for non-digest sync commands across all selected channels in one run
+- `digest_limits.*.sync_limit` caps Telegram fetch volume for digest; `[sync].batch_size` only controls local commit frequency
+- for multi-channel sync, channels are processed strictly in the order you pass them, or in config order when the channel list comes from defaults
+- for non-digest sync, both `[sync].sync_limit` and command-level `--limit` apply; `--limit 0` removes only the per-channel cap
+- `tail`, `update`, and `backfill` already stream messages from Telegram incrementally through Telethon; `[sync].batch_size` affects local DB commits, not Telegram API paging
+
+### Digest output and usage logging
+
+- `message_block` includes a direct Telegram link, `message_id`, UTC date, sender display name, sender username, `forwards`, `replies`, text, and OCR text when available
+- for private groups and channels without a public username, `channels.username` may stay empty in SQLite; digest links then fall back to `https://t.me/c/<internal_chat_id>/<message_id>`
+- AI batching in `digest` is per channel, not cross-channel
+- digest delivery is also per channel; a final status message is sent only if one or more channels failed during sync or analysis
+- every OpenAI digest call logs usage into SQLite table `ai_usage_log`
+- `ai_usage_log` lives inside `data/telegram_history.sqlite3`; it is not a file under `data/launchd`
 
 ### macOS Keychain
 
@@ -125,26 +124,16 @@ Suggested generic-password layout in Keychain:
 
 - service: `telegram-connector`
 - accounts:
-  - `api_id`
-  - `bot_token`
-  - `api_hash`
-  - `phone`
-  - `user_password`
-  - `openai_api_key`
-  - `allowed_users`
+  - store each secret under its own account name, for example `bot_token`
 
 Then set these refs in `runtime.local.toml`:
 
 ```toml
 [telethon]
 api_id = "keychain://telegram-connector/api_id"
-phone = "keychain://telegram-connector/phone"
 
 [secrets]
 bot_token = "keychain://telegram-connector/bot_token"
-api_hash = "keychain://telegram-connector/api_hash"
-user_password = "keychain://telegram-connector/user_password"
-openai_api_key = "keychain://telegram-connector/openai_api_key"
 ```
 
 Before running the scripts:
@@ -168,50 +157,21 @@ Secrets are resolved in this order:
 Telegram bot commands are executed only while the local bridge process is running.
 If `telegram_bridge.py listen --run-commands` is not running, the bot can receive messages in Telegram but it will not execute history-client commands.
 
-Bridge commands are accepted in these forms:
-
-- `/update 10`
-- `update 10`
-- `/update@verter_the_bot 10`
-- `/agent-stats`
-
+Bridge commands are accepted with or without the leading `/`.
 Bot-triggered commands can be restricted by `[bridge].allowed_chat_ids` and, when configured, by `[bridge].allowed_user_ids` or `[bridge].allowed_usernames`.
 If auth is omitted in a bot command, `user` is used by default.
-The leading `/` is optional for supported bridge commands.
 
 Bot command quick reference:
 
-- `/agent-stats`
-  show local OpenAI usage, single-pass share, and prompt-cache summary from recent digest runs
-- `/top-models [limit] [debug]`
-  show the current top free models from the configured external ranking API
-- `/backfill [channel] [limit] [since=...] [until=...] [media] [bot|user|auto]`
-  historical load into SQLite
-- `/tail [channel] [limit] [since=...] [until=...] [media|ocr|read] [bot|user|auto]`
-  latest window sync
-- `/update [channel] [limit] [since=...] [until=...] [media|ocr|read] [bot|user|auto]`
-  only messages newer than saved history
-- `/ocrhistory [channel] [limit] [since=...] [until=...] [bot|user|auto]`
-  tail + media download + OCR
-- `/digest [channel] [since=...] [until=...] [today|yesterday|week|month|-Nd] [bot|user|auto]`
-  sync + AI digest + Telegram delivery using config defaults
-- `/exportcsv [channel] [limit|since=... until=...] [bot|user|auto]`
-  export saved history to CSV
-- `/ocr [limit] [channel] [since=...] [until=...]`
-  OCR only for already-downloaded pending images
-
-Bot command notes:
-
-- `channel` may be omitted to use default channels from config
-- `channel` may be a comma-separated list
-- auth defaults to `user`
-- `since` means start of UTC day, `until` means end of UTC day for date-only values
-- supported date aliases: `today`, `yesterday`, `week`, `month`, `-Nd`
-- `/digest -3d` is a shorthand for a one-day digest window with `since=-3d` and `until=-3d`
-- `/agent-stats` is handled locally by the bridge and scans only the latest configured `ai_usage_log` rows
-- `/agent-stats` includes the share of digest requests that went through single-pass summarization (`stage=single`) inside the scanned window
-- `/top-models` is handled locally by the bridge, uses the configured external ranking API, and serves short-term results from in-memory cache inside the running bridge process
-- `/top-models ... debug` switches the formatter into an expanded per-model view and includes the raw ranking/eval fields that are normally hidden in the compact summary
+- `/agent-stats`: recent local OpenAI usage and prompt-cache summary
+- `/top-models [limit] [debug]`: current top free models from the configured ranking API
+- `/backfill [channel] [limit] [since=...] [until=...] [media] [bot|user|auto]`: historical load into SQLite
+- `/tail [channel] [limit] [since=...] [until=...] [media|ocr|read] [bot|user|auto]`: latest window sync
+- `/update [channel] [limit] [since=...] [until=...] [media|ocr|read] [bot|user|auto]`: only messages newer than saved history
+- `/ocrhistory [channel] [limit] [since=...] [until=...] [bot|user|auto]`: tail + media download + OCR
+- `/digest [channel] [since=...] [until=...] [today|yesterday|week|month|-Nd] [bot|user|auto]`: sync + AI digest + Telegram delivery
+- `/exportcsv [channel] [limit|since=... until=...] [bot|user|auto]`: export saved history to CSV
+- `/ocr [limit] [channel] [since=...] [until=...]`: OCR only for already-downloaded pending images
 
 Start the bridge manually:
 
@@ -294,11 +254,9 @@ CLI:
 python3 telegram_connector/telegram_bridge.py listen
 ```
 
-Examples:
+Operator example:
 
 ```bash
-python3 telegram_connector/telegram_bridge.py listen --once
-python3 telegram_connector/telegram_bridge.py listen --echo
 python3 telegram_connector/telegram_bridge.py listen --run-commands
 ```
 
@@ -316,12 +274,6 @@ CLI:
 
 ```bash
 python3 telegram_connector/telegram_bridge.py send --chat-id 123456789 "hello from Codex"
-```
-
-Examples:
-
-```bash
-python3 telegram_connector/telegram_bridge.py send "hello from Codex"
 ```
 
 Additional notes:
@@ -376,7 +328,7 @@ Additional notes:
 #### `digest`
 
 Description:
-Run the config-driven morning workflow: sync the selected channels, optionally OCR images, try a single direct per-channel AI digest when the full rendered window fits the configured budgets, otherwise summarize messages in overlapping AI batches and build one final per-channel digest, then deliver it to `telegram.default_chat_id`.
+Run the config-driven digest workflow: sync the selected channels, optionally OCR images, then either summarize each channel in one direct AI pass or fall back to batched per-channel summarization before delivering to `telegram.default_chat_id`.
 
 CLI:
 
@@ -390,12 +342,9 @@ Bot:
 /digest
 ```
 
-Examples:
+Operator example:
 
 ```bash
-python3 telegram_connector/telegram_digest.py run --channel @vcnews
-python3 telegram_connector/telegram_digest.py run --since 2026-03-17 --until 2026-03-17
-python3 telegram_connector/telegram_digest.py run --since week
 python3 telegram_connector/telegram_digest.py run --channel @vcnews,@refugecard --auth-mode user
 ```
 
@@ -405,21 +354,16 @@ Additional notes:
 - explicit `--channel`, `--since`, `--until`, and `--auth-mode` override config defaults for a single run
 - bot command `digest` supports the same override set: `/digest @vcnews since=2026-03-17 until=2026-03-17`
 - if a selected channel has fewer messages than `digest.min_messages_for_ai`, digest skips OpenAI for that channel and sends a short “loaded without analysis” note instead
-- sender display names and usernames are included in the AI input to preserve question/answer context in user discussions
-- if the channel window fits within `digest_ai.messages_per_ai_pass`, `digest_ai.message_text_max_chars`, `digest_ai.message_ocr_max_chars`, and `digest_ai.message_block_max_chars`, digest uses one AI request and skips final aggregation for that channel
-- if the full channel window does not fit, batches keep chronological order and use a small automatic overlap between neighboring batches to reduce context loss at boundaries
-- fallback final quality on long periods is usually better than a single huge prompt because the model sees ordered local context first and only then performs a second-pass synthesis
+- if the channel window fits the configured `digest_ai.*` budgets, digest uses one direct AI request; otherwise it falls back to chronological per-channel batches and one final summary
 - if a channel reaches its effective `sync_limit` during digest prep-sync, the Telegram digest message for that channel ends with an explicit warning that the history window may have been loaded only partially
-- digest formatter normalizes a few close Russian heading variants from the model, such as `Главная тема дня` or `Главные темы`, back into the canonical Telegram heading `Главные темы дня`
-- inside `Главные темы дня`, paragraph leads like `- Тема: пояснение` or `1. Тема: пояснение` are rendered with the lead before the first colon in bold for faster scanning
-- section headings such as `Наиболее популярное`, `Незакрытые вопросы...`, and `Связки вопрос-ответ...` are also parsed tolerantly and normalized back into the canonical Telegram section names
+- digest formatter normalizes close heading variants from the model back into canonical Telegram section names
 - output is delivered to `telegram.default_chat_id`, not to an arbitrary invoking chat
 - the scheduled LaunchAgent uses `digest.time` from config and writes logs to `telegram_connector/data/launchd/digest.*.log`
 
 #### `sync`
 
 Description:
-Unified sync command for `backfill`, `tail`, and `update` modes.
+Unified sync command for `backfill`, `tail`, and `update`.
 
 CLI:
 
@@ -435,36 +379,22 @@ Bot aliases:
 /update @vcnews 100
 ```
 
-Examples:
+Operator examples:
 
 ```bash
 python3 telegram_connector/telegram_history_client.py sync --mode backfill --channel @vcnews --since 2026-03-15 --until 2026-03-16
-python3 telegram_connector/telegram_history_client.py sync --mode backfill --channel @vcnews,@another_channel --limit 100
-python3 telegram_connector/telegram_history_client.py sync --mode backfill --channel @vcnews --limit 100 --download-media
-python3 telegram_connector/telegram_history_client.py sync --mode backfill --channel https://t.me/+invitehash --limit 100 --auth-mode user
-python3 telegram_connector/telegram_history_client.py sync --mode backfill --channel @vcnews --limit 0 --since 2026-03-15 --until 2026-03-16
-python3 telegram_connector/telegram_history_client.py sync --mode tail --channel @vcnews --limit 100 --since 2026-03-15
 python3 telegram_connector/telegram_history_client.py sync --mode tail --channel @vcnews --limit 100 --download-media --ocr --auth-mode user
-python3 telegram_connector/telegram_history_client.py sync --mode tail --channel @vcnews --limit 100 --download-media --auth-mode user
-python3 telegram_connector/telegram_history_client.py sync --mode tail --channel @vcnews --limit 100 --mark-read --auth-mode user
-python3 telegram_connector/telegram_history_client.py sync --mode tail --channel @vcnews --limit 100 --since 2026-03-15 --until 2026-03-16 --download-media --ocr --auth-mode user
-python3 telegram_connector/telegram_history_client.py sync --mode tail --channel @vcnews --limit 100 --auth-mode bot
-python3 telegram_connector/telegram_history_client.py sync --mode update --channel @vcnews --limit 100 --since 2026-03-15 --until 2026-03-16
-python3 telegram_connector/telegram_history_client.py sync --mode update --channel @vcnews --limit 100 --mark-read --auth-mode user
-python3 telegram_connector/telegram_history_client.py sync --mode update --channel @vcnews,@another_channel --limit 100
-python3 telegram_connector/telegram_history_client.py sync --mode update --limit 100
+python3 telegram_connector/telegram_history_client.py sync --mode update --channel @vcnews --limit 0
 ```
 
 Additional notes:
 
 - `--limit 0` removes the per-channel message cap for `sync`; the run is then constrained only by `[sync].sync_limit`
-
 - `--mode backfill` is the reliable choice for older date ranges that are no longer in the latest channel tail
 - if you pass a private group or channel id in Bot API form like `-1001449711572`, `sync`, `digest`, and SQLite filtering normalize it automatically to the stored internal channel id
 - `--mode tail` scans the latest window of messages
 - `--mode update` stops at the boundary of already saved history and imports only newer messages
 - `ocr` implies media download for image files
-- `read` checks the current Telegram read boundary first and avoids redundant acknowledge calls
 - `read` in `update` mode marks only the previously processed checkpoint if newer posts appeared after an earlier sync
 
 #### `export-csv`
@@ -484,13 +414,10 @@ Bot:
 /exportcsv @vcnews 100
 ```
 
-Examples:
+Operator example:
 
 ```bash
-python3 telegram_connector/telegram_history_client.py export-csv --channel @vcnews,@another_channel --limit 100
-python3 telegram_connector/telegram_history_client.py export-csv --limit 100
 python3 telegram_connector/telegram_history_client.py export-csv --channel @vcnews --since 2026-03-15 --until 2026-03-16
-python3 telegram_connector/telegram_history_client.py export-csv --channel @vcnews --since 2026-03-15
 ```
 
 Additional notes:
@@ -498,7 +425,7 @@ Additional notes:
 - `until` is optional
 - when omitted, export goes through the newest saved message
 - multi-channel export creates one CSV per channel
-- CSV now also includes additional normalized message-analysis fields from `messages`, including `grouped_id`, `content_hash`, and `imported_at`
+- CSV also includes normalized message-analysis fields from `messages`, including `grouped_id`, `content_hash`, and `imported_at`
 
 #### `ocrhistory`
 
@@ -517,17 +444,9 @@ Equivalent CLI:
 python3 telegram_connector/telegram_history_client.py sync --mode tail --channel @vcnews --limit 50 --download-media --ocr --auth-mode user
 ```
 
-Examples:
-
-```text
-/ocrhistory @vcnews since=2026-03-15 until=2026-03-16
-```
-
 Additional notes:
 
-- this command fetches Telegram history first
-- then it downloads image media for that sync window
-- then it runs OCR on those downloaded images
+- this command fetches Telegram history, downloads image media for that window, and then runs OCR on those files
 
 #### `ocr` / `ocr-pending`
 
@@ -546,16 +465,6 @@ Bot:
 /ocr 100
 ```
 
-Examples:
-
-```bash
-python3 telegram_connector/telegram_history_client.py ocr-pending --channel @vcnews --since 2026-03-15 --until 2026-03-16 --limit 100
-```
-
-```text
-/ocr @vcnews 100 since=2026-03-15 until=2026-03-16
-```
-
 Additional notes:
 
 - this command does not fetch new Telegram messages
@@ -570,17 +479,19 @@ SQLite database:
 - `messages`: normalized message rows with raw JSON
 - `media_assets`: downloaded media files and OCR results
 - `sync_state`: per-channel checkpoints for backfill/tail runs
-- `data/exports/`: generated CSV exports
+- `ai_usage_log`: OpenAI usage records for digest and related analysis
 
-Local data directories:
+Local runtime paths:
 
 - `telegram_connector/data/telegram_history.sqlite3`
 - `telegram_connector/data/media/`
+- `telegram_connector/data/exports/`
 - `telegram_connector/data/sessions/`
+- `telegram_connector/data/launchd/`
 
 ## Dependencies
 
-Required for history ingestion:
+Required runtime dependencies:
 
 - `Telethon`
 - `tesseract`
@@ -592,31 +503,27 @@ python3 -m venv .venv-test-gap-detection
 .venv-test-gap-detection/bin/python -m pip install -r telegram_connector/requirements.txt
 ```
 
-The tracked requirements include both runtime dependencies and the local `pytest`
-test dependency used by the regression suite.
+The tracked requirements include both runtime dependencies and the local `pytest` dependency used by the regression suite.
 
 ## Tests
 
-Run the local regression suite before each code change:
+Preferred local regression run:
 
 ```bash
 .venv-test-gap-detection/bin/python -m pytest telegram_connector/tests -q
 ```
 
-Current tests cover:
+Coverage includes:
 
-- Telegram bot command parsing
-- chat allowlist parsing
+- bridge command parsing and chat allowlists
 - shared Bot API timeout and transport error messaging
 - response chunk splitting
 - CSV export logic
-- SQLite schema initialization
-- per-channel sync state separation
+- SQLite schema initialization and sync-state handling
 - local runtime config loading
-- public/private auth-mode routing
-- default `user` auth in bot commands
+- auth-mode routing and default `user` auth in bot commands
 
-Fallback runner without pytest-specific discovery:
+Fallback runner:
 
 ```bash
 python3 telegram_connector/run_tests.py

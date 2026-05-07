@@ -20,24 +20,28 @@ Root skill docs in this folder should act as a catalog and navigation layer only
 
 ### article-to-obsidian-kb
 
+- Converts long-form sources into linked Obsidian notes and updates matching notes instead of creating duplicates.
 - Entry: [SKILL.md](./article-to-obsidian-kb/SKILL.md)
 - Local docs: [README.md](./article-to-obsidian-kb/README.md)
 - Install: [install-local.sh](./article-to-obsidian-kb/install-local.sh)
 
 ### llm-council
 
+- Runs a structured multi-advisor decision review and produces one canonical verdict payload for downstream note writing.
 - Entry: [SKILL.md](./llm-council/SKILL.md)
 - Local docs: [README.md](./llm-council/README.md)
 - Install: [install-local.sh](./llm-council/install-local.sh)
 
 ### youtube-to-obsidian-kb
 
+- Turns a YouTube URL into linked Obsidian notes by fetching a local transcript first and then reusing the shared note workflow.
 - Entry: [SKILL.md](./youtube-to-obsidian-kb/SKILL.md)
 - Local docs: [README.md](./youtube-to-obsidian-kb/README.md)
 - Install: [install-local.sh](./youtube-to-obsidian-kb/install-local.sh)
 
 ### youtube-transcribe-skill
 
+- Fetches YouTube subtitles or transcripts locally through a fail-closed transcript pipeline with explicit fallback behavior.
 - Entry: [SKILL.md](./youtube-transcribe-skill/SKILL.md)
 - Install: [install-local.sh](./youtube-transcribe-skill/install-local.sh)
 - Local docs: [README.md](./youtube-transcribe-skill/README.md)

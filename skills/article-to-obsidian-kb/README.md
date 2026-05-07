@@ -42,7 +42,6 @@ Treat the repository copy of `config/runtime.local.toml` as the single editable 
 - can use `paths.project_root` or `CODEX_PLAYGROUND_PROJECT_ROOT` to keep project-local `source` paths relative even when the skill runs from an installed copy under `~/.codex`
 - uses `paths.kb_index_config` as the canonical entry point to `kb-index` when configured
 - never resolves project-local relative paths from the shell cwd
-- treats the repository copy of `config/runtime.local.toml` as the single editable local config
 - uses `config/runtime.example.toml` as the canonical operator-facing reference for config keys, defaults, and local-runtime notes
 
 ## Main Files

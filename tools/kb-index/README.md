@@ -1,35 +1,35 @@
 # KB Index
 
-Локальный проект для индексирования базы знаний Obsidian и retrieval-доступа к заметкам без полного прохода по vault на каждый запрос.
+Local indexing and retrieval tool for an Obsidian knowledge base, designed to avoid a full vault scan on every lookup.
 
-## Цель
+## What it does
 
-Проект строит канонический retrieval layer для knowledge-base workflow:
+- builds and updates a local note index
+- stores note-level metadata and lead-summary retrieval signals
+- provides `FTS5`-based retrieval over indexed notes
+- exposes CLI entrypoints for `build`, `update`, `search`, and `status`
+- supports scheduled auto-update on macOS through `launchd`
+- supports title-first note lookup and indexed tag discovery
 
-1. сначала ищет по локальному индексу;
-2. затем открывает только нужные заметки целиком.
+## Scope
 
-Этап 1 сознательно ограничен `SQLite` + `FTS5` + metadata-aware retrieval без embeddings.
+This project is responsible for:
 
-## Границы проекта
+- local index build and update
+- note-level metadata storage
+- `FTS5` retrieval
+- operator-facing CLI commands
+- scheduled auto-update through `launchd` on macOS
 
-Проект отвечает за:
+This project does not currently provide:
 
-- построение и обновление локального индекса;
-- хранение note-level метаданных и lead-summary retrieval signals;
-- полнотекстовый retrieval по `FTS5`;
-- CLI-контракт для `build`, `update`, `search`, `status`;
-- `scheduled` auto-update через `launchd` на macOS.
+- vector search
+- embeddings
+- an `MCP` server
+- a separate search daemon
+- deep graph expansion over wikilinks
 
-Проект пока не отвечает за:
-
-- vector search;
-- embeddings;
-- `MCP`-сервер;
-- отдельный search daemon;
-- graph expansion по wikilinks.
-
-## Структура
+## Layout
 
 ```text
 tools/kb-index/
@@ -41,68 +41,88 @@ tools/kb-index/
 └── data/
 ```
 
-### Назначение директорий
+Directory roles:
 
-- `src/kb_index/` — код индексатора, поиска, CLI и служебных модулей.
-- `tests/` — unit и integration tests.
-- `config/` — локальная конфигурация проекта и примеры runtime config.
-  Основной источник vault path и scope индексирования на этапе 1 — `config/runtime.local.toml`.
-- `data/` — локальные runtime-артефакты проекта.
+- `src/kb_index/`: indexer, search, CLI, and support modules
+- `tests/`: unit and integration tests
+- `config/`: runtime config and examples
+- `data/`: local runtime artifacts
 
-## Runtime Files
+## Runtime files
 
-Текущие project-local runtime-артефакты в `data/`:
+Project-local runtime artifacts in `data/`:
 
 - `kb_index.sqlite`
 - `kb_index_state.json`
+- `data/launchd/auto_update.startup.log`
+- `data/launchd/auto_update.stdout.log`
+- `data/launchd/auto_update.stderr.log`
 
-При включенном `launchd` auto-update сервис использует отдельный service root:
+When auto-update is installed, the service uses a separate runtime root:
 
 - `~/Library/Application Support/kb_index_service`
 
-Там живут:
+That service root contains:
 
-- runtime-копия `src/kb_index`
-- симлинк `config/runtime.local.toml` на репозиторный конфиг
-- shell-runner для `launchd`
+- a runtime copy of `src/kb_index`
+- a symlinked `config/runtime.local.toml`
+- the shell runner used by `launchd`
 
-Канонические `launchd`-логи при этом пишутся в project root, а не в service root:
+Canonical operational logs still stay in project-local `data/launchd/`, not in the service root.
 
-- `tools/kb-index/data/launchd/auto_update.startup.log`
-- `tools/kb-index/data/launchd/auto_update.stdout.log`
-- `tools/kb-index/data/launchd/auto_update.stderr.log`
+## Config
 
-## CLI Commands
+The CLI reads `config/runtime.local.toml` first. Explicit CLI arguments may override paths for one run.
 
-Сейчас реализованы:
+Main config areas:
 
-CLI сначала читает `config/runtime.local.toml`, а явные аргументы командной строки могут переопределить пути для конкретного запуска. Scope индексирования тоже задается через конфиг, а не хардкодится в коде.
+- vault scope through `include_roots`, `exclude_roots`, and `exclude_globs`
+- retrieval defaults and ranking weights
+- note-type weights and exact-title bonuses
+- scheduled auto-update under `[auto_update]`
 
-Ранжирование retrieval тоже задается через конфиг: веса формулы, `note_type`-веса и пороги `exact-title` bonus не хардкодятся в `search.py`. Дефолтное количество результатов поиска тоже задается через `retrieval.default_limit`.
+The default number of search results is controlled by `retrieval.default_limit`.
 
-Поиск заметок работает не только по `title`, `Суть`, `headings` и `tags`, но и использует:
+## CLI commands
 
-- `links_out` как слабый graph-aware сигнал для блока `Связанные заметки`, чтобы заметки, уже ссылающиеся на нужный концепт или соседний узел, поднимались выше при related-note discovery
-
+Available commands:
 
 - `build_kb_index`
-- `list_kb_tags`
 - `update_kb_index`
 - `search_kb`
+- `list_kb_tags`
 - `status_kb_index`
 - `install_kb_index_auto_update`
-- `uninstall_kb_index_auto_update`
 - `status_kb_index_auto_update`
+- `uninstall_kb_index_auto_update`
 
-Для known-note lookup есть отдельный title-oriented режим:
+### Search behavior
+
+Retrieval is config-driven. Ranking weights, note-type weights, and exact-title bonuses are not hardcoded in `search.py`.
+
+Search uses indexed note signals such as:
+
+- `title`
+- lead summary
+- `headings`
+- `tags`
+- `links_out`
+
+`links_out` acts as a weak graph-aware signal for related-note discovery, so notes that already link to a target concept or adjacent node can rank higher in related-note workflows.
+
+### Title-first lookup
+
+Use the title-oriented mode when the workflow already knows or almost knows the target note title:
 
 ```bash
 search_kb --mode title-first --note-type concept "Known note title"
 ```
 
-Его стоит использовать вместо прямого `rg` по именам файлов, когда workflow уже знает или почти знает имя нужной заметки и хочет найти её через индекс, а не мимо индекса.
+This should be preferred over direct filename scans when the note should be resolved through the index.
 
-Для tag discovery есть отдельный CLI:
+### Tag discovery
+
+Use `list_kb_tags` for indexed tag inspection:
 
 ```bash
 list_kb_tags --config-path /absolute/path/to/runtime.local.toml --json
@@ -110,115 +130,104 @@ list_kb_tags --config-path /absolute/path/to/runtime.local.toml --tag developer-
 list_kb_tags --config-path /absolute/path/to/runtime.local.toml --prefix developer --json
 ```
 
-Используй его вместо `rg` по vault, когда нужно:
+Use it when you need to:
 
-- получить список всех используемых тегов
-- проверить, существует ли уже конкретный тег
-- посмотреть соседние существующие теги перед созданием нового
+- list all tags currently used in the knowledge base
+- check whether a specific tag already exists
+- inspect neighboring tags before creating a new one
 
-Пока не реализованы и остаются roadmap items:
+## Indexing corpus
 
-- `read_kb`
-- `watch_kb_index`
+The indexing corpus is defined in `config/runtime.local.toml` through:
 
-## Корпус индексации
+- `include_roots`
+- `exclude_roots`
+- `exclude_globs`
 
-Корпус индексирования задается в `config/runtime.local.toml` через `include_roots`, `exclude_roots` и `exclude_globs`.
+Auto-update scheduling is also configured in `config/runtime.local.toml` under `[auto_update]`.
 
-Плановое автообновление тоже задается в `config/runtime.local.toml` через секцию `auto_update`.
-На текущем этапе поддерживается один режим:
+Current setup supports one scheduler mode:
 
-- `launchd` на macOS, который по расписанию вызывает тот же канонический `update_kb_index`
+- `launchd` on macOS, which periodically runs the same canonical `update_kb_index`
 
-Стартовая конфигурация для текущего vault:
+## Retrieval model
 
-- include: `Ideas/`, `Daily notes/`
-- exclude roots: `.obsidian/`, `Templates/`, `Ideas/attachments/`
-- exclude globs: `*.canvas`, `*.png`, `*.jpg`, `*.jpeg`, `*.gif`, `*.pdf`, `*.webp`, `*.csv`, `*.xlsx`
-
-## Архитектурный принцип
-
-Любой knowledge workflow должен использовать двухшаговый путь:
+Knowledge workflows should use a two-step path:
 
 1. `search`
 2. `read`
 
-Полный проход по vault допустим только как fallback, если индекс отсутствует, поврежден или явно устарел.
+Full vault scans should remain a fallback only when the index is missing, broken, or clearly stale.
 
-## Auto-Update
+## Auto-update
 
-Автообновление не вводит отдельный daemon с собственной логикой индексации.
-Оно только планово вызывает уже существующий `update_kb_index`, чтобы:
+Auto-update does not introduce a separate indexing daemon. It only runs the existing `update_kb_index` on a schedule so that:
 
-- новые заметки попадали в индекс без ручного rebuild;
-- измененные заметки переиндексировались инкрементально;
-- удаленные заметки удалялись из индекса тем же каноническим путем.
+- new notes are picked up without a manual rebuild
+- changed notes are reindexed incrementally
+- deleted notes are removed through the same canonical path
 
-Команды:
+Commands:
 
 - `install_kb_index_auto_update --config-path ...`
 - `status_kb_index_auto_update --config-path ...`
 - `uninstall_kb_index_auto_update --config-path ...`
 
-Installer не запускает код напрямую из `Documents/Playground`.
-Вместо этого он копирует runtime-слой в `~/Library/Application Support/kb_index_service`, оставляет `config/runtime.local.toml` симлинком на исходный конфиг в репозитории, генерирует там shell-runner и уже его регистрирует в `launchd`.
-Этот deployment shape совпадает с уже рабочим паттерном `telegram_connector` и обходит проблемы запуска launch agents прямо из пользовательского project tree.
-При этом stdout/stderr и startup trace остаются в `tools/kb-index/data/launchd`, чтобы operational logs жили рядом с проектом, а не были размазаны между двумя корнями.
+The installer does not run code directly from `Documents/Playground`. Instead, it copies the runtime layer into `~/Library/Application Support/kb_index_service`, keeps `runtime.local.toml` as a symlink to the repository config, generates the shell runner there, and registers that runner in `launchd`.
 
-`status_kb_index` показывает и `configured_auto_update`, чтобы runtime-настройки расписания были видны рядом с retrieval-конфигом.
-`status_kb_index_auto_update` показывает уже состояние установленного launch agent, service root и канонического project-local log directory.
+`status_kb_index` also shows `configured_auto_update`, so retrieval settings and schedule settings are visible together. `status_kb_index_auto_update` reports the installed launch agent, service root, and canonical project-local log directory.
 
-### Reload After Config Changes
+### Reload after config changes
 
-Если меняется `config/runtime.local.toml` и нужно, чтобы `launchd` перечитал:
+If `config/runtime.local.toml` changes and `launchd` needs to pick up new settings such as:
 
-- новый `auto_update.interval_minutes`
-- новый `launchd_label`
-- или другие runtime-настройки service-root deployment
+- `auto_update.interval_minutes`
+- `launchd_label`
+- other service-root deployment settings
 
-используй тот же канонический installer повторно:
+rerun the canonical installer:
 
 ```bash
 install_kb_index_auto_update --config-path /absolute/path/to/runtime.local.toml
 ```
 
-Повторный запуск installer:
+Rerunning the installer:
 
-- обновляет runtime-копию в `~/Library/Application Support/kb_index_service`
-- пересоздаёт симлинк `runtime.local.toml` на указанный source-of-truth конфиг
-- перегенерирует shell-runner
-- переустанавливает `launchd` plist
+- refreshes the runtime copy in `~/Library/Application Support/kb_index_service`
+- recreates the `runtime.local.toml` symlink to the chosen source-of-truth config
+- regenerates the shell runner
+- reinstalls the `launchd` plist
 
-То есть это и есть рекомендуемый способ "перезапустить демон и перечитать конфиг".
+Use it as the canonical way to restart the service and reload config.
 
-Для проверки после reload:
+Verification after reload:
 
 ```bash
 status_kb_index_auto_update --config-path /absolute/path/to/runtime.local.toml
 status_kb_index --config-path /absolute/path/to/runtime.local.toml
 ```
 
-## Freshness Model
+## Freshness model
 
-Свежесть индекса теперь обеспечивается двумя путями:
+Index freshness is maintained through two paths:
 
 1. `scheduled auto-update`
-   - `launchd` запускает инкрементальный `update_kb_index` по интервалу из `auto_update.interval_minutes`
+   - `launchd` runs incremental `update_kb_index` on the interval from `auto_update.interval_minutes`
 2. `post-write sync`
-   - knowledge-base skills, которые реально создали или обновили заметки и знают `paths.kb_index_config`, могут один раз вызвать `update_kb_index` в конце run
+   - knowledge-base skills that created or updated notes and know `paths.kb_index_config` can call `update_kb_index` once at the end of the run
 
-Такой split нужен, чтобы:
+This split ensures that:
 
-- новые внешние изменения в vault не ждали ручного rebuild
-- заметки, только что созданные через skill, попадали в индекс сразу, а не ждали следующего расписания
+- external vault changes do not wait for a manual rebuild
+- notes just created through a skill enter the index immediately instead of waiting for the next schedule
 
-## Дальнейшие улучшения
+## Future improvements
 
-Текущее `stage 1` ядро уже реализовано и используется skill-ами.
+The current stage-1 core is already implemented and in use.
 
-Дальше остаются только необязательные улучшения, например:
+Optional future improvements may include:
 
-1. `watch`-режим поверх текущего `launchd`-расписания, если когда-нибудь понадобится более частая реакция на изменения.
-2. `read_kb` как отдельный CLI для стандартизированного note-read access поверх уже найденного shortlist.
-3. Более глубокий graph expansion по `wikilinks`, если related-note discovery упрётся в текущий `links_out` signal.
-4. Позже, при реальной необходимости, отдельный vector layer или hybrid semantic retrieval поверх текущего `SQLite + FTS5`.
+1. a `watch` mode on top of the current `launchd` schedule
+2. `read_kb` as a standardized note-read CLI over an already found shortlist
+3. deeper graph expansion over wikilinks if related-note discovery outgrows the current `links_out` signal
+4. a vector or hybrid semantic layer if a real need appears later

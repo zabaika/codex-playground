@@ -46,8 +46,6 @@ Treat this skill's `config/runtime.local.toml` as optional and wrapper-only. Whe
 - `config/runtime.example.toml`: optional local config shape
 - `scripts/prepare_youtube_transcript.py`: transcript preparation helper
 
-## References
-
 ## Notes
 
 - Keep this README operator-facing and brief.

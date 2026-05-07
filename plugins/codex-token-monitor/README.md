@@ -2,24 +2,17 @@
 
 `codex-token-monitor` is a local Codex plugin that packages one reusable skill and a helper script for watching rollout token usage in realtime.
 
-When the monitor runs inside the Codex integrated terminal, it first pins itself
-to the current thread via `CODEX_THREAD_ID`. Project `cwd` matching is only a
-fallback for terminals that do not expose a thread id.
+When the monitor runs inside the Codex integrated terminal, it first pins itself to the current thread via `CODEX_THREAD_ID`. Project `cwd` matching is only a fallback for terminals that do not expose a thread id.
 
 ## Why plugin first
 
-According to the official Codex docs:
-
-- skills are the authoring format for reusable workflows
-- plugins are the installable distribution unit
-
-This plugin follows that model:
+According to the official Codex docs, skills are the authoring format for reusable workflows and plugins are the installable distribution unit. This plugin follows that model:
 
 - the workflow lives as a skill under `skills/codex-token-monitor/`
 - the implementation lives in `scripts/codex_token_monitor.py`
 - the plugin wrapper makes it installable through a marketplace
 
-## What it shows
+## What it does
 
 - active rollout file for the selected project
 - cumulative tokens: input, cached input, output, reasoning, total
@@ -34,8 +27,7 @@ The monitor intentionally combines two scopes of telemetry:
 - `delta` is thread-local and comes from the pinned rollout session for the current monitor process
 - `limits` are global-at-account scope and come from the freshest known rollout across all discovered Codex sessions
 
-This split exists because Codex rate limits are shared across chats, while the
-token delta is only meaningful inside one specific thread.
+This split exists because Codex rate limits are shared across chats, while the token delta is only meaningful inside one specific thread.
 
 Current source details:
 
@@ -49,22 +41,23 @@ Important limitation:
 - the monitor does not currently read the same internal Codex UI rate-limit store
 - if Codex UI receives a fresher internal account update before it appears in any rollout JSONL, the UI can still lead the monitor briefly
 
-## Run from the source checkout
+## Usage
+
+### Run from the source checkout
 
 ```bash
 python3 plugins/codex-token-monitor/scripts/codex_token_monitor.py --cwd "$PWD"
 ```
 
-You can also pin a specific Codex thread manually:
+Manual thread pinning:
 
 ```bash
 python3 plugins/codex-token-monitor/scripts/codex_token_monitor.py --thread-id "$CODEX_THREAD_ID"
 ```
 
-## Run inside the Codex app terminal
+### Run inside the Codex app terminal
 
-Open the integrated terminal for the current thread with `Cmd+J` or the
-terminal icon in the top-right corner of the Codex app window, then run:
+Open the integrated terminal for the current thread with `Cmd+J` or the terminal icon in the top-right corner of the Codex app window, then run:
 
 ```bash
 python3 plugins/codex-token-monitor/scripts/codex_token_monitor.py --cwd "$PWD"
@@ -76,10 +69,9 @@ Useful built-in terminal shortcuts:
 - `Ctrl+L`: clear the terminal
 - `Cmd+N`: open a new thread if you want a separate thread-local terminal just for the monitor
 
-This matches the official Codex app behavior for the integrated terminal and
-keyboard shortcuts.
+This matches the official Codex app behavior for the integrated terminal and keyboard shortcuts.
 
-## Run from the Codex action button
+### Run from the Codex action button
 
 This repository now includes a repo-local Codex local environment config at:
 
@@ -89,18 +81,15 @@ It defines one header action:
 
 - `Token monitor`
 
-In the Codex app this action appears under the `Run` button for this project
-and launches the monitor in the integrated terminal with:
+In the Codex app this action appears under the `Run` button for this project and launches the monitor in the integrated terminal with:
 
 ```bash
 python3 plugins/codex-token-monitor/scripts/codex_token_monitor.py --cwd "$PWD"
 ```
 
-If the action is not visible yet, open the project again or open Codex
-Settings -> Local Environments for this workspace so the app reloads the
-project-local `.codex/environments/environment.toml`.
+If the action is not visible yet, reopen the project or open Codex Settings -> Local Environments for this workspace so the app reloads the project-local `.codex/environments/environment.toml`.
 
-Print one snapshot:
+One-shot snapshot:
 
 ```bash
 python3 plugins/codex-token-monitor/scripts/codex_token_monitor.py --cwd "$PWD" --once
@@ -162,12 +151,12 @@ Brief mode intentionally omits:
 - plan name
 - freshness and throughput lines
 
-Brief mode now treats `delta` and `limits` as different scopes on purpose:
+Brief mode treats `delta` and `limits` as different scopes on purpose:
 
 - `delta` comes from the current pinned thread
 - `limits` come from the freshest known rollout across all sessions, so they stay as current as possible even if another chat produced the latest rate-limit update
 
-## Session Diagnostics
+## Session diagnostics
 
 When several Codex chats share the same project `cwd`, use:
 
@@ -188,7 +177,7 @@ Example:
 
 ```text
 age     limits 10m 5s
-session Добавь realtime-статус токенов | sid 019daacd-d004-77c1-8c43-880e765537ef | rollout-...
+session Add realtime token status | sid 019daacd-d004-77c1-8c43-880e765537ef | rollout-...
 tokens  in 6,689,927 | cache 5,613,056 | out 59,499 | rsn 15,995 | total 6,749,426
 delta   in +209,784 | cache +209,536 | out +322 | rsn +35 | total +210,106
 limits  plan plus | day 9.0% used 91.0% left reset 03:17:14 CEST (300m) | week 14.0% used 86.0% left reset 12:12:00 CEST (10080m)
@@ -238,10 +227,7 @@ Colors are enabled only in TTY mode.
 
 ## Reset handling
 
-`rate_limits` are only refreshed when Codex emits a new `token_count` event.
-If a reset time has already passed but no newer `token_count` has arrived yet,
-the monitor now rolls that window forward to the next interval and clears the
-stale usage instead of rendering the old percentage with `r 0.0h`.
+`rate_limits` are only refreshed when Codex emits a new `token_count` event. If a reset time has already passed but no newer `token_count` has arrived yet, the monitor rolls that window forward to the next interval and clears the stale usage instead of rendering the old percentage with `r 0.0h`.
 
 ## Repo-local plugin wiring
 

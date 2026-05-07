@@ -22,7 +22,7 @@ This skill is for judgment-heavy questions, not for factual lookups or routine i
 
 Invoke the skill from Codex with prompts such as:
 
-- `$llm-council проанализируй это решение`
+- `$llm-council analyze this decision`
 - `Council this decision`
 - `Pressure-test this plan`
 
@@ -70,7 +70,6 @@ There is no separate persistent transcript artifact in the normal pipeline. The 
 - treats `run_status=full` as valid only when the payload contains exactly 5 completed advisor responses and a non-empty peer-review list
 - delegates final verdict-note writing to `article-to-obsidian-kb` structured mode, which owns verdict placement and final note contract
 - treats the repository copy of `config/runtime.local.toml` as the single editable local config
-- expects the payload directory to exist already and does not treat directory creation as a normal per-run step
 
 ## Main Files
 
@@ -90,17 +89,11 @@ There is no separate persistent transcript artifact in the normal pipeline. The 
 
 ## Maintenance
 
-- Treat `skills/llm-council/` in this repository as the editable source of truth.
-- Treat `~/.codex/skills/llm-council` as an installed copy only.
-- Treat `~/.codex/skills/llm-council/config/runtime.local.toml` as a symlinked consumer of the repository config, not as a second editable config.
-- Treat `config/runtime.example.toml` as the canonical place for documented config keys, defaults, and inline operator notes about local runtime behavior.
-- Do not patch the installed copy directly unless the user explicitly asks for an emergency local-only fix.
-- Run the local regression harness with `python3 -m unittest discover -s skills/llm-council/tests -q` after renderer or contract changes.
-- Prefer changing canonical reference files over scattering prompt or formatting tweaks into several places.
-- Keep workflow and output-contract rules in their canonical owners:
-  - orchestration and payload rules in `SKILL.md`
-  - advisor/reviewer/chairman prompt rules in `references/role-prompts.md`
-  - payload JSON shape and payload text-format rules in `references/payload-contract.md`
-  - final verdict-note format and placement rules in `article-to-obsidian-kb`
-- After contract or adapter changes, run the unittest harness, then run a small payload smoke test through the downstream structured writer path.
-- If the skill grows new reusable operational patterns, prefer codifying them in `RULEBOOK.md`.
+- treat the repository copy as the editable source of truth and `~/.codex/skills/llm-council` as an installed copy only
+- do not patch the installed copy directly unless the user explicitly asks for an emergency local-only fix
+- run `python3 -m unittest discover -s skills/llm-council/tests -q` after renderer, payload-contract, or adapter changes
+- keep workflow and output-contract rules in their canonical owners:
+  - `SKILL.md` for orchestration and payload rules
+  - `references/role-prompts.md` for advisor, reviewer, and chairman prompts
+  - `references/payload-contract.md` for payload JSON shape and text-format rules
+  - `article-to-obsidian-kb` for final verdict-note format and placement
