@@ -32,6 +32,7 @@ LAUNCHD_LOG_DIR = PROJECT_ROOT / "data" / "launchd"
 DIGEST_LAST_ATTEMPT_LOG = LAUNCHD_LOG_DIR / "digest.last_attempt.json"
 
 OPENAI_DIGEST_RETRY_ATTEMPTS = 3
+DEFAULT_DIGEST_SYNC_TOTAL_TIMEOUT_SECONDS = 1800
 DIGEST_PROMPT_REQUIRED_KEYS = (
     "system_instructions",
     "shared_prompt_prefix",
@@ -52,6 +53,7 @@ class DigestConfig:
     until: str
     model: str
     sync_mode: str
+    sync_total_timeout_seconds: int
     messages_per_ai_pass: int
     message_text_max_chars: int
     message_ocr_max_chars: int
@@ -224,16 +226,24 @@ def resolve_digest_config(config: dict[str, Any]) -> DigestConfig:
             "Missing processing.model in runtime config. Put the default AI model into [processing].model."
         )
     raw_min_messages_for_ai = history_client.get_config_value(config, "digest", "min_messages_for_ai") or "1"
+    raw_sync_total_timeout_seconds = (
+        history_client.get_config_value(config, "digest", "sync_total_timeout_seconds")
+        or str(DEFAULT_DIGEST_SYNC_TOTAL_TIMEOUT_SECONDS)
+    )
     try:
         min_messages_for_ai = max(0, int(raw_min_messages_for_ai))
+        sync_total_timeout_seconds = max(1, int(raw_sync_total_timeout_seconds))
     except ValueError as exc:
-        raise SystemExit("Invalid digest.min_messages_for_ai in runtime config. Expected a non-negative integer.") from exc
+        raise SystemExit(
+            "Invalid digest.min_messages_for_ai or digest.sync_total_timeout_seconds in runtime config."
+        ) from exc
     return DigestConfig(
         time=history_client.get_config_value(config, "digest", "time") or "08:00",
         since=history_client.get_config_value(config, "digest", "since") or "yesterday",
         until=history_client.get_config_value(config, "digest", "until") or "yesterday",
         model=model,
         sync_mode=history_client.get_config_value(config, "digest", "sync_mode") or "update",
+        sync_total_timeout_seconds=sync_total_timeout_seconds,
         messages_per_ai_pass=0,
         message_text_max_chars=0,
         message_ocr_max_chars=0,
@@ -1382,19 +1392,29 @@ def cmd_run(args: argparse.Namespace) -> int:
     run_id = getattr(args, "audit_run_id", None) or build_digest_run_id()
     started_at = getattr(args, "audit_started_at", None) or audit_timestamp()
     launch_context = build_launch_context()
-    write_digest_last_attempt(
-        {
-            "run_id": run_id,
-            "started_at": started_at,
-            "finished_at": None,
-            "status": "started",
-            "wake_context": launch_context,
-            "channel_override": args.channel,
-            "since_override": args.since,
-            "until_override": args.until,
-            "auth_mode_override": args.auth_mode,
+    audit_payload = {
+        "run_id": run_id,
+        "started_at": started_at,
+        "updated_at": started_at,
+        "finished_at": None,
+        "status": "started",
+        "phase": "starting",
+        "wake_context": launch_context,
+        "channel_override": args.channel,
+        "since_override": args.since,
+        "until_override": args.until,
+        "auth_mode_override": args.auth_mode,
+    }
+    write_digest_last_attempt(audit_payload)
+
+    def persist_attempt(**changes: Any) -> None:
+        nonlocal audit_payload
+        audit_payload = {
+            **audit_payload,
+            **changes,
+            "updated_at": audit_timestamp(),
         }
-    )
+        write_digest_last_attempt(audit_payload)
 
     runtime = None
     config = None
@@ -1412,6 +1432,8 @@ def cmd_run(args: argparse.Namespace) -> int:
     token = None
     chat_id = None
     try:
+        import asyncio
+
         runtime = history_client.resolve_runtime()
         config = history_client.load_runtime_config()
         digest_config = resolve_digest_config(config)
@@ -1423,22 +1445,47 @@ def cmd_run(args: argparse.Namespace) -> int:
         since, until = normalize_digest_window_values(since, until)
         auth_mode = args.auth_mode or runtime.default_auth_mode
         limits = resolve_digest_limits(config, since, until)
-
-        import asyncio
-
-        sync_results = asyncio.run(
-            run_sync(
-                runtime,
-                channel=args.channel,
-                since=since,
-                until=until,
-                total_limit=limits.sync_limit,
-                use_ocr=digest_config.use_ocr,
-                mark_read=digest_config.mark_read,
-                mode=digest_config.sync_mode,
-                auth_mode=auth_mode,
-            )
+        channels = history_client.resolve_channels_argument(runtime, args.channel)
+        sync_timeout_seconds = digest_config.sync_total_timeout_seconds
+        persist_attempt(
+            phase="sync_pending",
+            since=since,
+            until=until,
+            auth_mode=auth_mode,
+            sync_mode=digest_config.sync_mode,
+            sync_timeout_seconds=sync_timeout_seconds,
+            channels=len(channels),
+            resolved_channels=channels,
+            limit_profile=limits.profile,
+            sync_limit=limits.sync_limit,
+            messages_per_ai_pass=limits.messages_per_ai_pass,
+            message_text_max_chars=limits.message_text_max_chars,
+            message_ocr_max_chars=limits.message_ocr_max_chars,
+            message_block_max_chars=limits.message_block_max_chars,
         )
+        persist_attempt(phase="syncing")
+        try:
+            sync_results = asyncio.run(
+                asyncio.wait_for(
+                    run_sync(
+                        runtime,
+                        channel=args.channel,
+                        since=since,
+                        until=until,
+                        total_limit=limits.sync_limit,
+                        use_ocr=digest_config.use_ocr,
+                        mark_read=digest_config.mark_read,
+                        mode=digest_config.sync_mode,
+                        auth_mode=auth_mode,
+                    ),
+                    timeout=sync_timeout_seconds,
+                )
+            )
+        except TimeoutError as exc:
+            raise SystemExit(
+                f"Digest sync timed out after {digest_config.sync_total_timeout_seconds} seconds."
+            ) from exc
+        persist_attempt(phase="sync_complete", sync_results=sync_results)
         token = bridge.require_token()
         chat_id = history_client.get_config_value(config, "telegram", "default_chat_id")
         if not chat_id:
@@ -1447,16 +1494,24 @@ def cmd_run(args: argparse.Namespace) -> int:
         log_conn = history_client.connect_db(runtime)
         history_client.init_db(log_conn)
 
-        channels = history_client.resolve_channels_argument(runtime, args.channel)
         sync_result_by_channel = {item.get("channel"): item for item in sync_results}
         api_key: str | None = None
         for channel in channels:
+            persist_attempt(
+                phase="analyzing_channel",
+                current_channel=channel,
+                sent_channel_messages=sent_channel_messages,
+                errors=errors,
+                sync_results=sync_results,
+            )
             sync_result = sync_result_by_channel.get(channel)
             if sync_result is None:
                 errors.append(f"{channel}: not processed because the shared digest sync_limit budget was exhausted before this channel.")
+                persist_attempt(current_channel=channel, errors=errors)
                 continue
             if sync_result.get("status") == "error":
                 errors.append(f"{channel}: sync failed: {sync_result.get('error', 'unknown error')}")
+                persist_attempt(current_channel=channel, errors=errors)
                 continue
             message_rows = iter_channel_messages(
                 conn,
@@ -1501,6 +1556,7 @@ def cmd_run(args: argparse.Namespace) -> int:
                     ),
                 )
                 sent_channel_messages += 1
+                persist_attempt(current_channel=channel, sent_channel_messages=sent_channel_messages)
                 continue
             if total_message_count < digest_config.min_messages_for_ai:
                 send_digest_message(
@@ -1517,6 +1573,7 @@ def cmd_run(args: argparse.Namespace) -> int:
                     ),
                 )
                 sent_channel_messages += 1
+                persist_attempt(current_channel=channel, sent_channel_messages=sent_channel_messages)
                 continue
             if api_key is None:
                 api_key = require_openai_api_key(digest_config)
@@ -1530,6 +1587,7 @@ def cmd_run(args: argparse.Namespace) -> int:
                         until=digest_config.until,
                         model=digest_config.model,
                         sync_mode=digest_config.sync_mode,
+                        sync_total_timeout_seconds=digest_config.sync_total_timeout_seconds,
                         messages_per_ai_pass=limits.messages_per_ai_pass,
                         message_text_max_chars=limits.message_text_max_chars,
                         message_ocr_max_chars=limits.message_ocr_max_chars,
@@ -1554,6 +1612,7 @@ def cmd_run(args: argparse.Namespace) -> int:
                 )
             except Exception as exc:
                 errors.append(f"{channel_name}: analysis failed: {str(exc) or exc.__class__.__name__}")
+                persist_attempt(current_channel=channel, errors=errors)
                 continue
             send_digest_message(
                 token,
@@ -1570,8 +1629,10 @@ def cmd_run(args: argparse.Namespace) -> int:
                 ),
             )
             sent_channel_messages += 1
+            persist_attempt(current_channel=channel, sent_channel_messages=sent_channel_messages)
 
         if errors:
+            persist_attempt(phase="sending_error_summary", errors=errors, sent_channel_messages=sent_channel_messages)
             send_digest_message(
                 token,
                 chat_id,
@@ -1595,40 +1656,23 @@ def cmd_run(args: argparse.Namespace) -> int:
             "errors": errors,
         }
         print(json.dumps(payload, ensure_ascii=False, indent=2))
-        write_digest_last_attempt(
-            {
-                "run_id": run_id,
-                "started_at": started_at,
-                "finished_at": audit_timestamp(),
-                "status": payload["status"],
-                "wake_context": launch_context,
-                "channel_override": args.channel,
-                "since_override": args.since,
-                "until_override": args.until,
-                "auth_mode_override": args.auth_mode,
-                **payload,
-            }
+        persist_attempt(
+            current_channel=None,
+            **payload,
+            phase="completed",
+            finished_at=audit_timestamp(),
         )
         return 0
     except BaseException as exc:
-        write_digest_last_attempt(
-            {
-                "run_id": run_id,
-                "started_at": started_at,
-                "finished_at": audit_timestamp(),
-                "status": "failed",
-                "wake_context": launch_context,
-                "channel_override": args.channel,
-                "since_override": args.since,
-                "until_override": args.until,
-                "auth_mode_override": args.auth_mode,
-                "since": since,
-                "until": until,
-                "auth_mode": auth_mode,
-                "sync_results": sync_results,
-                "errors": errors,
-                "error": str(exc) or exc.__class__.__name__,
-            }
+        persist_attempt(
+            finished_at=audit_timestamp(),
+            status="failed",
+            since=since,
+            until=until,
+            auth_mode=auth_mode,
+            sync_results=sync_results,
+            errors=errors,
+            error=str(exc) or exc.__class__.__name__,
         )
         raise
     finally:

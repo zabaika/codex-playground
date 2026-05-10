@@ -118,6 +118,7 @@ class TelegramDigestTests(unittest.TestCase):
 
         self.assertEqual(result.time, "09:30")
         self.assertEqual(result.model, "test-model")
+        self.assertEqual(result.sync_total_timeout_seconds, 1800)
         self.assertEqual(result.sync_mode, "tail")
         self.assertEqual(result.messages_per_ai_pass, 0)
         self.assertEqual(result.min_messages_for_ai, 7)
@@ -175,6 +176,7 @@ batch_digest_template = "Batch={batch_index}"
             until="yesterday",
             model="gpt-5-mini",
             sync_mode="update",
+            sync_total_timeout_seconds=1800,
             messages_per_ai_pass=100,
             message_text_max_chars=450,
             message_ocr_max_chars=300,
@@ -844,6 +846,7 @@ batch_digest_template = "Batch={batch_index}"
             until="yesterday",
             model="gpt-5.4-mini",
             sync_mode="update",
+            sync_total_timeout_seconds=1800,
             messages_per_ai_pass=10,
             message_text_max_chars=450,
             message_ocr_max_chars=300,
@@ -935,6 +938,7 @@ batch_digest_template = "Batch={batch_index}"
             until="yesterday",
             model="gpt-5.4-mini",
             sync_mode="update",
+            sync_total_timeout_seconds=1800,
             messages_per_ai_pass=10,
             message_text_max_chars=260,
             message_ocr_max_chars=0,
@@ -1257,6 +1261,62 @@ batch_digest_template = "Batch={batch_index}"
                 )
 
         self.assertIn("Missing processing.model", str(context.exception))
+
+    def test_cmd_run_fails_when_sync_exceeds_total_timeout(self) -> None:
+        temp_dir = tempfile.TemporaryDirectory()
+        prompt_file = self.write_prompt_bundle(Path(temp_dir.name))
+        original_resolve_runtime = telegram_digest.history_client.resolve_runtime
+        original_load_runtime_config = telegram_digest.history_client.load_runtime_config
+        original_resolve_channels_argument = telegram_digest.history_client.resolve_channels_argument
+        original_run_sync = telegram_digest.run_sync
+        original_project_root = telegram_digest.PROJECT_ROOT
+        original_launchd_log_dir = telegram_digest.LAUNCHD_LOG_DIR
+        original_digest_last_attempt_log = telegram_digest.DIGEST_LAST_ATTEMPT_LOG
+        try:
+            telegram_digest.PROJECT_ROOT = Path(temp_dir.name)
+            telegram_digest.LAUNCHD_LOG_DIR = telegram_digest.PROJECT_ROOT / "data" / "launchd"
+            telegram_digest.DIGEST_LAST_ATTEMPT_LOG = telegram_digest.LAUNCHD_LOG_DIR / "digest.last_attempt.json"
+            telegram_digest.history_client.resolve_runtime = lambda: type("Runtime", (), {"default_auth_mode": "user"})()
+            telegram_digest.history_client.load_runtime_config = lambda: {
+                "processing": {"model": "test-model"},
+                "digest": {"sync_total_timeout_seconds": "1"},
+                "digest_prompts": {"file": str(prompt_file)},
+                "digest_ai": {
+                    "messages_per_ai_pass": "111",
+                    "message_text_max_chars": "450",
+                    "message_ocr_max_chars": "300",
+                    "message_block_max_chars": "100000",
+                },
+                "digest_limits": {
+                    "day": {
+                        "sync_limit": "6100",
+                    },
+                },
+            }
+            telegram_digest.history_client.resolve_channels_argument = lambda runtime, channel: ["@a"]
+
+            async def fake_run_sync(runtime, **kwargs):
+                raise TimeoutError()
+
+            telegram_digest.run_sync = fake_run_sync
+            args = type("Args", (), {"channel": None, "since": None, "until": None, "auth_mode": None})()
+            with self.assertRaises(SystemExit) as context:
+                telegram_digest.cmd_run(args)
+            payload = json.loads(telegram_digest.DIGEST_LAST_ATTEMPT_LOG.read_text(encoding="utf-8"))
+        finally:
+            telegram_digest.history_client.resolve_runtime = original_resolve_runtime
+            telegram_digest.history_client.load_runtime_config = original_load_runtime_config
+            telegram_digest.history_client.resolve_channels_argument = original_resolve_channels_argument
+            telegram_digest.run_sync = original_run_sync
+            telegram_digest.PROJECT_ROOT = original_project_root
+            telegram_digest.LAUNCHD_LOG_DIR = original_launchd_log_dir
+            telegram_digest.DIGEST_LAST_ATTEMPT_LOG = original_digest_last_attempt_log
+            temp_dir.cleanup()
+
+        self.assertEqual(str(context.exception), "Digest sync timed out after 1 seconds.")
+        self.assertEqual(payload["status"], "failed")
+        self.assertEqual(payload["phase"], "syncing")
+        self.assertEqual(payload["sync_timeout_seconds"], 1)
 
 
 if __name__ == "__main__":
