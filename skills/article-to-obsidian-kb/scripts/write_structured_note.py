@@ -120,7 +120,10 @@ def yaml_quote(value: str) -> str:
 
 
 def resolve_project_root(config: dict[str, object] | None = None) -> Path:
-    resolved = resolve_project_root_path(config=config, skill_dir=SKILL_DIR)
+    effective_config = config
+    if effective_config is None and DEFAULT_CONFIG_PATH.exists():
+        effective_config = load_toml(DEFAULT_CONFIG_PATH)
+    resolved = resolve_project_root_path(config=effective_config, skill_dir=SKILL_DIR)
     if resolved is None:
         raise ValueError("Project root could not be resolved for display_source_path")
     return resolved

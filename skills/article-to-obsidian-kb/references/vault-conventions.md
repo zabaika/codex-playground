@@ -244,11 +244,14 @@ Frontmatter is part of the note schema, not optional decoration.
 - Treat lost emphasis as a formatting regression, not as an acceptable cleanup side effect.
 - Do not repeat `title` or `source` from frontmatter inside the body.
 - Make every saved note read as a standalone knowledge object, not as a diary of how it was produced.
+- When a source-derived note introduces a new abbreviation or compressed label that is not already common and obvious inside the note, expand it at first mention in that note body.
+- Do not force expansion for every abbreviation in the vault; this rule is for new abbreviations being introduced to the current note, especially when the short form would otherwise be unclear on first read.
 - Do not keep process-language in the prose such as `в этом выпуске`, `во втором видео`, `исходная заметка`, `старый материал`, or similar assembly comments when the sentence can be rewritten as direct knowledge.
 - In the main note body, prefer idea-first sentences over source-first sentences.
 - Treat `source-scaffolding` as phrasing where the source, speaker, author, article, podcast, or similar material is doing the talking for the idea even though the sentence is really expressing reusable knowledge.
 - If the sentence still makes full sense after replacing the source with the claim itself, rewrite it as standalone knowledge.
 - This includes phrases such as `источник показывает`, `автор выделяет`, or `в транскрипте` when they can be rewritten as direct knowledge.
+- Do not replace source-first phrasing with empty discourse placeholders such as `здесь`, `тут`, `в этом`, or similar stand-ins when they no longer point to a real object; rewrite the sentence so the real subject is named directly.
 - Keep provenance in frontmatter and use source mentions in the body only when the source itself is a useful case, scenario, or comparison rather than a process footnote.
 - Do not apply that source-scaffolding cleanup to schema-defined dated log sections such as `headings.evidence`, `headings.additional_insights`, and `headings.observed_practices`; in those sections, references to `статья`, `подкаст`, `выпуск`, or similar source-type labels are useful provenance and should normally stay.
 - Before finalizing a source-derived note, check whether the draft has flattened the source into generic statements.

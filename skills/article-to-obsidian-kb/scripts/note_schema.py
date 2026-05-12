@@ -26,3 +26,11 @@ def heading(key: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise KeyError(f"Unknown note-schema heading key: {key}")
     return value
+
+
+def heading_values() -> set[str]:
+    return {
+        value.strip()
+        for value in HEADINGS.values()
+        if isinstance(value, str) and value.strip()
+    }

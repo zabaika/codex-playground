@@ -13,7 +13,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
-from note_schema import heading
+from note_schema import heading, heading_values
 
 
 SOURCE_NOTE_TYPES = {"lessons", "general", "operating-model"}
@@ -47,6 +47,7 @@ COUNCIL_RECOMMENDATION_HEADING = heading("council_recommendation")
 COUNCIL_FIRST_STEP_HEADING = heading("council_first_step")
 COUNCIL_ADVISOR_POSITIONS_HEADING = heading("council_advisor_positions")
 COUNCIL_PEER_REVIEW_HEADING = heading("council_peer_review")
+CANONICAL_HEADINGS = heading_values()
 
 
 @dataclass(frozen=True)
@@ -699,6 +700,8 @@ def _check_generic_latin_residue(
     allow_terms = {term for term in allow_latin_terms}
     allow_terms.update(term.lower() for term in allow_latin_terms)
     for idx, line in enumerate(body.splitlines(), start=1):
+        if line.strip() in CANONICAL_HEADINGS:
+            continue
         # Note titles inside wikilinks are canonical graph identifiers and may
         # legitimately contain English terms, so do not treat them as latin residue.
         line_without_wikilinks = WIKILINK_RE.sub("", line)

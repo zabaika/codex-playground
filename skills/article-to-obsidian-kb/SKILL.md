@@ -292,6 +292,7 @@ python3 -m unittest discover -s skills/article-to-obsidian-kb/tests -q
 ### General Note
 
 - Create at most one `general` note per source.
+- Treat the chosen route and the saved note `type` as related but not identical decisions: choose the saved `type` from the final note shape and retained signal, not by mechanically mirroring the route label.
 - Use it only when the chosen route is `general` and the source has useful signal but does not naturally fit a `lessons` note or an `operating-model` note.
 - Prefer `general` over `lessons` when the source keeps substantial value in practical recommendations, supporting cases, tool context, or anti-patterns that would be lost if everything were collapsed into portable principles.
 - Use `lessons` only when the source can mostly be reduced to transferable principles and little signal would be lost by omitting separate practice-oriented structure.
@@ -367,13 +368,14 @@ python3 -m unittest discover -s skills/article-to-obsidian-kb/tests -q
 - Before finalizing the note structure, run a specificity pass on the draft:
   - re-check whether the main lessons or applied sections have been flattened into generic claims during summarization
   - when the source contains concrete anchors such as examples, numbers, pipelines, decision rules, explicit limitations, or concrete failure mechanisms, preserve them in `headings.key_theses`, `headings.practice`, `headings.pitfalls`, or a similar section if they materially improve actionability
+  - apply the first-mention abbreviation rule from [references/vault-conventions.md](references/vault-conventions.md) during early synthesis when the draft introduces a new compressed label
   - treat this as an early synthesis guardrail, not only as a late cleanup step
 - Run one final note-compliance pass before saving any touched note:
   - apply the full final-note contract from [references/vault-conventions.md](references/vault-conventions.md) to the final saved artifact
   - this pass is mandatory for every major rule family in that canonical contract, not just for the family you touched most recently
   - if the note was manually rewritten, merged, or changed late in the run, re-run the full contract after that late edit
   - if you updated an existing note, run this pass against the whole merged note rather than only the latest fragment
-  - re-check the main note body for source-scaffolding and rewrite source-first sentences into idea-first knowledge statements whenever meaning is preserved; this includes source-type phrasings such as `в статье`, `в подкасте`, or `в транскрипте`; keep schema-defined dated provenance sections such as `headings.evidence`, `headings.additional_insights`, and `headings.observed_practices` exempt from that cleanup
+  - re-check the main note body for source-scaffolding under the rule set from [references/vault-conventions.md](references/vault-conventions.md); keep schema-defined dated provenance sections such as `headings.evidence`, `headings.additional_insights`, and `headings.observed_practices` exempt from that cleanup
   - re-check the prose for metaphorical or fashionable jargon and prefer literal operational wording; when a term does not name a concrete role, artifact, step, criterion, mechanism, or constraint, rewrite it into one that does
   - if the note is non-`concept` and has `headings.practice` or another clearly applied section, re-check the checklist rule from [references/vault-conventions.md](references/vault-conventions.md): checklists should preserve real decision structure, and surrounding applied prose should not duplicate the same actions or criteria
   - compare `headings.key_theses`, `headings.practice`, and `headings.pitfalls` for cross-section duplication; if an anti-pattern only mirrors an earlier recommendation, rewrite it into a concrete failure mode or remove it

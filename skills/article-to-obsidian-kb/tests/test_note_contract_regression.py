@@ -175,6 +175,35 @@ date: 2026
             any(code.startswith("language.unexpected-latin:") for code in codes)
         )
 
+    def test_canonical_schema_heading_does_not_trigger_latin_residue(self) -> None:
+        content = f"""---
+title: Тест канонического заголовка
+type: concept
+tags:
+  - prompts
+---
+Короткое определение на русском языке.
+{ADDITIONAL_INSIGHTS_HEADING}
+- 2026-05-12: русскоязычная запись без англоязычного prose.
+{RELATED_NOTES_HEADING}
+[[Русская заметка]]
+"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            fixture = Path(tmpdir) / "Тест канонического заголовка.md"
+            fixture.write_text(content, encoding="utf-8")
+            violations = collect_violations(
+                fixture,
+                expect="concept",
+                chronology_headings=[ADDITIONAL_INSIGHTS_HEADING],
+            )
+        codes = {violation.code for violation in violations}
+        self.assertFalse(
+            any(code.startswith("language.unexpected-latin:Additional") for code in codes)
+        )
+        self.assertFalse(
+            any(code.startswith("language.unexpected-latin:insights") for code in codes)
+        )
+
     def test_clean_note_passes_full_contract(self) -> None:
         fixture = Path(__file__).resolve().parent / "fixtures" / "clean-general-note.md"
         violations = collect_violations(
