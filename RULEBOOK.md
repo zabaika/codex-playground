@@ -94,6 +94,7 @@ Rules:
 - if an operator omits an input target, source, profile, or scope selector, use configured defaults
 - if an operator explicitly provides a target, source, profile, or scope selector, ignore conflicting config defaults for that run
 - if runtime behavior is tuned by prompts, thresholds, limits, budgets, sizing formulas, section aliases, or other operator-facing knobs, keep those values in one canonical config or version-controlled bundle instead of hardcoding editable copies in code
+- all operator-tunable runtime ceilings such as total run timeouts, retry budgets, batch sizes, and output limits must live in config with explicit units
 - when code still needs a constant because of an external protocol or library boundary, document that upstream constraint next to the constant and keep the effective operator-tunable value separate in config
 - do not hide derived runtime behavior behind undocumented formulas or silent clamps; if one config value is expected to be sized from another, put the exact practical formula and the current sample inputs next to the owning config fields
 - when several profiles share the same operator-facing knob, keep that knob in one shared config block and let per-profile sections override only the values that truly differ by profile
@@ -216,6 +217,7 @@ Rules:
 - logs must not contain secrets
 - logs must not contain absolute private file paths when avoidable
 - for scheduled jobs, keep a separate machine-readable last-attempt audit artifact with start time, finish time, status, and concise context; overwrite it on each run instead of accumulating unbounded history there
+- for non-daemon jobs, last-attempt audit logs must include the configured total timeout, current phase, and terminal status on timeout
 - logs must not contain raw external-provider updates or full sensitive request payloads
 - log command metadata, not full sensitive payloads
 - for local tools and skills, prefer one append-only log file per tool unless per-run log separation is operationally necessary
@@ -387,6 +389,22 @@ Operational reliability:
 - for interactive or scheduled external API calls, 2-3 retry attempts is a good default starting point for timeout and other short-lived transport failures
 - if a timeout happens inside a long-running listener loop, prefer logging and continuing the loop over exiting the whole daemon
 - reserve process-fatal exits for persistent misconfiguration, invalid credentials, schema problems, or non-retryable API failures
+- processes that are not intended to behave as daemons must have an explicit wall-clock TTL
+- every one-shot CLI, scheduled job, migration, sync, export, digest, batch worker, or other non-daemon process must define a maximum allowed runtime
+- the timeout must be a wall-clock timeout for the whole run, not only per-request or per-step timeouts
+- keep the timeout value in config, not hardcoded in code, unless an external tool forces a fixed limit
+- use consistent units for config timeouts across the repository; prefer `*_timeout_seconds`
+- when a process exceeds its TTL, terminate it as failed instead of letting it remain stuck in a `running` state indefinitely
+- a timed-out run must write a final machine-readable status such as `failed` or `timed_out` before exit whenever possible
+- timeout expiry must be visible in project-local logs and last-attempt audit artifacts
+- non-daemon jobs must not rely on operator wake-up, manual restart, or host sleep/resume behavior as a substitute for bounded runtime
+- if a non-daemon job can block future scheduled runs while still marked as active, enforcing TTL is mandatory, not optional
+- if a workflow intentionally runs without a TTL, document why it is a daemon and what health or liveness mechanism replaces the TTL
+- prefer one total run timeout first; add per-step timeouts only when they solve a distinct operational problem
+- keep retry budgets bounded inside the total TTL; retries must not extend runtime without limit
+- if the process invokes child processes or external tools, ensure the parent timeout also causes the child work to stop
+- if graceful shutdown is possible, log timeout context such as current phase, current source, and elapsed time before exit
+- for scheduled jobs, record the configured timeout and the last known phase in `data/launchd/<job>.last_attempt.json`
 - before considering a scheduler migration complete, perform at least one real trial run through the scheduler itself and confirm:
   - startup log exists
   - stdout/stderr are sane
@@ -484,5 +502,6 @@ When creating a new local program, skill, automation, or service, verify:
 8. tests cover parser, config, security, and export behavior
 9. explicit command args override config defaults
 10. the real deployed or scheduled runtime path has been reinstalled, redeployed, or otherwise refreshed after code changes
+11. every non-daemon run path has an explicit total runtime timeout recorded in config and surfaced in logs or last-attempt audit output
 
 This rulebook is intended to be stricter than convenience defaults. If a future project needs to relax a rule, document why.
