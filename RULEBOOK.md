@@ -56,6 +56,13 @@ Keep documentation split by responsibility:
 - when changing a shared rule, encode the underlying invariant rather than the last observed example
 - prefer a general rule that covers the failure class over a narrow patch tied to specific words, labels, route/type pairs, or one recent incident
 - use example-specific wording only when the contract truly depends on canonical fixed identifiers such as schema-owned labels, manifest keys, config fields, or other explicit vocabulary
+- for migrations, conversions, rewrites, or normalization passes over existing material, preserve by default and transform by explicit exception; removal or strong compression must have a stated reason rather than being justified only by neatness or shorter length
+- when a workflow deletes content, relocates it, or substantially adapts its meaning or operational role, disclose that change explicitly in the owning report, summary, or migration notes instead of leaving operators to infer it from the final artifact alone
+- do not replace concrete useful material such as examples, templates, checklists, structured specimens, or other directly usable blocks with a more abstract summary unless a clearly identifiable functional equivalent survives in the same workflow
+- when de-branding, anonymizing, or generalizing source-specific material, preserve any underlying quality baseline, contrast pattern, or validation value that the original example provided; remove incidental identity, not the practical standard it was teaching
+- when one workflow produces multiple artifacts with different operational roles, prefer cleanly separated artifacts over hybrids, and make each artifact responsible for one role rather than blending several incompatible responsibilities into one file
+- before compressing or deleting a useful block because it feels too heavy in its current location, first test whether it belongs under a different canonical owner; relocate to the correct owner before choosing lossier transformations
+- for complex multi-file or multi-output systems, maintain a regression harness for mechanically checkable contract rules and update that harness in the same change when the output contract evolves
 
 ## 1. Architecture Rules
 
@@ -194,6 +201,8 @@ Rules:
 - for file-producing workflows that save into external, synced, or otherwise race-prone storage, finalize the artifact in staging, perform one destination write, then immediately read the destination back and verify the saved state before continuing; do not burn retries on blind rewrites against an unverified write result
 - when a workflow has a canonical index or metadata layer for discovery, use it as the default retrieval path and reserve broad filesystem scans for unavailable, broken, or provably stale index states
 - when a workflow separates indexed metadata inspection from full artifact reads, prefer the metadata layer for discovery and narrowing, then open only the shortlisted full artifacts for detailed verification or editing
+- when a knowledge workflow produces an evaluative or rewritten artifact from a note corpus, keep retrieval and narrowing as an explicit intermediate step before the final rewrite; do not jump from a broad corpus query straight to a polished output without a documented evidence-shortlisting pass
+- when indexed retrieval and final narrative output are separated, treat the retrieved notes, snippets, or shortlisted artifacts as the evidence set for the rewrite and keep any broader filesystem exploration as an explicit fallback path rather than a silent parallel source
 
 Recommended env override:
 
@@ -280,6 +289,9 @@ Rules:
   log input tokens, cached input tokens, output tokens, total tokens, latency, model, stage, and status for every AI call
 - optimize batch sizes using measured token usage and latency from real runs, not only record counts
 - when batching large inputs, preserve quality by keeping the batch format and rubric stable while varying only the content payload
+- for advisory, evaluative, or rewrite workflows such as resume reviews, career guidance, strategic assessments, or profile packaging, never invent missing facts, metrics, budgets, role scope, dates, or outcomes to make the output read better
+- when an advisory workflow needs a stronger claim than the provided evidence supports, downgrade the claim, label it explicitly as inference, or convert it into a follow-up question instead of synthesizing a confident-looking fact
+- in evaluative rewrites over human-provided career or profile material, keep a visible separation between confirmed facts, inferences, and requested follow-up data so a polished narrative cannot silently overwrite uncertainty
 
 This section also applies to any workflow that downloads attachments, extracts text, or runs AI enrichment over stored artifacts.
 
