@@ -1,0 +1,3 @@
+interface:
+  display_name: "Prompt Chain Builder"
+  short_description: "Design staged prompt chains for complex tasks"

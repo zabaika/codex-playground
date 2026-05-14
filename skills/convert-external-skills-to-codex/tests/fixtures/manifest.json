@@ -1,0 +1,46 @@
+{
+  "fixtures": [
+    {
+      "name": "chatgpt-project-pack-ai-prompting",
+      "family": "chatgpt-project-pack",
+      "path": "tests/fixtures/chatgpt-project-pack-ai-prompting",
+      "handbook_file": "ai-prompting-handbook.md",
+      "runtime_file": "ai-prompting-project-instructions.md",
+      "examples_file": "ai-prompting-examples-pack.md",
+      "report_file": "ai-prompting-conversion-report.md",
+      "requires_examples": true
+    },
+    {
+      "name": "chatgpt-project-pack-content-writing",
+      "family": "chatgpt-project-pack",
+      "path": "tests/fixtures/chatgpt-project-pack-content-writing",
+      "handbook_file": "content-writing-handbook.md",
+      "runtime_file": "content-writing-project-instructions.md",
+      "examples_file": "content-writing-examples-pack.md",
+      "report_file": "content-writing-conversion-report.md",
+      "requires_examples": true
+    },
+    {
+      "name": "codex-skill-prompt-debugger",
+      "family": "codex-skill",
+      "path": "tests/fixtures/codex-skill-prompt-debugger",
+      "skill_file": "prompt-debugger-SKILL.md",
+      "reference_files": [
+        "references/prompt-debugger-worked-example.md"
+      ],
+      "report_file": "prompt-debugger-conversion-report.md"
+    },
+    {
+      "name": "codex-skill-prompt-chain-builder",
+      "family": "codex-skill",
+      "path": "tests/fixtures/codex-skill-prompt-chain-builder",
+      "skill_file": "prompt-chain-builder-SKILL.md",
+      "reference_files": [
+        "references/prompt-chain-builder-worked-example.md"
+      ],
+      "requires_openai_yaml": true,
+      "reference_min_code_fences": 2,
+      "report_file": "prompt-chain-builder-conversion-report.md"
+    }
+  ]
+}

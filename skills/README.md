@@ -25,6 +25,13 @@ Root skill docs in this folder should act as a catalog and navigation layer only
 - Local docs: [README.md](./article-to-obsidian-kb/README.md)
 - Install: [install-local.sh](./article-to-obsidian-kb/install-local.sh)
 
+### convert-external-skills-to-codex
+
+- Audits third-party skills and converts them into a safer Codex skill, `AGENTS.md`, ChatGPT instructions, or a report-only migration plan.
+- Entry: [SKILL.md](./convert-external-skills-to-codex/SKILL.md)
+- Local docs: [README.md](./convert-external-skills-to-codex/README.md)
+- Install: [install-local.sh](./convert-external-skills-to-codex/install-local.sh)
+
 ### llm-council
 
 - Runs a structured multi-advisor decision review and produces one canonical verdict payload for downstream note writing.

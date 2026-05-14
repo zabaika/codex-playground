@@ -1,0 +1,3 @@
+interface:
+  display_name: "Convert External Skills to Codex"
+  short_description: "Adapt external AI skills for Codex safely"
