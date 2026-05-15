@@ -13,6 +13,16 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
+from language_terms import (
+    canonical_phrases,
+    canonical_single_terms,
+    discouraged_phrases,
+    discouraged_single_terms,
+    discouraged_translations,
+    named_entity_phrases,
+    named_entity_single_terms,
+    role_label_phrases,
+)
 from note_schema import heading, heading_values
 
 
@@ -48,6 +58,14 @@ COUNCIL_FIRST_STEP_HEADING = heading("council_first_step")
 COUNCIL_ADVISOR_POSITIONS_HEADING = heading("council_advisor_positions")
 COUNCIL_PEER_REVIEW_HEADING = heading("council_peer_review")
 CANONICAL_HEADINGS = heading_values()
+CANONICAL_LATIN_SINGLE_TERMS = canonical_single_terms() | named_entity_single_terms()
+CANONICAL_LATIN_PHRASES = (
+    canonical_phrases() | role_label_phrases() | named_entity_phrases()
+)
+DISCOURAGED_LATIN_SINGLE_TERMS = discouraged_single_terms()
+DISCOURAGED_LATIN_PHRASES = discouraged_phrases()
+DISCOURAGED_TRANSLATIONS = discouraged_translations()
+DISCOURAGED_SINGLE_AS_PHRASES = DISCOURAGED_LATIN_SINGLE_TERMS
 
 
 @dataclass(frozen=True)
@@ -149,10 +167,13 @@ def _extract_wikilink_targets(text: str) -> list[str]:
     return [match.group(1) for match in WIKILINK_RE.finditer(text)]
 
 
-def _visible_text(line: str) -> str:
+def _visible_text(line: str, *, keep_inline_code: bool = False) -> str:
     line = URL_RE.sub("", line)
     line = WIKILINK_RE.sub(lambda m: m.group(2) or m.group(1), line)
-    line = INLINE_CODE_RE.sub("", line)
+    if keep_inline_code:
+        line = INLINE_CODE_RE.sub(lambda m: m.group(0).strip("`"), line)
+    else:
+        line = INLINE_CODE_RE.sub("", line)
     return line.replace("**", "").replace("*", "")
 
 
@@ -164,6 +185,114 @@ def _is_allowed_latin_token(token: str, allow_terms: set[str]) -> bool:
     if token in {"AI", "CPO", "JTBD", "PRD", "CSV"}:
         return True
     return False
+
+
+def _partition_latin_terms(terms: set[str]) -> tuple[set[str], set[str]]:
+    single: set[str] = set()
+    phrases: set[str] = set()
+    for term in terms:
+        normalized = term.strip()
+        if not normalized:
+            continue
+        if " " in normalized or "-" in normalized or any(char.isdigit() for char in normalized):
+            phrases.add(normalized)
+        else:
+            single.add(normalized)
+    return single, phrases
+
+
+def _phrase_pattern(phrase: str) -> re.Pattern[str]:
+    return re.compile(
+        rf"(?<![A-Za-z0-9]){re.escape(phrase)}(?![A-Za-z0-9])",
+        re.IGNORECASE,
+    )
+
+
+def _find_phrase_line(body: str, phrase: str, *, include_inline_code: bool = False) -> int | None:
+    pattern = _phrase_pattern(phrase)
+    for idx, line in enumerate(body.splitlines(), start=1):
+        if line.strip() in CANONICAL_HEADINGS:
+            continue
+        line_without_wikilinks = WIKILINK_RE.sub("", line)
+        visible = _visible_text(line_without_wikilinks, keep_inline_code=include_inline_code)
+        if pattern.search(visible):
+            return idx
+    return None
+
+
+def _find_single_term_line(body: str, term: str, *, include_inline_code: bool = False) -> int | None:
+    pattern = _phrase_pattern(term)
+    for idx, line in enumerate(body.splitlines(), start=1):
+        if line.strip() in CANONICAL_HEADINGS:
+            continue
+        line_without_wikilinks = WIKILINK_RE.sub("", line)
+        visible = _visible_text(line_without_wikilinks, keep_inline_code=include_inline_code)
+        visible = _strip_allowed_latin_phrases(visible, CANONICAL_LATIN_PHRASES)
+        if pattern.search(visible):
+            return idx
+    return None
+
+
+def _strip_allowed_latin_phrases(line: str, allow_phrases: set[str]) -> str:
+    stripped = line
+    for phrase in sorted(allow_phrases, key=len, reverse=True):
+        stripped = _phrase_pattern(phrase).sub("", stripped)
+    return stripped
+
+
+def _normalize_phrase(text: str) -> str:
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _inline_code_contents(line: str) -> list[str]:
+    return [match.group(0).strip("`") for match in INLINE_CODE_RE.finditer(line)]
+
+
+def _looks_descriptive_inline_phrase(text: str) -> bool:
+    letters = [char for char in text if char.isalpha()]
+    if not letters:
+        return False
+    return all(not char.isupper() for char in letters)
+
+
+def _is_mixed_case_shorthand(token: str) -> bool:
+    if re.fullmatch(r"[A-Z][a-z]+(?:[A-Z][a-z]+)+", token):
+        return True
+    if re.fullmatch(r"[A-Z][a-z]+(?:[A-Z]{2,}|[a-z]+)[A-Za-z]*", token) and any(
+        char.isupper() for char in token[1:]
+    ):
+        return True
+    if re.fullmatch(r"[A-Z][a-z]{1,4}[A-Z][A-Za-z]*", token):
+        return True
+    if re.fullmatch(r"[A-Z][a-z]?[A-Z][A-Za-z]*", token):
+        return True
+    return False
+
+
+def _group_unexpected_latin_tokens(
+    visible: str, allow_terms: set[str]
+) -> list[list[re.Match[str]]]:
+    groups: list[list[re.Match[str]]] = []
+    current: list[re.Match[str]] = []
+    for match in LATIN_TOKEN_RE.finditer(visible):
+        token = match.group(0)
+        if _is_allowed_latin_token(token, allow_terms):
+            if current:
+                groups.append(current)
+                current = []
+            continue
+        if not current:
+            current = [match]
+            continue
+        gap = visible[current[-1].end() : match.start()]
+        if gap.isspace():
+            current.append(match)
+            continue
+        groups.append(current)
+        current = [match]
+    if current:
+        groups.append(current)
+    return groups
 
 
 def _check_required_frontmatter(
@@ -693,12 +822,41 @@ def _check_forbidden_terms(body: str, forbidden_terms: list[str]) -> list[Violat
     return violations
 
 
+def _check_discouraged_latin_phrases(body: str) -> list[Violation]:
+    violations: list[Violation] = []
+    for phrase in sorted(DISCOURAGED_LATIN_PHRASES, key=len, reverse=True):
+        line = _find_phrase_line(body, phrase, include_inline_code=True)
+        if line is not None:
+            violations.append(
+                Violation(
+                    f"language.translate-term:{phrase}",
+                    f"Термин `{phrase}` должен быть переведён на русский как неканонический prose-ярлык; рекомендуемая форма: `{DISCOURAGED_TRANSLATIONS.get(phrase, 'см. language_terms registry')}`.",
+                    line,
+                )
+            )
+    for token in sorted(DISCOURAGED_LATIN_SINGLE_TERMS):
+        line = _find_single_term_line(body, token, include_inline_code=True)
+        if line is not None:
+            violations.append(
+                Violation(
+                    f"language.translate-term:{token}",
+                    f"Термин `{token}` должен быть переведён на русский как неканонический prose-ярлык; рекомендуемая форма: `{DISCOURAGED_TRANSLATIONS.get(token, 'см. language_terms registry')}`.",
+                    line,
+                )
+            )
+    return violations
+
+
 def _check_generic_latin_residue(
     body: str, allow_latin_terms: list[str]
 ) -> list[Violation]:
     violations: list[Violation] = []
-    allow_terms = {term for term in allow_latin_terms}
-    allow_terms.update(term.lower() for term in allow_latin_terms)
+    extra_allow_single, extra_allow_phrases = _partition_latin_terms(set(allow_latin_terms))
+    allow_terms = {term for term in extra_allow_single}
+    allow_terms.update(term.lower() for term in extra_allow_single)
+    allow_terms.update(CANONICAL_LATIN_SINGLE_TERMS)
+    allow_terms.update(term.lower() for term in CANONICAL_LATIN_SINGLE_TERMS)
+    allow_phrases = CANONICAL_LATIN_PHRASES | extra_allow_phrases
     for idx, line in enumerate(body.splitlines(), start=1):
         if line.strip() in CANONICAL_HEADINGS:
             continue
@@ -706,17 +864,84 @@ def _check_generic_latin_residue(
         # legitimately contain English terms, so do not treat them as latin residue.
         line_without_wikilinks = WIKILINK_RE.sub("", line)
         visible = _visible_text(line_without_wikilinks)
-        for match in LATIN_TOKEN_RE.finditer(visible):
-            token = match.group(0)
-            if _is_allowed_latin_token(token, allow_terms):
+        visible = _strip_allowed_latin_phrases(visible, allow_phrases)
+        visible = _strip_allowed_latin_phrases(visible, DISCOURAGED_LATIN_PHRASES)
+        visible = _strip_allowed_latin_phrases(visible, DISCOURAGED_SINGLE_AS_PHRASES)
+        for group in _group_unexpected_latin_tokens(visible, allow_terms):
+            if len(group) == 1:
+                token = group[0].group(0)
+                if "-" in token or "/" in token:
+                    violations.append(
+                        Violation(
+                            f"language.translate-phrase:{token}",
+                            f"В тексте осталась английская фраза `{token}`; переведите её целиком на русский или добавьте в language registry, если это действительно канонический термин.",
+                            idx,
+                        )
+                    )
+                    continue
+                if _is_mixed_case_shorthand(token):
+                    violations.append(
+                        Violation(
+                            f"language.review-term:{token}",
+                            f"Токен `{token}` похож на внутренний shorthand, смешанный label или нестандартный acronym; проверьте, нужно ли оставить его как каноническое имя или перевести в более явную русскую формулировку.",
+                            idx,
+                        )
+                    )
+                    continue
+                violations.append(
+                    Violation(
+                        f"language.unexpected-latin:{token}",
+                        f"В тексте остался неожиданный латинский или гибридный токен `{token}` вне allowlist.",
+                        idx,
+                    )
+                )
                 continue
+            phrase = _normalize_phrase(visible[group[0].start() : group[-1].end()])
             violations.append(
                 Violation(
-                    f"language.unexpected-latin:{token}",
-                    f"В тексте остался неожиданный латинский или гибридный токен `{token}` вне allowlist.",
+                    f"language.translate-phrase:{phrase}",
+                    f"В тексте осталась английская фраза `{phrase}`; переведите её целиком на русский или добавьте в language registry, если это действительно канонический термин.",
                     idx,
                 )
             )
+    return violations
+
+
+def _check_inline_code_phrase_residue(
+    body: str, allow_latin_terms: list[str]
+) -> list[Violation]:
+    violations: list[Violation] = []
+    extra_allow_single, extra_allow_phrases = _partition_latin_terms(set(allow_latin_terms))
+    allow_terms = {term for term in extra_allow_single}
+    allow_terms.update(term.lower() for term in extra_allow_single)
+    allow_terms.update(CANONICAL_LATIN_SINGLE_TERMS)
+    allow_terms.update(term.lower() for term in CANONICAL_LATIN_SINGLE_TERMS)
+    allow_phrases = CANONICAL_LATIN_PHRASES | extra_allow_phrases
+    for idx, line in enumerate(body.splitlines(), start=1):
+        if line.strip() in CANONICAL_HEADINGS:
+            continue
+        line_without_wikilinks = WIKILINK_RE.sub("", line)
+        for code_text in _inline_code_contents(line_without_wikilinks):
+            visible = _strip_allowed_latin_phrases(code_text, allow_phrases)
+            visible = _strip_allowed_latin_phrases(visible, DISCOURAGED_LATIN_PHRASES)
+            visible = _strip_allowed_latin_phrases(visible, DISCOURAGED_SINGLE_AS_PHRASES)
+            for group in _group_unexpected_latin_tokens(visible, allow_terms):
+                if len(group) == 1:
+                    token = group[0].group(0)
+                    if "-" not in token and "/" not in token:
+                        continue
+                    phrase = token
+                else:
+                    phrase = _normalize_phrase(visible[group[0].start() : group[-1].end()])
+                if not _looks_descriptive_inline_phrase(phrase):
+                    continue
+                violations.append(
+                    Violation(
+                        f"language.translate-phrase:{phrase}",
+                        f"В inline code осталась английская фраза `{phrase}`; переведите её целиком на русский или добавьте в language registry, если это действительно канонический термин.",
+                        idx,
+                    )
+                )
     return violations
 
 
@@ -1088,7 +1313,9 @@ def collect_violations_from_text(
     body_violations.extend(_check_double_blank_lines(body))
     body_violations.extend(_check_forbidden_terms(body, forbidden_terms))
     if expect != "structured-council-verdict":
+        body_violations.extend(_check_discouraged_latin_phrases(body))
         body_violations.extend(_check_generic_latin_residue(body, allow_latin_terms))
+        body_violations.extend(_check_inline_code_phrase_residue(body, allow_latin_terms))
     body_violations.extend(_check_required_linked_phrases(body, required_linked_phrases))
     body_violations.extend(_check_required_examples(body, required_example_phrases))
     body_violations.extend(

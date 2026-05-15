@@ -382,6 +382,8 @@ python3 -m unittest discover -s skills/article-to-obsidian-kb/tests -q
   - re-check whether the main lessons or applied sections have been flattened into generic claims; when the source contains concrete anchors such as examples, numbers, pipelines, decision rules, explicit limitations, or concrete failure mechanisms, preserve them in the note if they materially improve actionability
   - a strong practical note should usually contain at least some source-native specificity, not only abstract restatements
   - re-check role and artifact terminology where the source contains neighboring English terms such as product, product manager, design, or platform; keep the Russian wording semantically separated instead of collapsing distinct roles into one overloaded noun
+  - re-check English terminology by semantic class under [references/language-normalization.md](references/language-normalization.md): keep canonical engineering terms, stable role labels, named entities, and canonical `wikilink` titles in English, but translate non-canonical organizational shorthand, evaluative prose labels, and descriptive operational phrases that merely label a mechanism, budget, pricing rule, control layer, workflow mode, governance rule, or evaluation pattern
+  - do not let inline code preserve non-canonical English prose; backticks are acceptable for canonical commands, identifiers, product names, and stable method names, but not for descriptive labels that should be translated
   - do not mark a note complete until it passes this full-note contract in its final saved form
 - Run one final regression-sweep pass immediately after the note-compliance pass:
   - re-run the same full final-note contract a second time with identical coverage after all fixes are done

@@ -27,7 +27,7 @@ Those remain judgment tasks for the skill itself and for human review.
 | Required headings and forbidden headings | `vault-conventions.md` | `structure.missing-heading:*`, `structure.forbidden-heading:*`, `structure.duplicate-heading:*` | `after-first-pass-regression.md` | `clean-general-note.md` |
 | Intro before first heading | `vault-conventions.md` | `structure.missing-intro-before-first-heading` | add when needed | `clean-general-note.md` |
 | Spacing rules | `vault-conventions.md` | `spacing.*` | `after-first-pass-regression.md` | `clean-general-note.md` |
-| Forbidden anglicisms and latin residue | `language-normalization.md`, `vault-conventions.md` | `language.forbidden-term:*`, `language.unexpected-latin:*` | `after-first-pass-regression.md` | `clean-general-note.md` |
+| Forbidden anglicisms and latin residue | `language-normalization.md`, `vault-conventions.md` | `language.forbidden-term:*`, `language.translate-term:*`, `language.translate-phrase:*`, `language.review-term:*`, `language.unexpected-latin:*` | `after-first-pass-regression.md` | `clean-general-note.md` |
 | Required wikilinks | `vault-conventions.md` | `links.unlinked-phrase:*` | `after-first-pass-regression.md` | `clean-general-note.md` |
 | Required examples retained | `vault-conventions.md` | `examples.missing:*` | `after-first-pass-regression.md` | `clean-general-note.md` |
 | Bold-leading scanability | `vault-conventions.md` | `emphasis.missing-leading-bold:*` | `after-first-pass-regression.md` | `clean-general-note.md` |

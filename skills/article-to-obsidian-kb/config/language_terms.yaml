@@ -1,0 +1,92 @@
+{
+  "canonical_terms": {
+    "single": [
+      "AI",
+      "LLM",
+      "LLMOps",
+      "DAU",
+      "MAU",
+      "PRD",
+      "CFO",
+      "gateway",
+      "production",
+      "playbooks",
+      "guardrails"
+    ],
+    "phrases": [
+      "code review",
+      "performance review",
+      "Prompt Hardening",
+      "AI-native",
+      "product engineering"
+    ]
+  },
+  "role_labels": {
+    "single": [],
+    "phrases": [
+      "Product Manager",
+      "product engineer",
+      "AI Engineer"
+    ]
+  },
+  "named_entities": {
+    "single": [
+      "Accenture",
+      "Microsoft",
+      "Atlassian",
+      "RedMonk"
+    ],
+    "phrases": [
+      "1Password"
+    ]
+  },
+  "discouraged_prose_terms": {
+    "single": {
+      "adoption": "освоение или реальное внедрение в работу",
+      "audit": "аудит",
+      "autocomplete": "автодополнение",
+      "brownfield": "зрелый легаси-контур",
+      "choreography": "хореография взаимодействия",
+      "cloud": "облачный контур или облачная среда",
+      "compliance": "комплаенс-контур",
+      "delivery": "поставка или скорость и качество поставки в зависимости от контекста",
+      "evaluation": "оценка",
+      "friction": "трение или лишнее сопротивление в процессе",
+      "identity": "контур идентификации",
+      "incident": "инцидент",
+      "intent": "намерение",
+      "leverage": "усиление или полезный рычаг",
+      "licenses": "лицензии",
+      "nonsense": "бессмысленный результат",
+      "orchestration": "оркестрация",
+      "permissions": "права доступа",
+      "procedures": "процедуры",
+      "prompt": "промпт",
+      "prototype": "прототип",
+      "rework": "переделка",
+      "rollout": "внедрение",
+      "seats": "лицензионные версии",
+      "signal": "сигнал",
+      "specification": "спецификация",
+      "steering": "ручное направление работы агента",
+      "verification": "проверка",
+      "workflows": "рабочие процессы"
+    },
+    "phrases": {
+      "AI literacy": "прикладная грамотность в работе с AI",
+      "prompt-management": "управление промптами",
+      "top-down": "подход сверху вниз",
+      "bottom-up": "подход снизу вверх",
+      "AI shaming": "стыд за недостаточное использование AI",
+      "shadow AI": "теневое использование AI",
+      "subjective satisfaction": "субъективная удовлетворённость",
+      "acceptable use": "допустимое использование",
+      "feedback loop": "цикл обратной связи",
+      "foundation models": "базовые модели",
+      "learning system": "система организационного обучения",
+      "messy middle": "хаотичная промежуточная стадия внедрения",
+      "root-cause analysis": "разбор первопричины",
+      "usage dashboards": "дашборды использования"
+    }
+  }
+}

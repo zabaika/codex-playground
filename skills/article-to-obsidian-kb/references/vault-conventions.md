@@ -178,6 +178,9 @@ Frontmatter is part of the note schema, not optional decoration.
 
 - Write in Russian.
 - Keep key technical terms in English when the English form is the standard term.
+- Decide whether to keep an English term by semantic class, not by visual appearance.
+- Keep canonical engineering terms, stable role labels, named entities, and canonical `wikilink` titles in English when that is their standard recognizable form.
+- Translate generic organizational shorthand, evaluative prose labels, and non-canonical English business language when a direct Russian formulation is clearer.
 - Translate ordinary management, business, and product vocabulary into Russian when a natural Russian equivalent exists.
 - Do not leave random English nouns in the prose just because they appeared in the source article.
 - On first mention, use the Russian form and add the English term in parentheses only when the English wording materially helps recognition or search.

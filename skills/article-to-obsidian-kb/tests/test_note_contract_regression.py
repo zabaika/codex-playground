@@ -62,8 +62,7 @@ class CheckNoteContractTests(unittest.TestCase):
         self.assertIn(f"structure.missing-heading:{PITFALLS_HEADING}", codes)
         self.assertIn("examples.missing:салона, химчистки или шиномонтажа", codes)
         self.assertIn(f"emphasis.missing-leading-bold:{KEY_THESES_HEADING}", codes)
-        self.assertIn("language.unexpected-latin:product", codes)
-        self.assertIn("language.unexpected-latin:lead", codes)
+        self.assertIn("language.translate-phrase:product lead", codes)
         self.assertIn("closing.duplicate-inline-link:Найм с AI-усилением", codes)
 
     def test_empty_related_section_is_rejected(self) -> None:
@@ -237,6 +236,318 @@ tags:
             ],
         )
         self.assertEqual([], violations)
+
+    def test_canonical_engineering_terms_and_named_entities_pass(self) -> None:
+        content = f"""---
+title: Тест канонических английских терминов
+source:
+  - https://example.com
+type: operating-model
+tags:
+  - ai-adoption
+date: 2026
+---
+Команда использует `code review`, держит путь в `production`, хранит `playbooks` и строит отдельный [[LLMOps]]-контур. На уровне ролей рядом работают `Product Manager` и `product engineer`, а практики описаны на панели `Microsoft`, `Atlassian` и `1Password`.
+{KEY_THESES_HEADING}
+- **Тезис.** Канонические инженерные термины, устойчивые названия ролей и названия компаний могут оставаться на английском.
+{PRACTICE_HEADING}
+- **Практика.** Не переводите устойчивые названия процессов и ролей только потому, что они написаны латиницей.
+{PITFALLS_HEADING}
+- **Ошибка.** Чистить `Prompt Hardening` или `LLMOps` как будто это случайный англоязычный хвост.
+{RELATED_NOTES_HEADING}
+[[Prompt Hardening]]
+"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            fixture = Path(tmpdir) / "Тест канонических английских терминов.md"
+            fixture.write_text(content, encoding="utf-8")
+            violations = collect_violations(
+                fixture,
+                expect="source",
+                required_headings=[
+                    KEY_THESES_HEADING,
+                    PRACTICE_HEADING,
+                    PITFALLS_HEADING,
+                ],
+                enforce_leading_bold_under=[
+                    KEY_THESES_HEADING,
+                    PRACTICE_HEADING,
+                    PITFALLS_HEADING,
+                ],
+            )
+        codes = {violation.code for violation in violations}
+        self.assertFalse(
+            any(code.startswith("language.unexpected-latin:") for code in codes)
+        )
+        self.assertFalse(
+            any(code.startswith("language.translate-term:") for code in codes)
+        )
+
+    def test_discouraged_english_prose_terms_fail_with_translate_term_code(self) -> None:
+        content = f"""---
+title: Тест переводимых английских ярлыков
+source:
+  - https://example.com
+type: general
+tags:
+  - organization
+date: 2026
+---
+Заметка намеренно оставляет фразы AI literacy, top-down, shadow AI, subjective satisfaction и delivery.
+{KEY_THESES_HEADING}
+- **Тезис.** Эти ярлыки должны быть переведены, даже если встречаются в источнике.
+{PRACTICE_HEADING}
+- **Практика.** Держите канонические термины и переводимые ярлыки как разные классы.
+{PITFALLS_HEADING}
+- **Ошибка.** Смешивать названия компаний и одноразовый организационный жаргон в одну категорию исключений.
+{RELATED_NOTES_HEADING}
+[[Социотехническая продуктивность]]
+"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            fixture = Path(tmpdir) / "Тест переводимых английских ярлыков.md"
+            fixture.write_text(content, encoding="utf-8")
+            violations = collect_violations(
+                fixture,
+                expect="source",
+                required_headings=[
+                    KEY_THESES_HEADING,
+                    PRACTICE_HEADING,
+                    PITFALLS_HEADING,
+                ],
+                enforce_leading_bold_under=[
+                    KEY_THESES_HEADING,
+                    PRACTICE_HEADING,
+                    PITFALLS_HEADING,
+                ],
+            )
+        codes = {violation.code for violation in violations}
+        self.assertIn("language.translate-term:AI literacy", codes)
+        self.assertIn("language.translate-term:top-down", codes)
+        self.assertIn("language.translate-term:shadow AI", codes)
+        self.assertIn("language.translate-term:subjective satisfaction", codes)
+        self.assertIn("language.translate-term:delivery", codes)
+
+    def test_named_entities_do_not_trigger_latin_residue_in_rollout_like_note(self) -> None:
+        content = f"""---
+title: Тест rollout note
+source:
+  - https://example.com
+type: operating-model
+tags:
+  - ai-adoption
+date: 2026
+---
+Аналитики Accenture и RedMonk описывают общий сдвиг в инженерных организациях.
+## Команда и зона ответственности
+- **Новые роли.** В найме растет доля ролей уровня `AI Engineer`, где основной акцент не на обучении foundation models, а на построении связующего слоя между `LLM` и боевым кодом.
+## Платформы и системы
+- **Prompt как часть системы.** Разовые личные prompts не масштабируются.
+## Метрики
+- **Подход.** Важны не только затраты, но и то, как меняется качество решений.
+## Приоритизация
+- **Выбор.** Команда определяет, какие сценарии стоит стандартизировать.
+## Внедрение AI
+- **Этапы.** Внедрение идет по частям.
+## Покупать или строить
+- **Решение.** Нужен отдельный слой интеграции.
+## Key lessons
+1. **Вывод.** Формулировка section title пока не переведена.
+{RELATED_NOTES_HEADING}
+[[Prompt Hardening]]
+"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            fixture = Path(tmpdir) / "Тест rollout note.md"
+            fixture.write_text(content, encoding="utf-8")
+            violations = collect_violations(
+                fixture,
+                expect="source",
+            )
+        codes = {violation.code for violation in violations}
+        self.assertNotIn("language.unexpected-latin:Accenture", codes)
+        self.assertNotIn("language.unexpected-latin:RedMonk", codes)
+        self.assertIn("language.translate-term:foundation models", codes)
+        self.assertIn("language.translate-phrase:Key lessons", codes)
+
+    def test_phrase_candidates_collapse_legacy_token_soup(self) -> None:
+        content = f"""---
+title: Тест phrase candidates
+source:
+  - https://example.com
+type: general
+tags:
+  - organization
+date: 2026
+---
+Короткое вступление про внедрение.
+{KEY_THESES_HEADING}
+- **Тезис.** Команда быстро получает root-cause analysis и живет в messy middle.
+- **Тезис.** Community of practice и feedback loop не должны оставаться английским prose.
+{PRACTICE_HEADING}
+- **Практика.** Не оставляйте acceptable use и learning system в исходной форме.
+{PITFALLS_HEADING}
+- **Ошибка.** usage dashboards и monthly demos не должны разъезжаться в россыпь одиночных токенов.
+{RELATED_NOTES_HEADING}
+[[Социотехническая продуктивность]]
+"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            fixture = Path(tmpdir) / "Тест phrase candidates.md"
+            fixture.write_text(content, encoding="utf-8")
+            violations = collect_violations(
+                fixture,
+                expect="source",
+                required_headings=[
+                    KEY_THESES_HEADING,
+                    PRACTICE_HEADING,
+                    PITFALLS_HEADING,
+                ],
+                enforce_leading_bold_under=[
+                    KEY_THESES_HEADING,
+                    PRACTICE_HEADING,
+                    PITFALLS_HEADING,
+                ],
+            )
+        codes = {violation.code for violation in violations}
+        self.assertIn("language.translate-term:root-cause analysis", codes)
+        self.assertIn("language.translate-term:messy middle", codes)
+        self.assertIn("language.translate-term:feedback loop", codes)
+        self.assertIn("language.translate-term:acceptable use", codes)
+        self.assertIn("language.translate-term:learning system", codes)
+        self.assertIn("language.translate-term:usage dashboards", codes)
+        self.assertIn("language.translate-phrase:Community of practice", codes)
+        self.assertIn("language.translate-phrase:monthly demos", codes)
+        self.assertNotIn("language.unexpected-latin:Community", codes)
+        self.assertNotIn("language.unexpected-latin:of", codes)
+        self.assertNotIn("language.unexpected-latin:practice", codes)
+
+    def test_discouraged_terms_inside_inline_code_are_still_checked(self) -> None:
+        content = f"""---
+title: Тест inline code prose
+source:
+  - https://example.com
+type: general
+tags:
+  - ai-adoption
+date: 2026
+---
+Короткое вступление.
+{KEY_THESES_HEADING}
+- **Тезис.** Команда делегирует `root-cause analysis` агенту и потом оценивает `usage dashboards`.
+{PRACTICE_HEADING}
+- **Практика.** Не прячьте `prompt` и `evaluation` в inline code, если это обычный prose.
+{PITFALLS_HEADING}
+- **Ошибка.** Inline code не должен обходить language-pass для переводимых ярлыков.
+{RELATED_NOTES_HEADING}
+[[Социотехническая продуктивность]]
+"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            fixture = Path(tmpdir) / "Тест inline code prose.md"
+            fixture.write_text(content, encoding="utf-8")
+            violations = collect_violations(
+                fixture,
+                expect="source",
+                required_headings=[
+                    KEY_THESES_HEADING,
+                    PRACTICE_HEADING,
+                    PITFALLS_HEADING,
+                ],
+                enforce_leading_bold_under=[
+                    KEY_THESES_HEADING,
+                    PRACTICE_HEADING,
+                    PITFALLS_HEADING,
+                ],
+            )
+        codes = {violation.code for violation in violations}
+        self.assertIn("language.translate-term:root-cause analysis", codes)
+        self.assertIn("language.translate-term:usage dashboards", codes)
+        self.assertIn("language.translate-term:prompt", codes)
+        self.assertIn("language.translate-term:evaluation", codes)
+
+    def test_uncatalogued_descriptive_inline_phrases_are_reported(self) -> None:
+        content = f"""---
+title: Тест inline code phrase heuristics
+source:
+  - https://example.com
+type: general
+tags:
+  - ai-adoption
+date: 2026
+---
+Короткое вступление.
+{KEY_THESES_HEADING}
+- **Тезис.** Команда обсуждает `model routing`, `token budgets`, `usage-contingent pricing` и `inference costs`.
+{PRACTICE_HEADING}
+- **Практика.** Такие описательные операционные фразы не должны сохраняться на английском только потому, что они стоят в inline code.
+{PITFALLS_HEADING}
+- **Ошибка.** Не прячьте descriptive labels в backticks.
+{RELATED_NOTES_HEADING}
+[[Социотехническая продуктивность]]
+"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            fixture = Path(tmpdir) / "Тест inline code phrase heuristics.md"
+            fixture.write_text(content, encoding="utf-8")
+            violations = collect_violations(
+                fixture,
+                expect="source",
+                required_headings=[
+                    KEY_THESES_HEADING,
+                    PRACTICE_HEADING,
+                    PITFALLS_HEADING,
+                ],
+                enforce_leading_bold_under=[
+                    KEY_THESES_HEADING,
+                    PRACTICE_HEADING,
+                    PITFALLS_HEADING,
+                ],
+            )
+        codes = {violation.code for violation in violations}
+        self.assertIn("language.translate-phrase:model routing", codes)
+        self.assertIn("language.translate-phrase:token budgets", codes)
+        self.assertIn("language.translate-phrase:usage-contingent pricing", codes)
+        self.assertIn("language.translate-phrase:inference costs", codes)
+
+    def test_mixed_case_and_hyphenated_residue_are_reported_more_helpfully(self) -> None:
+        content = f"""---
+title: Тест mixed residue
+source:
+  - https://example.com
+type: operating-model
+tags:
+  - ai-adoption
+date: 2026
+---
+Короткое вступление с DevProd, PoC и hub-and-spoke.
+{KEY_THESES_HEADING}
+- **Тезис.** Такие остатки должны давать более точные diagnostics, чем общий unexpected-latin.
+{PRACTICE_HEADING}
+- **Практика.** Сначала проверяйте, является ли токен shorthand, acronym или phrase-like остатком.
+{PITFALLS_HEADING}
+- **Ошибка.** Смешивать внутренние labels и обычный prose residue в один bucket.
+{RELATED_NOTES_HEADING}
+[[AI Rollout Operating Model - Engineering Organizations]]
+"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            fixture = Path(tmpdir) / "Тест mixed residue.md"
+            fixture.write_text(content, encoding="utf-8")
+            violations = collect_violations(
+                fixture,
+                expect="source",
+                required_headings=[
+                    KEY_THESES_HEADING,
+                    PRACTICE_HEADING,
+                    PITFALLS_HEADING,
+                ],
+                enforce_leading_bold_under=[
+                    KEY_THESES_HEADING,
+                    PRACTICE_HEADING,
+                    PITFALLS_HEADING,
+                ],
+            )
+        codes = {violation.code for violation in violations}
+        self.assertIn("language.review-term:DevProd", codes)
+        self.assertIn("language.review-term:PoC", codes)
+        self.assertIn("language.translate-phrase:hub-and-spoke", codes)
+        self.assertNotIn("language.unexpected-latin:DevProd", codes)
+        self.assertNotIn("language.unexpected-latin:PoC", codes)
+        self.assertNotIn("language.unexpected-latin:hub-and-spoke", codes)
 
     def test_prepended_dated_log_entry_is_rejected(self) -> None:
         fixture = (
