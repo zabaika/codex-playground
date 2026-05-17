@@ -30,6 +30,30 @@ Use `common/` for code and config that are:
 - keep engine/runtime primitives here when they are intended for reuse across multiple projects
 - when a deployed runtime copies code into a service root, deploy the matching `common/` bundle together with the project code
 
+## Canonical Ownership
+
+`common/` is the canonical owner only for reusable low-level runtime primitives and their shared config bundles.
+
+`common/` must not own:
+
+- project-specific business logic
+- domain entities or lifecycle semantics
+- command handlers or product-specific workflows
+- repositories or migrations for one project
+- quality gates, approval logic, or UI-specific behavior
+
+## Extraction Rule
+
+Move code into `common/` only when all of the following are true:
+
+- it is reused or clearly intended for reuse by multiple top-level projects
+- it is domain-agnostic
+- it defines a stable runtime contract
+- it should behave the same in both the repo and deployed runtime copies
+
+Project-local thin wrappers over `common/` are allowed.
+Project-local forks of the same low-level runtime behavior should be treated as drift and avoided.
+
 ## Source Of Truth
 
 - use [RULEBOOK.md](../RULEBOOK.md) for the shared architectural and database rules behind this folder

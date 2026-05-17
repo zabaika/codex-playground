@@ -110,6 +110,13 @@ Use the architecture rules in this order:
 - keep storage-oriented subsystems inside `infrastructure`; do not let a database helper, repository package, or storage bundle become the public API of the whole system
 - if a system exposes a named storage-oriented subsystem, treat it as persistence infrastructure only; canonical business mutations must still enter through application command handlers
 
+### Shared Runtime Extraction Rules
+
+- if the same low-level runtime mechanism starts to repeat across multiple top-level projects, make `common/` its canonical owner instead of keeping project-local copies
+- move only domain-agnostic runtime primitives into `common/`; do not use `common/` as a dumping ground for shared business logic
+- when a helper moves into `common/`, treat changes to it as compatibility-sensitive for every dependent project
+- if project-local code needs different business behavior, keep that behavior in the project and layer it on top of `common/` rather than turning `common/` into a product-specific module
+
 ### Command Boundary and Mutation Ownership
 
 - if a system combines persistent workflow state, AI surfaces, CLI, and UI, keep the canonical business logic and state transitions in one deterministic application/service layer
