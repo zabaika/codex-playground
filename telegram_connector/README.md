@@ -41,7 +41,7 @@ Main config groups:
 - `[telethon]`, `[auth]`, `[channels]`: Telegram account, auth mode, and default channel selection
 - `[processing]`, `[ocr]`: shared analysis defaults, including model and OCR behavior
 - `[digest]`, `[digest_ai]`, `[digest_limits.*]`, `[digest_prompts]`: digest windows, AI batching, sync limits, and prompt bundle
-- `[sync]`: non-digest sync limits and SQLite commit batching
+- `[sync]`: non-digest sync limits and in-memory staging before short SQLite flush transactions
 - `[bridge]`: bot access control, reply chunking, `/agent-stats`, and `/top-models`
 - `[paths]`, `[secrets]`: local runtime paths and secret references
 
@@ -79,12 +79,15 @@ Main config groups:
 ### Digest defaults
 
 - `digest.separator_text` optionally appends the configured divider twice to the end of each digest message; leave it empty to disable the separator
+- `digest.run_total_timeout_seconds` is the hard wall-clock TTL for the whole one-shot digest run; it is enforced outside Python through the shared TTL runner
+- `digest.termination_grace_seconds` is the grace period between `SIGTERM` and `SIGKILL` when the hard digest TTL expires
 - `digest.since` and `digest.until` define the default analysis window; `yesterday` is the recommended morning default
 - `digest.until` uses the same aliases as `since`, but date-only values are expanded to the end of that UTC day
 - `digest.min_messages_for_ai` sets the per-channel minimum required for OpenAI analysis; below that threshold digest still syncs messages but sends only a short Telegram note without AI processing
 - supported date aliases for `since` / `until` include `today` and `-Nd`
 - the same alias logic now applies consistently to `sync`, `export-csv`, `ocr-pending`, and `digest`
 - `digest.mark_read` enables the existing mark-as-read mechanism for digest prep-sync; it only has effect in `user` auth mode
+- `digest.sync_total_timeout_seconds` is a soft in-process timeout for the prep-sync phase; it does not replace the outer hard process TTL
 - `[digest_prompts].file` points to the version-controlled TOML bundle that stores the AI system instructions and per-channel prompt templates; relative paths are resolved from the config directory that contains `runtime.local.toml`
 - `digest` overrides for `channel`, `since`, `until`, and auth mode win over config defaults when you pass them explicitly
 
@@ -100,12 +103,12 @@ Main config groups:
 
 ### Sync behavior
 
-- `[sync].batch_size` controls SQLite commit batching for all sync flows, including digest-prep sync
+- `[sync].batch_size` controls how many prepared message writes are staged in memory before one short SQLite flush transaction
 - `[sync].sync_limit` is the shared Telegram download cap for non-digest sync commands across all selected channels in one run
-- `digest_limits.*.sync_limit` caps Telegram fetch volume for digest; `[sync].batch_size` only controls local commit frequency
+- `digest_limits.*.sync_limit` caps Telegram fetch volume for digest; `[sync].batch_size` only controls local staging and short flush size
 - for multi-channel sync, channels are processed strictly in the order you pass them, or in config order when the channel list comes from defaults
 - for non-digest sync, both `[sync].sync_limit` and command-level `--limit` apply; `--limit 0` removes only the per-channel cap
-- `tail`, `update`, and `backfill` already stream messages from Telegram incrementally through Telethon; `[sync].batch_size` affects local DB commits, not Telegram API paging
+- `tail`, `update`, and `backfill` already stream messages from Telegram incrementally through Telethon; `[sync].batch_size` affects local DB flush size, not Telegram API paging
 
 ### Digest output and usage logging
 
@@ -200,7 +203,9 @@ Service update rule:
 
 - rerun `install_launch_agent.sh` after code changes, `telegram_shared` changes, `runtime.local.toml` changes, prompt-bundle changes, or schedule-related config changes such as `digest.time`
 - use `restart_launch_agent.sh` only to reload the already installed service copy when the installed code and config are already up to date
-- the scheduled digest runner uses `caffeinate -i` so a `launchd` start during macOS maintenance wake does not immediately fall back asleep mid-run
+- the scheduled digest runner uses the shared `common/ttl_runner.py` with two protections:
+  - a sidecar `caffeinate -i -w <child_pid>` so a `launchd` start during macOS maintenance wake does not immediately fall back asleep mid-run
+  - a hard wall-clock TTL so a stuck Telethon cleanup cannot leave the job in `launchd state=running` forever
 
 Daemon logs:
 

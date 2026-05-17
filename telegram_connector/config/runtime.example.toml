@@ -51,8 +51,13 @@ ocr = "true"
 [digest]
 # Time in local machine time for the daily launchd digest schedule.
 time = "08:00"
+# Hard wall-clock TTL in seconds for the whole one-shot digest run.
+# Enforced outside Python at the process-group boundary so a stuck Telethon cleanup cannot leave launchd in state=running forever.
+run_total_timeout_seconds = "1800"
+# Grace period in seconds between SIGTERM and SIGKILL when the hard digest TTL expires.
+termination_grace_seconds = "10"
 # Wall-clock timeout in seconds for the whole digest prep-sync stage across all channels.
-# If this budget is exceeded, the run fails fast instead of hanging forever in launchd state=running.
+# This is a soft in-process timeout for prep-sync diagnostics, not the outer hard process TTL above.
 sync_total_timeout_seconds = "1800"
 # Optional separator appended to the end of each digest message. Leave empty to disable.
 separator_text = "──────────────────────────────\n──────────────────────────────"

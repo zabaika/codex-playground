@@ -22,7 +22,13 @@ class ConfigScopeTests(unittest.TestCase):
                 "interval_minutes = 15\n"
                 "launchd_label = 'local.kb-index.auto-update'\n"
                 f"plist_path = '{tmp_dir}/auto-update.plist'\n"
-                "run_on_load = true\n\n"
+                "run_on_load = true\n"
+                "run_total_timeout_seconds = 120\n"
+                "termination_grace_seconds = 5\n"
+                "poll_interval_seconds = 0.5\n"
+                "timeout_exit_code = 124\n"
+                "term_signal = 'TERM'\n"
+                "kill_signal = 'KILL'\n\n"
                 "[scope]\n"
                 "include_roots = ['A', 'B']\n"
                 "exclude_roots = ['Templates', 'Ideas/attachments']\n"
@@ -65,6 +71,12 @@ class ConfigScopeTests(unittest.TestCase):
             self.assertTrue(config.auto_update.enabled)
             self.assertEqual(config.auto_update.mode, 'launchd')
             self.assertEqual(config.auto_update.interval_minutes, 15)
+            self.assertEqual(config.auto_update.run_total_timeout_seconds, 120)
+            self.assertEqual(config.auto_update.termination_grace_seconds, 5)
+            self.assertEqual(config.auto_update.poll_interval_seconds, 0.5)
+            self.assertEqual(config.auto_update.timeout_exit_code, 124)
+            self.assertEqual(config.auto_update.term_signal, 'TERM')
+            self.assertEqual(config.auto_update.kill_signal, 'KILL')
 
     def test_missing_behavioral_settings_fail_fast(self) -> None:
         with TemporaryDirectory() as tmp_dir:
@@ -99,7 +111,13 @@ class ConfigScopeTests(unittest.TestCase):
                 "interval_minutes = 15\n"
                 "launchd_label = 'local.kb-index.auto-update'\n"
                 f"plist_path = '{tmp_dir}/auto-update.plist'\n"
-                "run_on_load = true\n\n"
+                "run_on_load = true\n"
+                "run_total_timeout_seconds = 120\n"
+                "termination_grace_seconds = 5\n"
+                "poll_interval_seconds = 0.5\n"
+                "timeout_exit_code = 124\n"
+                "term_signal = 'TERM'\n"
+                "kill_signal = 'KILL'\n\n"
                 "[scope]\n"
                 "include_roots = ['Ideas']\n"
                 "exclude_roots = ['Templates', 'Ideas/attachments']\n"

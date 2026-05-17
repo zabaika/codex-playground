@@ -28,7 +28,12 @@ class LaunchAgentScriptTests(unittest.TestCase):
         self.assertIn('printf \'[%s] starting telegram bridge from %s\\n\'', content)
         self.assertIn('STARTUP_LOG="\\$TELEGRAM_CONNECTOR_PROJECT_ROOT/data/launchd/bridge.startup.log"', content)
         self.assertIn('exec "$PYTHON_BIN" "\\$ROOT/telegram_bridge.py" listen --run-commands', content)
-        self.assertIn('exec /usr/bin/caffeinate -i "$PYTHON_BIN" "\\$ROOT/telegram_digest.py" run', content)
+        self.assertIn('AUDIT_LOG="\\$TELEGRAM_CONNECTOR_PROJECT_ROOT/data/launchd/digest.last_attempt.json"', content)
+        self.assertIn('arming digest ttl=%ss grace=%ss', content)
+        self.assertIn('exec "$PYTHON_BIN" "\\$ROOT/common/ttl_runner.py" \\', content)
+        self.assertIn('--audit-file "\\$AUDIT_LOG" \\', content)
+        self.assertIn('--use-caffeinate \\', content)
+        self.assertIn('-- "$PYTHON_BIN" "\\$ROOT/telegram_digest.py" run', content)
 
     def test_installer_sets_project_root_env_in_plist(self) -> None:
         content = INSTALLER.read_text(encoding="utf-8")

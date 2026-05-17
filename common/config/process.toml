@@ -1,0 +1,13 @@
+[process]
+# Default wall-clock TTL in seconds for one-shot non-daemon runs when a project does not override it.
+default_run_total_timeout_seconds = 1800
+# Grace period in seconds between SIGTERM and SIGKILL for timed-out one-shot runs.
+default_termination_grace_seconds = 10
+# Polling interval in seconds used by the TTL watchdog while waiting for child completion.
+poll_interval_seconds = 1.0
+# Exit code returned by the TTL runner when it terminates a timed-out child process group.
+timeout_exit_code = 124
+# First signal sent to the timed-out child process group.
+term_signal = "TERM"
+# Final signal sent if the child process group ignores the grace-period shutdown request.
+kill_signal = "KILL"

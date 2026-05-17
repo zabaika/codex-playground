@@ -80,7 +80,15 @@ PYTHON_BIN="$(resolve_python_bin)"
 
 cd "$ROOT"
 printf '[%s] starting kb-index auto-update from %s\\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$ROOT" >> "$STARTUP_LOG"
-exec "$PYTHON_BIN" -c "import sys; sys.path.insert(0, {str(service_root / 'src')!r}); from kb_index.cli import main; raise SystemExit(main())" update --config-path "{runtime_config}"
+printf '[%s] arming kb-index ttl={auto_update.run_total_timeout_seconds}s grace={auto_update.termination_grace_seconds}s poll={auto_update.poll_interval_seconds}s\\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" >> "$STARTUP_LOG"
+exec "$PYTHON_BIN" "{service_root / 'common' / 'ttl_runner.py'}" \\
+  --timeout-seconds "{auto_update.run_total_timeout_seconds}" \\
+  --grace-seconds "{auto_update.termination_grace_seconds}" \\
+  --poll-interval-seconds "{auto_update.poll_interval_seconds}" \\
+  --timeout-exit-code "{auto_update.timeout_exit_code}" \\
+  --term-signal "{auto_update.term_signal}" \\
+  --kill-signal "{auto_update.kill_signal}" \\
+  -- "$PYTHON_BIN" -c "import sys; sys.path.insert(0, {str(service_root / 'src')!r}); from kb_index.cli import main; raise SystemExit(main())" update --config-path "{runtime_config}"
 """
 
 

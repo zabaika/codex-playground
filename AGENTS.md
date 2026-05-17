@@ -42,7 +42,7 @@ When working in `tools/kb-index`, prefer these sources in this order:
 
 When working in `common`, prefer these sources in this order:
 - [common/README.md](./common/README.md) for the intended reuse boundary and current shared modules
-- [RULEBOOK.md](./RULEBOOK.md) for cross-project runtime, database, and deployment rules
+- [RULEBOOK.md](./RULEBOOK.md) for cross-project runtime, database, deployment, and non-daemon TTL rules
 - dependent project tests for executable expectations when `common` changes behavior used by those projects
 
 When working in `skills`, prefer these sources in this order:

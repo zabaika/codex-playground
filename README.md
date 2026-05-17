@@ -5,7 +5,7 @@ Workspace for local Codex-oriented projects, tools, plugins, skills, and shared 
 ## Projects
 
 - [common](./common/README.md)  
-  Repository-wide shared runtime helpers and config bundles used across multiple local tools and services, currently including the common SQLite access layer and shared database runtime defaults.
+  Repository-wide shared runtime helpers and config bundles used across multiple local tools and services, currently including the shared SQLite access layer and the shared hard-TTL runner for one-shot non-daemon jobs.
 
 - [telegram_connector](./telegram_connector/README.md)  
   Local Telegram toolkit with a bot bridge, channel history ingestion via Telethon, SQLite storage, OCR support, CSV export, and a launchd-backed daemon flow.

@@ -28,6 +28,12 @@ class AutoUpdateTests(unittest.TestCase):
                 launchd_label='local.kb-index.auto-update',
                 plist_path=root / 'local.kb-index.auto-update.plist',
                 run_on_load=True,
+                run_total_timeout_seconds=120,
+                termination_grace_seconds=5,
+                poll_interval_seconds=0.5,
+                timeout_exit_code=124,
+                term_signal='TERM',
+                kill_signal='KILL',
             )
             payload = render_launchd_plist(auto_update, root)
 
@@ -56,6 +62,12 @@ class AutoUpdateTests(unittest.TestCase):
                 launchd_label='local.kb-index.auto-update',
                 plist_path=root / 'local.kb-index.auto-update.plist',
                 run_on_load=True,
+                run_total_timeout_seconds=120,
+                termination_grace_seconds=5,
+                poll_interval_seconds=0.5,
+                timeout_exit_code=124,
+                term_signal='TERM',
+                kill_signal='KILL',
             )
 
             payload = render_runner_script(auto_update, root)
@@ -64,7 +76,14 @@ class AutoUpdateTests(unittest.TestCase):
             self.assertIn(': "${KB_INDEX_PROJECT_ROOT:?KB_INDEX_PROJECT_ROOT is required}"', payload)
             self.assertIn('STARTUP_LOG="$KB_INDEX_PROJECT_ROOT/data/launchd/auto_update.startup.log"', payload)
             self.assertIn('resolve_python_bin()', payload)
-            self.assertIn("exec \"$PYTHON_BIN\" -c", payload)
+            self.assertIn('arming kb-index ttl=120s grace=5s poll=0.5s', payload)
+            self.assertIn(f"exec \"$PYTHON_BIN\" \"{service_root_for(auto_update) / 'common' / 'ttl_runner.py'}\" \\", payload)
+            self.assertIn('--timeout-seconds "120" \\', payload)
+            self.assertIn('--grace-seconds "5" \\', payload)
+            self.assertIn('--poll-interval-seconds "0.5" \\', payload)
+            self.assertIn('--timeout-exit-code "124" \\', payload)
+            self.assertIn('--term-signal "TERM" \\', payload)
+            self.assertIn('--kill-signal "KILL" \\', payload)
             self.assertIn(f"sys.path.insert(0, {str(service_root_for(auto_update) / 'src')!r})", payload)
             self.assertIn("from kb_index.cli import main", payload)
             self.assertIn(str(service_runtime_config_path_for(auto_update)), payload)
@@ -94,6 +113,12 @@ class AutoUpdateTests(unittest.TestCase):
                 launchd_label='local.kb-index.auto-update',
                 plist_path=root / 'local.kb-index.auto-update.plist',
                 run_on_load=True,
+                run_total_timeout_seconds=120,
+                termination_grace_seconds=5,
+                poll_interval_seconds=0.5,
+                timeout_exit_code=124,
+                term_signal='TERM',
+                kill_signal='KILL',
             )
 
             with patch('kb_index.auto_update.service_root_for', return_value=service_root):

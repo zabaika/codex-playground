@@ -18,6 +18,18 @@ launchd_label = 'local.kb-index.auto-update'
 plist_path = '/Users/your-user/Library/LaunchAgents/local.kb-index.auto-update.plist'
 # Run one refresh immediately after loading the launch agent.
 run_on_load = true
+# Hard wall-clock TTL in seconds for one auto-update run. Normal runs should finish quickly, so keep a modest safety margin instead of a digest-sized timeout.
+run_total_timeout_seconds = 120
+# Grace period in seconds between SIGTERM and SIGKILL when the hard auto-update TTL expires.
+termination_grace_seconds = 5
+# Watchdog poll interval in seconds while the TTL runner waits for the child process.
+poll_interval_seconds = 0.5
+# Exit code returned by the TTL runner when it has to terminate a timed-out auto-update run.
+timeout_exit_code = 124
+# First signal sent to the timed-out auto-update process group.
+term_signal = 'TERM'
+# Final signal sent if the process group ignores the grace-period shutdown request.
+kill_signal = 'KILL'
 
 [scope]
 include_roots = ['Ideas', 'Daily notes']

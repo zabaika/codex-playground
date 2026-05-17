@@ -480,6 +480,8 @@ Runner and launcher discipline:
   - check the chosen interpreter or binary path
   - check that required dependencies are available in that runtime
   - check that config, secrets, and project-root resolution work from the deployed service bundle
+- if a non-daemon scheduled job needs helper processes such as wake or idle inhibitors, launch them as children or sidecars tied to the real worker lifetime rather than as detached background processes
+- if a runner introduces helper processes around a one-shot job, the runner must own their cleanup path as part of normal exit and timeout exit
 
 Operational reliability:
 
@@ -494,6 +496,8 @@ Operational reliability:
 - the timeout must be a wall-clock timeout for the whole run, not only per-request or per-step timeouts
 - keep the timeout value in config, not hardcoded in code, unless an external tool forces a fixed limit
 - use consistent units for config timeouts across the repository; prefer `*_timeout_seconds`
+- soft in-process timeouts, coroutine cancellation, library-level request timeouts, or retry limits do not by themselves count as sufficient TTL enforcement for non-daemon jobs
+- enforce the hard TTL at the outermost process boundary so a stuck cleanup path, pending async task, or library-level cancellation failure cannot leave the job alive indefinitely
 - when a process exceeds its TTL, terminate it as failed instead of letting it remain stuck in a `running` state indefinitely
 - a timed-out run must write a final machine-readable status such as `failed` or `timed_out` before exit whenever possible
 - timeout expiry must be visible in project-local logs and last-attempt audit artifacts
@@ -503,13 +507,21 @@ Operational reliability:
 - prefer one total run timeout first; add per-step timeouts only when they solve a distinct operational problem
 - keep retry budgets bounded inside the total TTL; retries must not extend runtime without limit
 - if the process invokes child processes or external tools, ensure the parent timeout also causes the child work to stop
+- if a timed-out run may have spawned children, terminate the whole process group or equivalent owned runtime subtree rather than signalling only one PID
+- design timeout cleanup so helper processes, open lock holders, and other child runtime state cannot survive the parent timeout and block the next scheduled run
 - if graceful shutdown is possible, log timeout context such as current phase, current source, and elapsed time before exit
+- prefer one stable and distinguishable exit code for forced timeout so scheduler and operator logs can tell timeout apart from ordinary application failure
 - for scheduled jobs, record the configured timeout and the last known phase in `data/launchd/<job>.last_attempt.json`
+- after a forced timeout, verify that the scheduler no longer considers the job running and that the next launch can start a fresh process without manual cleanup
 - before considering a scheduler migration complete, perform at least one real trial run through the scheduler itself and confirm:
   - startup log exists
   - stdout/stderr are sane
   - exit code is successful
   - the expected side effect of the job actually happened
+- for non-daemon jobs with hard TTL, also perform at least one forced-timeout trial and confirm:
+  - terminal status is `failed` or `timed_out`
+  - no stale process or lock holder remains
+  - the next scheduler-triggered run starts cleanly
 - for machines that may sleep, validate both the scheduler path and the wake/resume behavior separately; a healthy job definition is not enough if the host never wakes in time
 
 The macOS `launchd` bullets are platform-specific examples. The broader rule is to use a real system scheduler or service manager, keep deployed runtime verification explicit, and treat redeploy and restart as separate lifecycle steps when they are not the same operation.

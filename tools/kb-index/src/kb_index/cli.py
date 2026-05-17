@@ -90,6 +90,12 @@ def cmd_status(args: argparse.Namespace) -> int:
         'launchd_label': auto_update.launchd_label,
         'plist_path': str(auto_update.plist_path),
         'run_on_load': auto_update.run_on_load,
+        'run_total_timeout_seconds': auto_update.run_total_timeout_seconds,
+        'termination_grace_seconds': auto_update.termination_grace_seconds,
+        'poll_interval_seconds': auto_update.poll_interval_seconds,
+        'timeout_exit_code': auto_update.timeout_exit_code,
+        'term_signal': auto_update.term_signal,
+        'kill_signal': auto_update.kill_signal,
     }
     if state_path.exists():
         payload['state'] = json.loads(state_path.read_text(encoding='utf-8'))

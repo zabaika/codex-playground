@@ -118,6 +118,8 @@ class TelegramDigestTests(unittest.TestCase):
 
         self.assertEqual(result.time, "09:30")
         self.assertEqual(result.model, "test-model")
+        self.assertEqual(result.run_total_timeout_seconds, 1800)
+        self.assertEqual(result.termination_grace_seconds, 10)
         self.assertEqual(result.sync_total_timeout_seconds, 1800)
         self.assertEqual(result.sync_mode, "tail")
         self.assertEqual(result.messages_per_ai_pass, 0)
@@ -176,6 +178,8 @@ batch_digest_template = "Batch={batch_index}"
             until="yesterday",
             model="gpt-5-mini",
             sync_mode="update",
+            run_total_timeout_seconds=1800,
+            termination_grace_seconds=10,
             sync_total_timeout_seconds=1800,
             messages_per_ai_pass=100,
             message_text_max_chars=450,
@@ -846,6 +850,8 @@ batch_digest_template = "Batch={batch_index}"
             until="yesterday",
             model="gpt-5.4-mini",
             sync_mode="update",
+            run_total_timeout_seconds=1800,
+            termination_grace_seconds=10,
             sync_total_timeout_seconds=1800,
             messages_per_ai_pass=10,
             message_text_max_chars=450,
@@ -938,6 +944,8 @@ batch_digest_template = "Batch={batch_index}"
             until="yesterday",
             model="gpt-5.4-mini",
             sync_mode="update",
+            run_total_timeout_seconds=1800,
+            termination_grace_seconds=10,
             sync_total_timeout_seconds=1800,
             messages_per_ai_pass=10,
             message_text_max_chars=260,

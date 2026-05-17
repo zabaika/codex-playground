@@ -124,10 +124,41 @@ ROOT="\$HOME/Library/Application Support/telegram_connector_service"
 export PATH="/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 : "\${TELEGRAM_CONNECTOR_PROJECT_ROOT:?TELEGRAM_CONNECTOR_PROJECT_ROOT is required}"
 STARTUP_LOG="\$TELEGRAM_CONNECTOR_PROJECT_ROOT/data/launchd/digest.startup.log"
+AUDIT_LOG="\$TELEGRAM_CONNECTOR_PROJECT_ROOT/data/launchd/digest.last_attempt.json"
 
 cd "\$ROOT"
+read -r RUN_TOTAL_TIMEOUT_SECONDS TERMINATION_GRACE_SECONDS < <(
+  "$PYTHON_BIN" - <<'PY'
+import sys
+import tomllib
+from pathlib import Path
+
+service_root = Path.home() / "Library" / "Application Support" / "telegram_connector_service"
+if str(service_root) not in sys.path:
+    sys.path.insert(0, str(service_root))
+
+from common import process as common_process
+
+defaults = common_process.load_process_config(service_root / "common" / "config" / "process.toml")
+with (service_root / "config" / "runtime.local.toml").open("rb") as fh:
+    runtime = tomllib.load(fh)
+
+digest = runtime.get("digest") or {}
+print(
+    int(digest.get("run_total_timeout_seconds", defaults.default_run_total_timeout_seconds)),
+    int(digest.get("termination_grace_seconds", defaults.default_termination_grace_seconds)),
+)
+PY
+)
 printf '[%s] starting telegram digest from %s\n' "\$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "\$ROOT" >> "\$STARTUP_LOG"
-exec /usr/bin/caffeinate -i "$PYTHON_BIN" "\$ROOT/telegram_digest.py" run
+printf '[%s] arming digest ttl=%ss grace=%ss\n' "\$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "\$RUN_TOTAL_TIMEOUT_SECONDS" "\$TERMINATION_GRACE_SECONDS" >> "\$STARTUP_LOG"
+exec "$PYTHON_BIN" "\$ROOT/common/ttl_runner.py" \
+  --timeout-seconds "\$RUN_TOTAL_TIMEOUT_SECONDS" \
+  --grace-seconds "\$TERMINATION_GRACE_SECONDS" \
+  --audit-file "\$AUDIT_LOG" \
+  --timeout-reason process_ttl_expired \
+  --use-caffeinate \
+  -- "$PYTHON_BIN" "\$ROOT/telegram_digest.py" run
 EOF
 
 chmod +x "$SERVICE_ROOT/scripts/run_telegram_digest.sh"

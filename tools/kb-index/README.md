@@ -65,6 +65,7 @@ When auto-update is installed, the service uses a separate runtime root:
 That service root contains:
 
 - a runtime copy of `src/kb_index`
+- a runtime copy of `common/`
 - a symlinked `config/runtime.local.toml`
 - the shell runner used by `launchd`
 
@@ -80,6 +81,7 @@ Main config areas:
 - retrieval defaults and ranking weights
 - note-type weights and exact-title bonuses
 - scheduled auto-update under `[auto_update]`
+- one-shot auto-update TTL and shutdown behavior under `[auto_update]`
 
 The default number of search results is controlled by `retrieval.default_limit`.
 
@@ -150,6 +152,12 @@ Current setup supports one scheduler mode:
 
 - `launchd` on macOS, which periodically runs the same canonical `update_kb_index`
 
+Current setup also keeps the scheduled run bounded:
+
+- auto-update is a one-shot `launchd` job, not a daemon
+- the generated runner uses `common/ttl_runner.py`
+- hard TTL and shutdown signals come from `[auto_update]` in `runtime.local.toml`
+
 ## Retrieval model
 
 Knowledge workflows should use a two-step path:
@@ -175,6 +183,17 @@ Commands:
 
 The installer does not run code directly from `Documents/Playground`. Instead, it copies the runtime layer into `~/Library/Application Support/kb_index_service`, keeps `runtime.local.toml` as a symlink to the repository config, generates the shell runner there, and registers that runner in `launchd`.
 
+`[auto_update]` also owns the hard runtime ceiling for scheduled runs:
+
+- `run_total_timeout_seconds`
+- `termination_grace_seconds`
+- `poll_interval_seconds`
+- `timeout_exit_code`
+- `term_signal`
+- `kill_signal`
+
+These values are intentionally project-local even though `common/config/process.toml` provides defaults, so `kb-index` can keep a much shorter timeout budget than `digest`.
+
 `status_kb_index` also shows `configured_auto_update`, so retrieval settings and schedule settings are visible together. `status_kb_index_auto_update` reports the installed launch agent, service root, and canonical project-local log directory.
 
 ### Reload after config changes
@@ -194,6 +213,7 @@ install_kb_index_auto_update --config-path /absolute/path/to/runtime.local.toml
 Rerunning the installer:
 
 - refreshes the runtime copy in `~/Library/Application Support/kb_index_service`
+- refreshes the shared `common/` runtime copy used by the launchd runner
 - recreates the `runtime.local.toml` symlink to the chosen source-of-truth config
 - regenerates the shell runner
 - reinstalls the `launchd` plist

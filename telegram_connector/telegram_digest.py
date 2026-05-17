@@ -15,6 +15,12 @@ from types import SimpleNamespace
 from typing import Any
 from urllib import error, request
 
+MODULE_DIR = Path(__file__).resolve().parent
+REPO_ROOT = MODULE_DIR.parent
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from common import process as common_process
 import telegram_bridge as bridge
 import telegram_history_client as history_client
 from telegram_shared.openai_usage import OpenAIUsage
@@ -26,12 +32,13 @@ from telegram_shared.openai_usage import hash_cache_key as shared_hash_cache_key
 from telegram_shared.openai_usage import log_openai_usage as shared_log_openai_usage
 
 
-APP_DIR = Path(__file__).resolve().parent
+APP_DIR = MODULE_DIR
 PROJECT_ROOT = Path(os.environ.get("TELEGRAM_CONNECTOR_PROJECT_ROOT", "")).expanduser() if os.environ.get("TELEGRAM_CONNECTOR_PROJECT_ROOT") else APP_DIR
 LAUNCHD_LOG_DIR = PROJECT_ROOT / "data" / "launchd"
 DIGEST_LAST_ATTEMPT_LOG = LAUNCHD_LOG_DIR / "digest.last_attempt.json"
 
 OPENAI_DIGEST_RETRY_ATTEMPTS = 3
+DEFAULT_PROCESS_CONFIG = common_process.load_process_config()
 DEFAULT_DIGEST_SYNC_TOTAL_TIMEOUT_SECONDS = 1800
 DIGEST_PROMPT_REQUIRED_KEYS = (
     "system_instructions",
@@ -53,6 +60,8 @@ class DigestConfig:
     until: str
     model: str
     sync_mode: str
+    run_total_timeout_seconds: int
+    termination_grace_seconds: int
     sync_total_timeout_seconds: int
     messages_per_ai_pass: int
     message_text_max_chars: int
@@ -230,12 +239,22 @@ def resolve_digest_config(config: dict[str, Any]) -> DigestConfig:
         history_client.get_config_value(config, "digest", "sync_total_timeout_seconds")
         or str(DEFAULT_DIGEST_SYNC_TOTAL_TIMEOUT_SECONDS)
     )
+    raw_run_total_timeout_seconds = (
+        history_client.get_config_value(config, "digest", "run_total_timeout_seconds")
+        or str(DEFAULT_PROCESS_CONFIG.default_run_total_timeout_seconds)
+    )
+    raw_termination_grace_seconds = (
+        history_client.get_config_value(config, "digest", "termination_grace_seconds")
+        or str(DEFAULT_PROCESS_CONFIG.default_termination_grace_seconds)
+    )
     try:
         min_messages_for_ai = max(0, int(raw_min_messages_for_ai))
+        run_total_timeout_seconds = max(1, int(raw_run_total_timeout_seconds))
+        termination_grace_seconds = max(1, int(raw_termination_grace_seconds))
         sync_total_timeout_seconds = max(1, int(raw_sync_total_timeout_seconds))
     except ValueError as exc:
         raise SystemExit(
-            "Invalid digest.min_messages_for_ai or digest.sync_total_timeout_seconds in runtime config."
+            "Invalid digest.min_messages_for_ai, digest.run_total_timeout_seconds, digest.termination_grace_seconds, or digest.sync_total_timeout_seconds in runtime config."
         ) from exc
     return DigestConfig(
         time=history_client.get_config_value(config, "digest", "time") or "08:00",
@@ -243,6 +262,8 @@ def resolve_digest_config(config: dict[str, Any]) -> DigestConfig:
         until=history_client.get_config_value(config, "digest", "until") or "yesterday",
         model=model,
         sync_mode=history_client.get_config_value(config, "digest", "sync_mode") or "update",
+        run_total_timeout_seconds=run_total_timeout_seconds,
+        termination_grace_seconds=termination_grace_seconds,
         sync_total_timeout_seconds=sync_total_timeout_seconds,
         messages_per_ai_pass=0,
         message_text_max_chars=0,
@@ -1453,6 +1474,8 @@ def cmd_run(args: argparse.Namespace) -> int:
             until=until,
             auth_mode=auth_mode,
             sync_mode=digest_config.sync_mode,
+            run_total_timeout_seconds=digest_config.run_total_timeout_seconds,
+            termination_grace_seconds=digest_config.termination_grace_seconds,
             sync_timeout_seconds=sync_timeout_seconds,
             channels=len(channels),
             resolved_channels=channels,
@@ -1587,6 +1610,8 @@ def cmd_run(args: argparse.Namespace) -> int:
                         until=digest_config.until,
                         model=digest_config.model,
                         sync_mode=digest_config.sync_mode,
+                        run_total_timeout_seconds=digest_config.run_total_timeout_seconds,
+                        termination_grace_seconds=digest_config.termination_grace_seconds,
                         sync_total_timeout_seconds=digest_config.sync_total_timeout_seconds,
                         messages_per_ai_pass=limits.messages_per_ai_pass,
                         message_text_max_chars=limits.message_text_max_chars,
@@ -1651,6 +1676,8 @@ def cmd_run(args: argparse.Namespace) -> int:
             "message_ocr_max_chars": limits.message_ocr_max_chars,
             "message_block_max_chars": limits.message_block_max_chars,
             "sync_mode": digest_config.sync_mode,
+            "run_total_timeout_seconds": digest_config.run_total_timeout_seconds,
+            "termination_grace_seconds": digest_config.termination_grace_seconds,
             "auth_mode": auth_mode,
             "sync_results": sync_results,
             "errors": errors,

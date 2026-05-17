@@ -38,6 +38,12 @@ class AutoUpdateConfig:
     launchd_label: str
     plist_path: Path
     run_on_load: bool
+    run_total_timeout_seconds: int
+    termination_grace_seconds: int
+    poll_interval_seconds: float
+    timeout_exit_code: int
+    term_signal: str
+    kill_signal: str
 
 
 @dataclass(slots=True)
@@ -121,6 +127,12 @@ def load_runtime_config(config_path: Path | None = None) -> RuntimeConfig:
         launchd_label=str(_require_value(auto_update_data, 'launchd_label')),
         plist_path=Path(_require_value(auto_update_data, 'plist_path')),
         run_on_load=_as_bool(_require_value(auto_update_data, 'run_on_load')),
+        run_total_timeout_seconds=_as_int(_require_value(auto_update_data, 'run_total_timeout_seconds')),
+        termination_grace_seconds=_as_int(_require_value(auto_update_data, 'termination_grace_seconds')),
+        poll_interval_seconds=float(_require_value(auto_update_data, 'poll_interval_seconds')),
+        timeout_exit_code=_as_int(_require_value(auto_update_data, 'timeout_exit_code')),
+        term_signal=str(_require_value(auto_update_data, 'term_signal')),
+        kill_signal=str(_require_value(auto_update_data, 'kill_signal')),
     )
     return RuntimeConfig(
         vault_root=vault_root,

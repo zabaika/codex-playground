@@ -42,6 +42,7 @@ If README, code, and tests disagree, update them together.
 - Preserve config-driven defaults for digest, sync, OCR, and export flows.
 - Keep `digest` config-driven and only override `channel`, `since`, `until`, or auth mode explicitly per run.
 - Keep digest defaults owned by `[processing]`, `[digest]`, and `[digest_limits.*]`; keep non-digest sync limits under `[sync]`.
+- Keep hard runtime ceilings for one-shot digest runs owned by `[digest]`, and do not move them into bridge or daemon-only config.
 - When changing bridge behavior, check both direct CLI usage and Telegram command mapping.
 - Treat SQLite history as the system of record; digest and other analysis flows work over stored data.
 - Keep bridge access-control docs aligned with runtime behavior for `allowed_chat_ids`, `allowed_user_ids`, and `allowed_usernames`.
@@ -59,6 +60,7 @@ If README, code, and tests disagree, update them together.
 - Child subprocesses must receive only the allowlisted env subset they need.
 - After changing bridge code, `telegram_shared`, or `config/runtime.local.toml`, redeploy the launchd service with `scripts/install_launch_agent.sh`, not only `scripts/restart_launch_agent.sh`.
 - `restart_launch_agent.sh` only reloads the already installed plist/service-root copy; it does not recopy fresh code or config into `~/Library/Application Support/telegram_connector_service`.
+- Scheduled `digest` is a one-shot job, not a daemon: keep the outer hard TTL in the shared runner and keep `bridge` free of that TTL mechanism.
 
 ## Testing
 

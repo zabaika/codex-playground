@@ -18,6 +18,12 @@ Use `common/` for code and config that are:
 - [config/sqlite.toml](./config/sqlite.toml)  
   Shared SQLite runtime defaults consumed by the helper layer.
 
+- [process.py](./process.py) and [ttl_runner.py](./ttl_runner.py)  
+  Shared non-daemon process runtime helpers for hard wall-clock TTL, process-group shutdown, and reusable timeout defaults.
+
+- [config/process.toml](./config/process.toml)  
+  Shared defaults for one-shot process TTL, grace-period shutdown, polling, and timeout exit behavior.
+
 ## Scope Rules
 
 - keep project-specific business logic out of `common/`
