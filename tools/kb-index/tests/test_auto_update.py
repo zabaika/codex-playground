@@ -74,11 +74,16 @@ class AutoUpdateTests(unittest.TestCase):
             root = Path(tmp_dir)
             project_root = root / 'project'
             service_root = root / 'service-root'
+            common_root = root / 'common'
             src_root = project_root / 'src' / 'kb_index'
             config_dir = project_root / 'config'
             src_root.mkdir(parents=True)
             config_dir.mkdir(parents=True)
+            (common_root / 'config').mkdir(parents=True)
             (src_root / '__init__.py').write_text('', encoding='utf-8')
+            (common_root / '__init__.py').write_text('', encoding='utf-8')
+            (common_root / 'sqlite.py').write_text('VALUE = 1\n', encoding='utf-8')
+            (common_root / 'config' / 'sqlite.toml').write_text('[sqlite]\nbusy_timeout_ms = 5000\njournal_mode = "WAL"\nsynchronous = "NORMAL"\nforeign_keys = true\nautocommit = true\n', encoding='utf-8')
             config_path = config_dir / 'runtime.local.toml'
             config_path.write_text('[vault]\nroot = \'/tmp\'\n', encoding='utf-8')
 
@@ -98,6 +103,7 @@ class AutoUpdateTests(unittest.TestCase):
             self.assertEqual(runtime_paths['runtime_config_path'], runtime_config_path)
             self.assertTrue(runtime_config_path.is_symlink())
             self.assertEqual(runtime_config_path.resolve(), config_path.resolve())
+            self.assertTrue((service_root / 'common' / 'sqlite.py').exists())
 
 
 if __name__ == '__main__':

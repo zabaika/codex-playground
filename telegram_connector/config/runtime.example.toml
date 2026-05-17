@@ -102,7 +102,8 @@ backfill_limit = "100"
 tail_limit = "100"
 # Default per-channel limit for sync --mode update when --limit is omitted.
 update_limit = "100"
-# Shared SQLite commit batch size for all sync flows, including digest-prep sync.
+# Maximum number of prepared message writes held in memory before one short SQLite flush transaction.
+# Set 0 to flush each prepared write unit immediately instead of batching in memory.
 batch_size = "500"
 
 [digest_prompts]

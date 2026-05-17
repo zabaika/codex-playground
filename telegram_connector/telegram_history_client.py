@@ -19,6 +19,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from common import sqlite as common_sqlite
 from telegram_shared import secrets as shared_secrets
 from telegram_shared.config import get_config_value as shared_get_config_value
 from telegram_shared.config import load_runtime_config as shared_load_runtime_config
@@ -36,12 +37,10 @@ SESSION_DIR = DATA_DIR / "sessions"
 EXPORT_DIR = DATA_DIR / "exports"
 OP_REFERENCE_PREFIX = shared_secrets.OP_REFERENCE_PREFIX
 _SECRET_CACHE = shared_secrets._SECRET_CACHE
+SQLITE_CONFIG = common_sqlite.load_sqlite_config()
 
 
 SCHEMA_SQL = """
-PRAGMA journal_mode = WAL;
-PRAGMA foreign_keys = ON;
-
 CREATE TABLE IF NOT EXISTS channels (
     channel_id INTEGER PRIMARY KEY,
     access_hash TEXT,
@@ -205,6 +204,16 @@ class RuntimeConfig:
     sync_mode_limits: dict[str, int] = field(default_factory=dict)
 
 
+@dataclass(slots=True)
+class StagedMessageWrite:
+    entity: Any
+    message: Any
+    sender_username: str | None
+    sender_display_name: str | None
+    downloaded_path: str | None
+    downloaded_size: int | None
+
+
 def load_runtime_config() -> dict[str, Any]:
     return shared_load_runtime_config(RUNTIME_LOCAL_FILE)
 
@@ -331,10 +340,7 @@ def ensure_dirs(runtime: RuntimeConfig) -> None:
 
 def connect_db(runtime: RuntimeConfig) -> sqlite3.Connection:
     ensure_dirs(runtime)
-    conn = sqlite3.connect(runtime.db_path)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
-    return conn
+    return common_sqlite.connect_sqlite(runtime.db_path, config=SQLITE_CONFIG)
 
 
 def init_db(conn: sqlite3.Connection) -> None:
@@ -673,6 +679,12 @@ async def download_media_if_present(runtime: RuntimeConfig, client: Any, message
 
 def upsert_channel(conn: sqlite3.Connection, entity: Any) -> None:
     now = now_utc()
+    with common_sqlite.write_tx(conn):
+        _upsert_channel_no_tx(conn, entity, now)
+
+
+def _upsert_channel_no_tx(conn: sqlite3.Connection, entity: Any, now: str | None = None) -> None:
+    effective_now = now or now_utc()
     conn.execute(
         """
         INSERT INTO channels (
@@ -693,13 +705,26 @@ def upsert_channel(conn: sqlite3.Connection, entity: Any) -> None:
             getattr(entity, "title", None) or getattr(entity, "first_name", "unknown"),
             getattr(entity, "__class__", type(entity)).__name__,
             minimal_entity_json(entity),
-            now,
-            now,
+            effective_now,
+            effective_now,
         ),
     )
 
 
 def upsert_message(
+    conn: sqlite3.Connection,
+    entity: Any,
+    message: Any,
+    sender_username: str | None,
+    sender_display_name: str | None,
+    downloaded_path: str | None,
+    downloaded_size: int | None,
+) -> None:
+    with common_sqlite.write_tx(conn):
+        _upsert_message_no_tx(conn, entity, message, sender_username, sender_display_name, downloaded_path, downloaded_size)
+
+
+def _upsert_message_no_tx(
     conn: sqlite3.Connection,
     entity: Any,
     message: Any,
@@ -799,6 +824,28 @@ def update_sync_state(
     last_full_sync_at: str | None = None,
     last_error: str | None = None,
 ) -> None:
+    with common_sqlite.write_tx(conn):
+        _update_sync_state_no_tx(
+            conn,
+            channel_id,
+            last_backfill_message_id=last_backfill_message_id,
+            last_tail_message_id=last_tail_message_id,
+            last_tail_at=last_tail_at,
+            last_full_sync_at=last_full_sync_at,
+            last_error=last_error,
+        )
+
+
+def _update_sync_state_no_tx(
+    conn: sqlite3.Connection,
+    channel_id: int,
+    *,
+    last_backfill_message_id: int | None = None,
+    last_tail_message_id: int | None = None,
+    last_tail_at: str | None = None,
+    last_full_sync_at: str | None = None,
+    last_error: str | None = None,
+) -> None:
     conn.execute(
         """
         INSERT INTO sync_state (
@@ -813,6 +860,22 @@ def update_sync_state(
         """,
         (channel_id, last_backfill_message_id, last_tail_message_id, last_tail_at, last_full_sync_at, last_error),
     )
+
+
+def flush_staged_message_writes(conn: sqlite3.Connection, staged_writes: list[StagedMessageWrite]) -> None:
+    if not staged_writes:
+        return
+    with common_sqlite.write_tx(conn):
+        for item in staged_writes:
+            _upsert_message_no_tx(
+                conn,
+                item.entity,
+                item.message,
+                item.sender_username,
+                item.sender_display_name,
+                item.downloaded_path,
+                item.downloaded_size,
+            )
 
 
 def message_exists(conn: sqlite3.Connection, channel_id: int, message_id: int) -> bool:
@@ -936,8 +999,8 @@ async def sync_one_channel(
             else:
                 raise
         upsert_channel(conn, entity)
-        batch_commit_size = max(0, int(getattr(args, "batch_size", 0) or runtime.sync_batch_size or 0))
-        pending_db_changes = 0
+        batch_size = int(getattr(args, "batch_size", 0) or runtime.sync_batch_size or 0)
+        flush_threshold = batch_size if batch_size > 0 else 1
         scan_limit = getattr(args, "limit", None)
         if scan_limit is not None and scan_limit <= 0:
             scan_limit = None
@@ -956,6 +1019,29 @@ async def sync_one_channel(
         existing_max_id = latest_stored_message_id(conn, entity.id) if mode == "update" else None
         since_dt = parse_filter_datetime_value(getattr(args, "since", None))
         until_dt = parse_filter_datetime_value(getattr(args, "until", None), end_of_day=True)
+        staged_writes: list[StagedMessageWrite] = []
+
+        def stage_write(
+            message_obj: Any,
+            sender_username_value: str | None,
+            sender_display_name_value: str | None,
+            downloaded_path_value: str | None,
+            downloaded_size_value: int | None,
+        ) -> None:
+            staged_writes.append(
+                StagedMessageWrite(
+                    entity=entity,
+                    message=message_obj,
+                    sender_username=sender_username_value,
+                    sender_display_name=sender_display_name_value,
+                    downloaded_path=downloaded_path_value,
+                    downloaded_size=downloaded_size_value,
+                )
+            )
+            if len(staged_writes) >= flush_threshold:
+                flush_staged_message_writes(conn, staged_writes)
+                staged_writes.clear()
+
         async for message in iterator:
             message_dt = getattr(message, "date", None)
             if message_dt is not None and message_dt.tzinfo is None:
@@ -975,23 +1061,17 @@ async def sync_one_channel(
                 skipped_existing += 1
                 if args.download_media and getattr(message, "media", None) and media_needs_download(conn, entity.id, message.id):
                     downloaded_path, downloaded_size = await download_media_if_present(runtime, client, message, entity.id)
-                    upsert_message(conn, entity, message, sender_username, sender_display_name, downloaded_path, downloaded_size)
+                    stage_write(message, sender_username, sender_display_name, downloaded_path, downloaded_size)
                     if downloaded_path:
                         refreshed_existing_media += 1
-                        pending_db_changes += 1
-                        if batch_commit_size and pending_db_changes >= batch_commit_size:
-                            conn.commit()
-                            pending_db_changes = 0
                 continue
             if args.download_media and getattr(message, "media", None):
                 downloaded_path, downloaded_size = await download_media_if_present(runtime, client, message, entity.id)
-            upsert_message(conn, entity, message, sender_username, sender_display_name, downloaded_path, downloaded_size)
+            stage_write(message, sender_username, sender_display_name, downloaded_path, downloaded_size)
             highest_message_id = max(highest_message_id or message.id, message.id)
             processed += 1
-            pending_db_changes += 1
-            if batch_commit_size and pending_db_changes >= batch_commit_size:
-                conn.commit()
-                pending_db_changes = 0
+
+        flush_staged_message_writes(conn, staged_writes)
 
         now = now_utc()
         if mode == "backfill":
@@ -1034,7 +1114,6 @@ async def sync_one_channel(
                     marked_read_from = (current_read_max_id + 1) if current_read_max_id is not None else 1
                     await client.send_read_acknowledge(entity, max_id=mark_read_target_id)
                     marked_read_until = mark_read_target_id
-        conn.commit()
         return {
             "channel": channel,
             "channel_id": entity.id,

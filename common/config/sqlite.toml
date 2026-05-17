@@ -1,0 +1,11 @@
+[sqlite]
+# Maximum time to wait for a locked database before failing the current statement.
+busy_timeout_ms = 5000
+# SQLite journal mode used for local concurrent read/write safety.
+journal_mode = "WAL"
+# Durability/performance tradeoff for SQLite fsync behavior.
+synchronous = "NORMAL"
+# Enforce foreign key constraints on every connection.
+foreign_keys = true
+# Use autocommit by default so write transactions stay explicit and short-lived.
+autocommit = true

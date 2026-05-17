@@ -80,6 +80,8 @@ rm -f "$PROJECT_LOG_DIR"/digest.last_attempt.json
 cp "$SOURCE_ROOT/telegram_bridge.py" "$SERVICE_ROOT/telegram_bridge.py"
 cp "$SOURCE_ROOT/telegram_history_client.py" "$SERVICE_ROOT/telegram_history_client.py"
 cp "$SOURCE_ROOT/telegram_digest.py" "$SERVICE_ROOT/telegram_digest.py"
+rm -rf "$SERVICE_ROOT/common"
+cp -R "$SOURCE_ROOT/../common" "$SERVICE_ROOT/common"
 rm -rf "$SERVICE_ROOT/telegram_shared"
 cp -R "$SOURCE_ROOT/../telegram_shared" "$SERVICE_ROOT/telegram_shared"
 cp "$SOURCE_ROOT/config/runtime.local.toml" "$SERVICE_ROOT/config/runtime.local.toml"

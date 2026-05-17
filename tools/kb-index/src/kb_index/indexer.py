@@ -5,6 +5,7 @@ import json
 import time
 from pathlib import Path
 
+from common import sqlite as common_sqlite
 from .config import IndexScope
 from .index_db import connect, delete_missing_notes, get_note_record, init_db, upsert_note
 from .parser import parse_note
@@ -67,17 +68,17 @@ def build_or_update_index(vault_root: Path, db_path: Path, state_path: Path, sco
                 continue
             parsed = parse_note(vault_root, note_path)
             if existing and existing['content_hash'] == parsed.content_hash:
-                conn.execute(
-                    'UPDATE notes SET mtime = ?, size_bytes = ?, indexed_at = ? WHERE path = ?',
-                    (parsed.mtime, parsed.size_bytes, int(time.time()), relative_path),
-                )
+                with common_sqlite.write_tx(conn):
+                    conn.execute(
+                        'UPDATE notes SET mtime = ?, size_bytes = ?, indexed_at = ? WHERE path = ?',
+                        (parsed.mtime, parsed.size_bytes, int(time.time()), relative_path),
+                    )
                 unchanged += 1
                 continue
             upsert_note(conn, parsed)
             updated += 1
 
         deleted = delete_missing_notes(conn, existing_rel_paths)
-        conn.commit()
         duration_ms = int((time.time() - started_at) * 1000)
         payload = {
             'last_successful_update_at': utc_timestamp_text(time.time()),

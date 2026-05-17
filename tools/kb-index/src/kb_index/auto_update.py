@@ -34,6 +34,14 @@ def service_runtime_config_path_for(auto_update: AutoUpdateConfig) -> Path:
     return service_root_for(auto_update) / 'config' / 'runtime.local.toml'
 
 
+def shared_common_root_for(project_root: Path) -> Path:
+    for parent in (project_root, *project_root.parents):
+        candidate = parent / 'common'
+        if candidate.is_dir():
+            return candidate
+    raise FileNotFoundError(f'Could not locate shared common/ for project root: {project_root}')
+
+
 def _replace_with_symlink(link_path: Path, target_path: Path) -> None:
     if link_path.is_symlink() or link_path.exists():
         link_path.unlink()
@@ -119,6 +127,7 @@ def _sync_runtime_copy(auto_update: AutoUpdateConfig, config_path: Path, project
     service_root = service_root_for(auto_update)
     src_root = project_root / 'src' / 'kb_index'
     dst_src_root = service_root / 'src' / 'kb_index'
+    dst_common_root = service_root / 'common'
     config_dir = service_root / 'config'
     scripts_dir = service_root / 'scripts'
     log_dir = project_launchd_log_dir_for(project_root)
@@ -131,6 +140,7 @@ def _sync_runtime_copy(auto_update: AutoUpdateConfig, config_path: Path, project
     service_log_dir.mkdir(parents=True, exist_ok=True)
 
     shutil.copytree(src_root, dst_src_root, dirs_exist_ok=True)
+    shutil.copytree(shared_common_root_for(project_root), dst_common_root, dirs_exist_ok=True)
     _replace_with_symlink(config_dir / 'runtime.local.toml', config_path.resolve())
 
     example_config = project_root / 'config' / 'runtime.example.toml'

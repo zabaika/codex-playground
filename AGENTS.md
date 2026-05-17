@@ -9,6 +9,7 @@ Use it as an entry guide. For repository-wide engineering policy, safety rules, 
 
 - [README.md](./README.md): top-level project index
 - [RULEBOOK.md](./RULEBOOK.md): global engineering and safety rules
+- [common](./common): repository-wide shared runtime helpers and shared config bundles
 - [telegram_connector](./telegram_connector): Telegram ingestion, OCR, digest, and bot bridge project
 - [telegram_agent_bot](./telegram_agent_bot): standalone Telegram task agent project
 - [telegram_shared](./telegram_shared): shared infrastructure primitives for Telegram projects
@@ -38,6 +39,11 @@ When working in `tools/kb-index`, prefer these sources in this order:
 - [tools/kb-index/AGENTS.md](./tools/kb-index/AGENTS.md) for project-specific runtime and deployment rules
 - [RULEBOOK.md](./RULEBOOK.md) for cross-project rules
 - tests in [tools/kb-index/tests](./tools/kb-index/tests) for executable expectations
+
+When working in `common`, prefer these sources in this order:
+- [common/README.md](./common/README.md) for the intended reuse boundary and current shared modules
+- [RULEBOOK.md](./RULEBOOK.md) for cross-project runtime, database, and deployment rules
+- dependent project tests for executable expectations when `common` changes behavior used by those projects
 
 When working in `skills`, prefer these sources in this order:
 - [skills/README.md](./skills/README.md) for the skill catalog, installation pattern, and local conventions

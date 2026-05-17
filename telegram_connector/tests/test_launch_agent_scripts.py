@@ -45,6 +45,7 @@ class LaunchAgentScriptTests(unittest.TestCase):
     def test_launch_agent_installer_copies_digest_script(self) -> None:
         content = INSTALLER.read_text(encoding="utf-8")
         self.assertIn('cp "$SOURCE_ROOT/telegram_digest.py" "$SERVICE_ROOT/telegram_digest.py"', content)
+        self.assertIn('cp -R "$SOURCE_ROOT/../common" "$SERVICE_ROOT/common"', content)
 
     def test_installer_creates_digest_launch_agent_with_calendar_schedule(self) -> None:
         content = INSTALLER.read_text(encoding="utf-8")
