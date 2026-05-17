@@ -44,6 +44,9 @@ Keep documentation split by responsibility:
 
 - if behavior changes, update code, tests, and the relevant source-of-truth document in the same change
 - when a workflow grows beyond a few pages of rules, split it into one thin entrypoint plus canonical reference docs; keep the entrypoint focused on sequencing and keep detailed policy in the deepest owning reference file
+- when a stateful workflow grows beyond a small prototype, define a rollout split such as `core`, `optional`, and later stages instead of treating every planned capability as equally urgent
+- for the earliest releaseable stage, define one reference end-to-end user journey and treat it as the gate for scope decisions; capabilities that do not improve that journey should not block the first release
+- for each major module, skill, or subsystem in that earliest stage, define a concrete minimum definition of done so implementation does not drift into feature-complete ambitions before the short journey works
 - if an entrypoint file still repeats a rule family in short form, keep it as a brief guardrail summary only; the detailed wording, examples, and edge cases must still live in the canonical owner
 - when an entrypoint delegates formatting or content rules to a canonical reference document, it must still put every major rule family from that canonical owner onto the mandatory execution path of the workflow; a vague pointer like "apply conventions" is not enough when operators or agents could otherwise skip whole families
 - when a workflow relies on structured metadata such as frontmatter, route payloads, manifests, or config blocks, validate that metadata after the final manual rewrite or merge instead of trusting an earlier draft
@@ -84,6 +87,88 @@ Recommended pattern:
 - treat persisted raw data as the system of record and run expensive analysis as a second stage over stored data
 - if multiple sources are processed in one run, keep source-level work units isolated so failures and summaries can be reported per source
 - when outputs are independently useful, prefer progressive delivery per source over waiting for one final all-or-nothing payload
+
+Use the architecture rules in this order:
+
+1. define the runtime structure
+2. define the command boundary and mutation ownership
+3. define the workflow entity/state model
+4. define how thin surfaces behave, including degraded mode
+5. define approval, audit, idempotency, and automation constraints
+6. only then harden database runtime behavior
+
+### Core Runtime Structure
+
+- when a local workflow grows into a stateful system with persistent data, AI-assisted steps, multiple interfaces, or a future UI/API, prefer a service-first modular monolith before splitting into separate services
+- use one canonical runtime project that separates at least:
+  - `domain`: entities, invariants, policies, lifecycle vocabulary
+  - `application`: commands, queries, handlers, use cases
+  - `infrastructure`: repositories, migrations, storage adapters, projections, parsers
+  - `interfaces`: CLI, chat glue, skill glue, webhook, future API, future UI backend
+  - `ai`: optional model-facing adapters or engines with structured input/output contracts
+- if the earliest stage does not justify a dedicated `ai/` layer yet, keep AI calls isolated behind application-level adapters that can later move into `ai/` without changing the command/query model
+- keep storage-oriented subsystems inside `infrastructure`; do not let a database helper, repository package, or storage bundle become the public API of the whole system
+- if a system exposes a named storage-oriented subsystem, treat it as persistence infrastructure only; canonical business mutations must still enter through application command handlers
+
+### Command Boundary and Mutation Ownership
+
+- if a system combines persistent workflow state, AI surfaces, CLI, and UI, keep the canonical business logic and state transitions in one deterministic application/service layer
+- do not let AI mutate canonical workflow state directly; AI may propose, generate, summarize, classify, or advise, but state changes must still flow through deterministic handlers
+- do not let UI or other interface layers write directly to the database; every mutation must go through command handlers in the canonical service layer
+- do not let skills, wrappers, or interface adapters own canonical operational logic when a shared service layer exists; they should orchestrate or adapt that logic, not redefine it
+- route all state-changing operations through command handlers and all queue/view construction through query or projection handlers instead of ad hoc SQL from multiple surfaces
+
+### Workflow State and Entity Model
+
+- when a workflow tracks business progress over time, define one canonical entity vocabulary before adding UI views, agent wrappers, reports, or automations on top of it
+- distinguish primary business entities from their occurrences, events, or derived views; do not collapse canonical records, source-specific sightings, reminders, audit entries, and projections into one overloaded table or object
+- keep workflow stages separate from orthogonal flags such as hidden, processed, archived, blocked, or materially_changed; do not overload one status field to mean both progression and side-condition overlays
+- if several related state machines exist, such as item workflow, external action progress, human touchpoints, or review flows, keep them explicitly separate unless they truly share the same lifecycle semantics
+- do not require empty placeholder operational records just to satisfy a theoretical schema; create touchpoints, reminders, interviews, reconciliation items, or similar records only when the corresponding real-world event or intent exists
+- when a system suppresses rediscovery, deduplicates history, or routes changed records into review buckets, encode that as canonical business logic in one owning layer instead of reimplementing it independently in UI filters, agent prompts, or report scripts
+- when a new surface needs a queue, dashboard, or operator list, build it as a projection over canonical entities and states rather than as a second mutable state store
+
+### Surface Independence and Degraded Mode
+
+- atomicity for a skill, wrapper, CLI, or interface surface means a self-contained operator scenario, not an independent copy of shared domain logic
+- if a shared service layer exists, do not reimplement separate local versions of profile schemas, lifecycle states, approval semantics, artifact identity, storage assumptions, or quality gate contracts in each surface
+- when a surface must still be usable without the shared backend, define an explicit degraded mode instead of pretending the full system contract still holds
+- degraded mode may generate drafts, analyses, checklists, or recommendations, but it must not falsely claim persistence, lifecycle mutation, durable artifact identity, history-aware dedupe, or reconciliation guarantees that require the missing backend
+- when running in degraded mode, make that limitation visible in the output contract instead of silently returning a draft that looks like a committed system fact
+
+### Approval Separation
+
+- treat content acceptance, quality validation, and permission to perform an external action as three separate contracts even if they often appear in the same workflow
+- `artifact acceptance` means the operator accepts the content or draft as acceptable
+- `quality gate result` means the system considers the artifact structurally and semantically safe enough for its intended class of use
+- `external action approval` means the operator authorizes a concrete external mutation such as send, publish, submit, refresh, hide, or update
+- do not let one of these confirmations silently stand in for the others
+- when a workflow can affect outside systems or public-facing outputs, require the exact combination of approvals that matches that action rather than relying on one overloaded `approved` flag
+
+### Audit, Idempotency, and Automation Safety
+
+- design state-changing commands to be idempotent where practical; when true idempotence is not possible, require an explicit idempotency key or a detectable duplicate policy
+- a retried command must not create a second business fact just because an agent, scheduler, wrapper, or operator repeated the same request
+- if a repeated command cannot be auto-resolved safely, return a review outcome instead of silently creating duplicates
+- perform validation, invariant checks, state mutation, audit-event creation, and any required usage-event creation as one logical mutation unit
+- do not commit a state change without its corresponding audit record
+- do not emit an audit record that claims a state change which was not committed
+- if a workflow creates reminders, schedules, queues, or follow-up items, do not imply background execution that the system does not actually perform
+- reminders, scheduled items, and daily action lists may surface required work, but they must not be presented as completed sends, submits, publishes, or other external actions unless that action was explicitly executed and recorded
+
+### Database Runtime and Transaction Rules
+
+- when multiple local tools use the same database engine, prefer one shared repository-wide helper module for engine setup, connection defaults, and transaction helpers instead of duplicating low-level connection code in each project
+- keep operator-tunable database runtime settings such as lock wait limits, busy timeouts, retry ceilings, transaction modes, or durability knobs in config or a version-controlled shared config bundle rather than hardcoding them in many call sites
+- favor safe-by-default connection behavior for long-running or scheduled jobs; if an engine supports autocommit plus explicit transactions, prefer that over long implicit write transactions
+- keep write transactions short and explicit
+- do not hold a write transaction open across network calls, `await` boundaries, subprocess execution, OCR, user interaction, or long filesystem scans
+- if a logical write unit spans multiple statements, wrap only that database-only unit in an explicit transaction helper and ensure rollback happens on failure
+- if a workflow performs slow external work before writing, stage that work in memory or temporary files first and enter the write transaction only for the final database mutation step
+- bound lock waits with engine-appropriate settings such as busy timeouts or lock wait limits so competing runs fail clearly instead of hanging indefinitely on the database layer
+- close database connections in `finally` blocks or equivalent structured cleanup paths
+- if a scheduled or one-shot process can block future runs by holding a database lock, design its TTL and its transaction scope together; process-level timeouts do not replace transaction discipline
+- if a runtime is deployed into a copied service root, deploy the shared database helper and its shared config bundle with that runtime so installed code and repository code do not diverge in lock behavior
 
 ## 2. Config Rules
 
