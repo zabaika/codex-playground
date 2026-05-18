@@ -1,16 +1,16 @@
 ---
-name: youtube-transcribe-skill
-description: Extract subtitles or transcripts from a YouTube video with a local, fail-closed workflow. Try `youtube-transcript-api` first, then fall back to reviewed `yt-dlp` provider mode. Select only the first available subtitle language from a priority list.
+name: video-transcribe-skill
+description: Extract subtitles or transcripts from a YouTube or Vimeo video with a local, fail-closed workflow. Use `youtube-transcript-api` only for YouTube when available, otherwise fall back to reviewed `yt-dlp`, select only one subtitle language by priority, and convert downloaded `vtt` subtitles to `srt` when needed.
 allowed-tools: Read, Write, Bash(which:*), Bash(python3:*), Bash(yt-dlp:*)
 ---
 
-# YouTube Transcribe Skill
+# Video Transcribe Skill
 
 ## Overview
 
-Extract subtitles from a YouTube URL into a local subtitle file with the smallest practical permission set. This local fork intentionally removes browser automation, chooses only one subtitle language based on priority order, and prefers a dedicated PO token provider over direct browser-cookie access.
+Extract subtitles from a YouTube or Vimeo URL into a local subtitle file with the smallest practical permission set. This local fork intentionally removes browser automation, chooses only one subtitle language based on priority order, prefers a dedicated PO token provider over direct browser-cookie access for YouTube, and converts downloaded `vtt` subtitles to `srt` when direct `srt` output is unavailable.
 
-Input YouTube URL: `$ARGUMENTS`
+Input video URL: `$ARGUMENTS`
 
 ## Local Runtime Config
 
@@ -27,7 +27,7 @@ Input YouTube URL: `$ARGUMENTS`
 
 ## Guardrails
 
-1. Accept only standard YouTube URLs such as `https://www.youtube.com/watch?v=...` and `https://youtu.be/...`.
+1. Accept only standard YouTube URLs such as `https://www.youtube.com/watch?v=...` and `https://youtu.be/...`, plus standard Vimeo URLs such as `https://vimeo.com/...` and `https://player.vimeo.com/video/...`.
 2. Before running anything, check `which yt-dlp`.
 3. If `yt-dlp` is missing, stop and tell the user that this skill requires local `yt-dlp`. Do not fall back to browser automation, remote transcription APIs, or custom scripts.
 4. Never download video or audio media when subtitles are enough. Always prefer subtitle-only extraction with `--skip-download`.
@@ -41,20 +41,22 @@ Input YouTube URL: `$ARGUMENTS`
 
 1. Validate the URL.
 2. Confirm `yt-dlp` is available with `which yt-dlp`.
-3. For real YouTube subtitle extraction, request to run the local runner outside the sandbox immediately instead of first waiting for an in-sandbox DNS or HTTPS failure.
-   - Treat network access to YouTube as the normal path for this skill, not as an exceptional fallback.
-   - Do not burn a full failed attempt inside the sandbox just to rediscover that YouTube resolution is blocked there.
+3. For real supported-host subtitle extraction, request to run the local runner outside the sandbox immediately instead of first waiting for an in-sandbox DNS or HTTPS failure.
+   - Treat network access to YouTube or Vimeo as the normal path for this skill, not as an exceptional fallback.
+   - Do not burn a full failed attempt inside the sandbox just to rediscover that public video-host resolution is blocked there.
    - If the user declines the outside-sandbox run, stop honestly and report that the transcript pipeline cannot continue under the current network restrictions.
 4. Prefer the local runner:
 
 ```bash
-python3 scripts/run_youtube_transcribe.py --url "[VIDEO_URL]"
+python3 scripts/run_video_transcribe.py --url "[VIDEO_URL]"
 ```
 
 5. The runner should:
    - load `config/runtime.local.toml` when present
-   - try `youtube-transcript-api` first when the vendored venv is installed
+   - detect whether the URL is YouTube or Vimeo
+   - try `youtube-transcript-api` first only for YouTube when the vendored venv is installed
    - if the first engine does not return subtitles, still attempt the `yt-dlp` path before stopping
+   - skip `youtube-transcript-api` entirely for Vimeo and use `yt-dlp` directly
    - keep `yt-dlp` plugins disabled unless a provider mode is explicitly configured
    - resolve project-root-relative `[paths]`
    - write subtitles to `[paths].output_dir`
@@ -63,6 +65,7 @@ python3 scripts/run_youtube_transcribe.py --url "[VIDEO_URL]"
    - list available subtitles first
    - choose exactly one language by priority
    - download only that language in `srt`, then `vtt`, then best available subtitle format
+   - if the downloaded subtitle file is `vtt`, convert it to sibling `srt` and report the final `srt` path
    - print the engine used
 
 Recommended steady-state auth order:
@@ -74,14 +77,16 @@ Recommended steady-state auth order:
 Recommended engine order:
 
 1. `youtube-transcript-api`
-2. `yt-dlp` with the configured auth mode
+2. `yt-dlp` with the configured auth mode for YouTube
+3. `yt-dlp` direct host support for Vimeo
 
 6. If the command succeeds, report:
    - saved file path
    - engine used: `youtube-transcript-api` or `yt-dlp`
+   - platform used: `youtube` or `vimeo`
    - selected subtitle language
    - whether subtitles were uploaded or auto-generated when visible from the output
-   - output format: `srt`, `vtt`, or fallback subtitle format
+   - output format: final reported format after conversion, preferably `srt`
    - filename pattern:
      `<safe video title> [<video id>].<language>.srt` for `youtube-transcript-api`
      `%(title).180B [%(id)s].%(ext)s` plus yt-dlp's subtitle language suffix for the `yt-dlp` path
@@ -98,7 +103,7 @@ Use this only after the user explicitly approves local browser-cookie access for
 2. Re-run:
 
 ```bash
-python3 scripts/run_youtube_transcribe.py --url "[VIDEO_URL]"
+python3 scripts/run_video_transcribe.py --url "[VIDEO_URL]"
 ```
 
 3. If the retry still fails with `HTTP Error 429`, explain that current yt-dlp guidance points to PO Token handling for YouTube subtitle requests and that browser cookies alone may not be sufficient.
@@ -114,17 +119,18 @@ Prefer `provider-script` as the safest low-maintenance steady-state mode on this
 Supporting files:
 
 - `config/runtime.example.toml`
-- `scripts/run_youtube_transcribe.py`
+- `scripts/run_video_transcribe.py`
 - `scripts/verify_provider_setup.sh`
 
 ## Output
 
-- Preferred output format: `srt` when YouTube exposes it directly, otherwise `vtt`, otherwise the best available subtitle format
+- Preferred output format: `srt`; when the host exposes only `vtt`, download `vtt` and convert it locally to `srt`
 - Output location: `[paths].output_dir`
 - Log location: `[paths].log_file`
 - Preferred completion report:
   - absolute file path
   - engine used
+  - platform used
   - subtitle language
   - source type: uploaded or auto-generated, when known
 - Preferred failure reporting:

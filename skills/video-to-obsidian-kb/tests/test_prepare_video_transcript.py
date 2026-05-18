@@ -9,7 +9,7 @@ from tempfile import TemporaryDirectory
 import unittest
 
 
-SCRIPT_PATH = Path(__file__).resolve().parents[1] / "scripts" / "prepare_youtube_transcript.py"
+SCRIPT_PATH = Path(__file__).resolve().parents[1] / "scripts" / "prepare_video_transcript.py"
 ARTICLE_RUNTIME_PATHS = (
     Path(__file__).resolve().parents[2]
     / "article-to-obsidian-kb"
@@ -27,16 +27,16 @@ def load_module(path: Path, name: str):
     return module
 
 
-YOUTUBE = load_module(SCRIPT_PATH, "prepare_youtube_transcript")
+VIDEO = load_module(SCRIPT_PATH, "prepare_video_transcript")
 
 
-class YoutubeRuntimePathTests(unittest.TestCase):
+class VideoRuntimePathTests(unittest.TestCase):
     def test_wrapper_derives_project_root_from_sibling_article_config(self) -> None:
         with TemporaryDirectory() as tmpdir:
             tmp_root = Path(tmpdir)
             project_root = (tmp_root / "Playground").resolve(strict=False)
             article_skill_dir = tmp_root / ".codex" / "skills" / "article-to-obsidian-kb"
-            youtube_skill_dir = tmp_root / ".codex" / "skills" / "youtube-to-obsidian-kb"
+            video_skill_dir = tmp_root / ".codex" / "skills" / "video-to-obsidian-kb"
 
             article_config_dir = article_skill_dir / "config"
             article_scripts_dir = article_skill_dir / "scripts"
@@ -54,17 +54,17 @@ class YoutubeRuntimePathTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            resolved = YOUTUBE.project_root({}, youtube_skill_dir, article_config_path)
+            resolved = VIDEO.project_root({}, video_skill_dir, article_config_path)
 
             self.assertEqual(resolved, project_root)
 
 
-class YoutubeHumanOutputTests(unittest.TestCase):
+class VideoHumanOutputTests(unittest.TestCase):
     def test_print_route_block_emits_expected_lines(self) -> None:
         buffer = io.StringIO()
 
         with redirect_stdout(buffer):
-            YOUTUBE.print_route_block(
+            VIDEO.print_route_block(
                 "engineering",
                 "source combines a concrete company or system context with operating-model details",
             )
@@ -73,6 +73,22 @@ class YoutubeHumanOutputTests(unittest.TestCase):
             buffer.getvalue(),
             "Route used: engineering\n"
             "Route reason: source combines a concrete company or system context with operating-model details\n",
+        )
+
+    def test_detect_video_platform_supports_youtube_and_vimeo(self) -> None:
+        self.assertEqual(
+            VIDEO.detect_video_platform("https://www.youtube.com/watch?v=dQw4w9WgXcQ"),
+            "youtube",
+        )
+        self.assertEqual(
+            VIDEO.detect_video_platform("https://vimeo.com/1188411048/a963501823"),
+            "vimeo",
+        )
+
+    def test_extract_video_id_supports_vimeo_numeric_ids(self) -> None:
+        self.assertEqual(
+            VIDEO.extract_video_id("https://player.vimeo.com/video/1188411048"),
+            "1188411048",
         )
 
 

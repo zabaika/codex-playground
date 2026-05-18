@@ -24,16 +24,16 @@ def load_module(path: Path, name: str):
     return module
 
 
-RUNTIME_PATHS = load_module(RUNTIME_PATHS_PATH, "youtube_transcribe_runtime_paths")
-HELPER = load_module(HELPER_PATH, "youtube_transcribe_helper")
+RUNTIME_PATHS = load_module(RUNTIME_PATHS_PATH, "video_transcribe_runtime_paths")
+HELPER = load_module(HELPER_PATH, "video_transcribe_helper")
 
 
-class YoutubeTranscribeRuntimePathTests(unittest.TestCase):
+class VideoTranscribeRuntimePathTests(unittest.TestCase):
     def test_runtime_paths_resolve_relative_paths_from_project_root(self) -> None:
         with TemporaryDirectory() as tmpdir:
             tmp_root = Path(tmpdir)
             project_root = (tmp_root / "Playground").resolve(strict=False)
-            skill_dir = tmp_root / ".codex" / "skills" / "youtube-transcribe-skill"
+            skill_dir = tmp_root / ".codex" / "skills" / "video-transcribe-skill"
             config_dir = skill_dir / "config"
             config_dir.mkdir(parents=True)
             config_path = config_dir / "runtime.local.toml"
@@ -41,7 +41,7 @@ class YoutubeTranscribeRuntimePathTests(unittest.TestCase):
                 "[paths]\n"
                 f"project_root = '{project_root}'\n"
                 "output_dir = 'scratch'\n"
-                "log_file = 'scratch/youtube-transcribe.log'\n",
+                "log_file = 'scratch/video-transcribe.log'\n",
                 encoding="utf-8",
             )
 
@@ -53,13 +53,13 @@ class YoutubeTranscribeRuntimePathTests(unittest.TestCase):
             self.assertEqual(resolved.output_dir, project_root / "scratch")
             self.assertEqual(
                 resolved.log_file,
-                project_root / "scratch" / "youtube-transcribe.log",
+                project_root / "scratch" / "video-transcribe.log",
             )
 
     def test_relative_output_dir_fails_without_project_root(self) -> None:
         with TemporaryDirectory() as tmpdir:
             tmp_root = Path(tmpdir)
-            skill_dir = tmp_root / ".codex" / "skills" / "youtube-transcribe-skill"
+            skill_dir = tmp_root / ".codex" / "skills" / "video-transcribe-skill"
             config_dir = skill_dir / "config"
             config_dir.mkdir(parents=True)
             config_path = config_dir / "runtime.local.toml"

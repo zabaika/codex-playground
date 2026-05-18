@@ -1,0 +1,4 @@
+interface:
+  display_name: "Video to Obsidian KB"
+  short_description: "Turn YouTube or Vimeo videos into linked vault notes"
+  default_prompt: "Use $video-to-obsidian-kb to convert a YouTube or Vimeo URL into linked notes for my Obsidian knowledge base."

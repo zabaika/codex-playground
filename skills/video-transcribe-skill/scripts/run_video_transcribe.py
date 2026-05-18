@@ -23,15 +23,16 @@ DEFAULT_ENGINE_ORDER = ["youtube-transcript-api", "yt-dlp"]
 DEFAULT_BROWSER = "chrome"
 DEFAULT_AUTH_MODE = "none"
 DEFAULT_PROVIDER_KIND = "bgutil"
-DEFAULT_PROVIDER_SCRIPT_PATH = "~/.codex/skills/youtube-transcribe-skill/vendor/bgutil-provider/server/src/generate_once.ts"
+DEFAULT_PROVIDER_SCRIPT_PATH = "~/.codex/skills/video-transcribe-skill/vendor/bgutil-provider/server/src/generate_once.ts"
 DEFAULT_PROVIDER_BASE_URL = "http://127.0.0.1:4416"
-DEFAULT_PROVIDER_PLUGIN_DIR = "~/.codex/skills/youtube-transcribe-skill/vendor/bgutil-plugin"
+DEFAULT_PROVIDER_PLUGIN_DIR = "~/.codex/skills/video-transcribe-skill/vendor/bgutil-plugin"
 DEFAULT_RETRY_ATTEMPTS = 3
 DEFAULT_RETRY_INITIAL_DELAY = 2.0
 DEFAULT_RETRY_BACKOFF = 2.0
 DEFAULT_RETRY_MAX_DELAY = 10.0
 SCRIPT_DIR = Path(__file__).resolve().parent
 SKILL_DIR = SCRIPT_DIR.parent
+SUPPORTED_PLATFORMS = {"youtube", "vimeo"}
 
 
 def load_config(config_path: Path) -> dict:
@@ -116,6 +117,20 @@ def extract_video_id(raw: str) -> str:
     return "unknown"
 
 
+def detect_video_platform(raw: str) -> str:
+    parsed = parse.urlparse(raw.strip())
+    host = parsed.netloc.lower()
+    if host.startswith("www."):
+        host = host[4:]
+    if host in {"youtube.com", "youtu.be", "m.youtube.com"}:
+        return "youtube"
+    if host in {"vimeo.com", "player.vimeo.com"}:
+        return "vimeo"
+    raise SystemExit(
+        "Unsupported video URL. This runner currently supports standard YouTube and Vimeo URLs only."
+    )
+
+
 def build_log_path(configured_file: Path | None) -> Path | None:
     if configured_file is None:
         return None
@@ -191,6 +206,22 @@ def classify_failure(output: str) -> tuple[str, str]:
     return "error", "Subtitle extraction failed."
 
 
+def infer_subtitle_source_type(selected_language: str, subtitle_listing_output: str) -> str:
+    lowered_language = selected_language.lower()
+    if "autogen" in lowered_language or "auto" in lowered_language:
+        return "auto-generated"
+    pattern = re.compile(rf"^{re.escape(selected_language)}\s+(.+)$", re.MULTILINE)
+    match = pattern.search(subtitle_listing_output)
+    if not match:
+        return "unknown"
+    description = match.group(1).lower()
+    if "auto-generated" in description:
+        return "auto-generated"
+    if "generated automatically" in description:
+        return "auto-generated"
+    return "uploaded"
+
+
 def log_failure(log_path: Path | None, label: str, message: str) -> None:
     append_log(log_path, f"{label}: {message}")
 
@@ -215,7 +246,7 @@ def sanitize_filename_component(raw_value: str) -> str:
     value = re.sub(r'[\x00-\x1f]+', " ", raw_value).strip()
     value = re.sub(r'[\\/:*?"<>|]+', " ", value)
     value = re.sub(r"\s+", " ", value).strip().rstrip(".")
-    return value[:180].strip() or "YouTube"
+    return value[:180].strip() or "Video"
 
 
 def fetch_video_title(
@@ -263,7 +294,9 @@ def provider_settings(config: dict) -> dict[str, object]:
     }
 
 
-def build_auth_args(config: dict) -> tuple[list[str], dict[str, str]]:
+def build_auth_args(config: dict, *, platform: str) -> tuple[list[str], dict[str, str]]:
+    if platform != "youtube":
+        return [], {"YTDLP_NO_PLUGINS": "1"}
     auth = config.get("auth", {})
     mode = _string_value(auth.get("mode"), DEFAULT_AUTH_MODE)
     env_updates: dict[str, str] = {}
@@ -339,7 +372,7 @@ def engine_order(config: dict) -> list[str]:
 
 
 def vendored_yta_python() -> Path:
-    return Path.home() / ".codex" / "skills" / "youtube-transcribe-skill" / "vendor" / "youtube-transcript-api" / "venv" / "bin" / "python"
+    return Path.home() / ".codex" / "skills" / "video-transcribe-skill" / "vendor" / "youtube-transcript-api" / "venv" / "bin" / "python"
 
 
 def run_youtube_transcript_api(
@@ -435,18 +468,40 @@ def extract_available_languages(output: str) -> list[str]:
 def choose_language(available: list[str], priority: list[str]) -> str:
     lowered = {lang: lang.lower() for lang in available}
     for wanted in priority:
+        wanted_lower = wanted.lower()
         if wanted.lower() == "orig":
             for lang, lower_lang in lowered.items():
                 if "orig" in lower_lang:
                     return lang
             continue
         for lang in available:
-            if lang == wanted:
+            lower_lang = lang.lower()
+            if lang == wanted or lower_lang == wanted_lower or lower_lang.startswith(f"{wanted_lower}-"):
                 return lang
     raise SystemExit(
         "None of the preferred subtitle languages are available. "
         f"Available languages: {', '.join(available) or 'none'}"
     )
+
+
+def build_download_attempts(platform: str, selected_language: str, sub_format: str) -> list[list[str]]:
+    base = [
+        "--sub-langs",
+        selected_language,
+        "--sub-format",
+        sub_format,
+    ]
+    if platform == "vimeo":
+        return [
+            ["--write-subs", *base],
+            ["--write-auto-sub", "--write-sub", *base],
+            ["--write-auto-sub", *base],
+        ]
+    return [
+        ["--write-auto-sub", "--write-sub", *base],
+        ["--write-sub", *base],
+        ["--write-auto-sub", *base],
+    ]
 
 
 def extract_written_subtitle_path(output: str) -> str:
@@ -457,6 +512,60 @@ def extract_written_subtitle_path(output: str) -> str:
     return ""
 
 
+def normalize_srt_timestamp(raw: str) -> str:
+    value = raw.strip().replace(",", ".")
+    match = re.fullmatch(r"(?:(\d{2}):)?(\d{2}):(\d{2})\.(\d{3})", value)
+    if not match:
+        return raw.strip().replace(".", ",")
+    hours = match.group(1) or "00"
+    minutes = match.group(2)
+    seconds = match.group(3)
+    millis = match.group(4)
+    return f"{hours}:{minutes}:{seconds},{millis}"
+
+
+def convert_vtt_text_to_srt(vtt_text: str) -> str:
+    text = vtt_text.replace("\r\n", "\n").replace("\r", "\n")
+    blocks = re.split(r"\n\s*\n", text)
+    srt_blocks: list[str] = []
+    cue_index = 1
+    for block in blocks:
+        lines = [line.rstrip("\n") for line in block.split("\n")]
+        lines = [line for line in lines if line.strip()]
+        if not lines:
+            continue
+        first = lines[0].strip()
+        if first == "WEBVTT" or first.startswith("WEBVTT "):
+            continue
+        if first.startswith(("NOTE", "STYLE", "REGION")):
+            continue
+        if "-->" not in lines[0]:
+            if len(lines) < 2 or "-->" not in lines[1]:
+                continue
+            lines = lines[1:]
+        timing = lines[0]
+        match = re.match(r"^\s*(\S+)\s+-->\s+(\S+)", timing)
+        if not match:
+            continue
+        start = normalize_srt_timestamp(match.group(1))
+        end = normalize_srt_timestamp(match.group(2))
+        payload = [line for line in lines[1:] if line.strip()]
+        srt_blocks.append("\n".join([str(cue_index), f"{start} --> {end}", *payload]))
+        cue_index += 1
+    return ("\n\n".join(srt_blocks) + "\n") if srt_blocks else ""
+
+
+def maybe_convert_vtt_to_srt(subtitle_path: Path) -> Path:
+    if subtitle_path.suffix.lower() != ".vtt":
+        return subtitle_path
+    srt_path = subtitle_path.with_suffix(".srt")
+    srt_text = convert_vtt_text_to_srt(subtitle_path.read_text(encoding="utf-8"))
+    if not srt_text.strip():
+        return subtitle_path
+    srt_path.write_text(srt_text, encoding="utf-8")
+    return srt_path
+
+
 def normalize_reported_path(raw_path: str, target_output_dir: Path) -> Path:
     candidate = Path(raw_path).expanduser()
     if candidate.is_absolute():
@@ -465,8 +574,8 @@ def normalize_reported_path(raw_path: str, target_output_dir: Path) -> Path:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Download YouTube subtitles with local config.")
-    parser.add_argument("--url", required=True, help="YouTube video URL")
+    parser = argparse.ArgumentParser(description="Download video subtitles with local config.")
+    parser.add_argument("--url", required=True, help="YouTube or Vimeo video URL")
     parser.add_argument(
         "--config",
         help="Path to runtime.local.toml. Defaults to <skill>/config/runtime.local.toml",
@@ -482,18 +591,26 @@ def main() -> int:
     config = resolved_runtime.config
     target_output_dir = ensure_directory(resolved_runtime.output_dir, "Subtitle output directory")
     current_log_path = build_log_path(resolved_runtime.log_file)
-    auth_args, env_updates = build_auth_args(config)
+    platform = detect_video_platform(args.url)
+    auth_args, env_updates = build_auth_args(config, platform=platform)
     network_args = build_network_args(config)
     retry_config = retry_settings(config)
     append_log(current_log_path, "")
     append_log(current_log_path, f"=== run started {datetime.now().isoformat()} ===")
     append_log(current_log_path, f"URL: {args.url}")
+    append_log(current_log_path, f"Platform: {platform}")
 
     preferred_title = fetch_video_title(
         args.url, auth_args, network_args, env_updates, current_log_path, retry_config
     )
 
     for engine in engine_order(config):
+        if platform != "youtube" and engine == "youtube-transcript-api":
+            append_log(
+                current_log_path,
+                f"youtube-transcript-api engine skipped: unsupported for platform {platform}.",
+            )
+            continue
         if engine == "youtube-transcript-api":
             python_path = vendored_yta_python()
             if not python_path.is_file():
@@ -590,34 +707,52 @@ def main() -> int:
     append_log(current_log_path, f"Selected subtitle language: {selected_language}")
     print("Engine used: yt-dlp", file=sys.stderr)
 
-    download_result, download_kind, download_message = run_command_with_retry(
-        [
-            *base_args,
-            "--write-auto-sub",
-            "--write-sub",
-            "--sub-langs",
-            selected_language,
-            "--sub-format",
-            subtitle_format(config),
-            "--output",
-            output_template(config),
-            args.url,
-        ],
-        env_updates=env_updates,
-        label="yt-dlp download",
-        retry_config=retry_config,
-        log_path=current_log_path,
-    )
-    if download_result.returncode != 0:
+    download_result: subprocess.CompletedProcess[str] | None = None
+    download_kind = "error"
+    download_message = "Subtitle extraction failed."
+    for attempt_args in build_download_attempts(platform, selected_language, subtitle_format(config)):
+        download_result, download_kind, download_message = run_command_with_retry(
+            [
+                *base_args,
+                *attempt_args,
+                "--output",
+                output_template(config),
+                args.url,
+            ],
+            env_updates=env_updates,
+            label="yt-dlp download",
+            retry_config=retry_config,
+            log_path=current_log_path,
+        )
+        if download_result.returncode == 0:
+            break
+        if (
+            download_kind == "no_subtitles"
+            and "requested languages" in download_message.lower()
+        ):
+            continue
+        if "There are no subtitles for the requested languages" in (download_result.stdout + "\n" + download_result.stderr):
+            continue
+        break
+    if download_result is None or download_result.returncode != 0:
         log_failure(current_log_path, "yt-dlp download failed", download_message)
         print(download_message, file=sys.stderr)
-        return download_result.returncode
+        return 1 if download_result is None else download_result.returncode
 
     written_path = extract_written_subtitle_path(download_result.stdout + "\n" + download_result.stderr)
     if written_path:
         normalized_path = normalize_reported_path(written_path, target_output_dir)
-        print(f"Saved subtitle file: {normalized_path}", file=sys.stderr)
-        append_log(current_log_path, f"Saved subtitle file: {normalized_path}")
+        final_path = maybe_convert_vtt_to_srt(normalized_path)
+        source_type = infer_subtitle_source_type(
+            selected_language,
+            list_result.stdout + "\n" + list_result.stderr,
+        )
+        print(f"Subtitle source type: {source_type}", file=sys.stderr)
+        append_log(current_log_path, f"Subtitle source type: {source_type}")
+        if final_path != normalized_path:
+            append_log(current_log_path, f"Converted VTT to SRT: {final_path}")
+        print(f"Saved subtitle file: {final_path}", file=sys.stderr)
+        append_log(current_log_path, f"Saved subtitle file: {final_path}")
     append_log(current_log_path, "Engine used: yt-dlp")
     if current_log_path is not None:
         print(f"Log file: {current_log_path}", file=sys.stderr)

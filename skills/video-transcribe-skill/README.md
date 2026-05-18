@@ -1,17 +1,18 @@
-# youtube-transcribe-skill
+# video-transcribe-skill
 
-Local sanitized Codex skill for extracting YouTube subtitles through a fail-closed local workflow.
+Local sanitized Codex skill for extracting YouTube or Vimeo subtitles through a fail-closed local workflow.
 
 ## Purpose
 
-Use `youtube-transcribe-skill` when a YouTube transcript or subtitle file is needed locally with bounded permissions and explicit fallback behavior.
+Use `video-transcribe-skill` when a YouTube or Vimeo transcript or subtitle file is needed locally with bounded permissions and explicit fallback behavior.
 
 The skill:
 
-- accepts a YouTube URL
-- tries `youtube-transcript-api` first
-- falls back to the reviewed `yt-dlp` provider path when needed
+- accepts a YouTube or Vimeo URL
+- tries `youtube-transcript-api` first for YouTube
+- falls back to the reviewed `yt-dlp` path when needed
 - chooses only one subtitle language from a configured priority list
+- converts downloaded `vtt` subtitles to `srt` when direct `srt` output is unavailable
 - writes subtitle files and logs into project-local paths
 - keeps browser-cookie access out of the default path and requires explicit approval before that fallback
 
@@ -28,7 +29,7 @@ The skill:
 Install or refresh the local Codex copy with:
 
 ```bash
-bash skills/youtube-transcribe-skill/install-local.sh
+bash skills/video-transcribe-skill/install-local.sh
 ```
 
 ## Main Files
@@ -36,7 +37,7 @@ bash skills/youtube-transcribe-skill/install-local.sh
 - `SKILL.md`: runtime workflow entrypoint
 - `install-local.sh`: install or refresh helper
 - `config/runtime.example.toml`: runtime config shape and defaults
-- `scripts/run_youtube_transcribe.py`: main local runner
+- `scripts/run_video_transcribe.py`: main local runner
 - `scripts/verify_provider_setup.sh`: provider verification helper
 
 ## Review Docs

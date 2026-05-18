@@ -12,7 +12,7 @@ order = ["youtube-transcript-api", "yt-dlp"]
 # Relative output and log paths must never fall back to the shell cwd.
 project_root = ""
 output_dir = "scratch"
-log_file = "scratch/youtube-transcribe.log"
+log_file = "scratch/video-transcribe.log"
 
 [subtitles]
 # Priority order:
@@ -53,10 +53,10 @@ browser = "chrome"
 # Requires the external yt-dlp PO token provider plugin to be installed.
 kind = "bgutil"
 disable_innertube = true
-plugin_dir = "~/.codex/skills/youtube-transcribe-skill/vendor/bgutil-plugin"
+plugin_dir = "~/.codex/skills/video-transcribe-skill/vendor/bgutil-plugin"
 
 # provider-script mode:
-script_path = "~/.codex/skills/youtube-transcribe-skill/vendor/bgutil-provider/server/src/generate_once.ts"
+script_path = "~/.codex/skills/video-transcribe-skill/vendor/bgutil-provider/server/src/generate_once.ts"
 
 # provider-http mode:
 base_url = "http://127.0.0.1:4416"

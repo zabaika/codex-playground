@@ -1,15 +1,15 @@
-# youtube-to-obsidian-kb
+# video-to-obsidian-kb
 
-Local Codex skill for turning a YouTube video into linked Obsidian knowledge-base notes through a fail-closed transcript-first pipeline.
+Local Codex skill for turning a YouTube or Vimeo video into linked Obsidian knowledge-base notes through a fail-closed transcript-first pipeline.
 
 ## Purpose
 
-Use `youtube-to-obsidian-kb` when a YouTube URL should become vault notes, but only after a real transcript is fetched locally and prepared for the shared note-writing workflow.
+Use `video-to-obsidian-kb` when a YouTube or Vimeo URL should become vault notes, but only after a real transcript is fetched locally and prepared for the shared note-writing workflow.
 
 The skill:
 
-- accepts a YouTube URL
-- reuses `youtube-transcribe-skill` to fetch subtitles or transcripts locally
+- accepts a YouTube or Vimeo URL
+- reuses `video-transcribe-skill` to fetch subtitles or transcripts locally
 - stages a cleaned markdown transcript under project-local `scratch/`
 - detects the shared `article-to-obsidian-kb` route before note generation
 - reuses the sibling note workflow for search, update-vs-create, tags, validation, and final note writing
@@ -17,8 +17,8 @@ The skill:
 
 ## Source Of Truth
 
-- Repository source of truth: `skills/youtube-to-obsidian-kb/`
-- Installed Codex copy: `~/.codex/skills/youtube-to-obsidian-kb`
+- Repository source of truth: `skills/video-to-obsidian-kb/`
+- Installed Codex copy: `~/.codex/skills/video-to-obsidian-kb`
 
 Edit the repository copy first. Reinstall into `~/.codex/skills` after changes.
 
@@ -27,7 +27,7 @@ Edit the repository copy first. Reinstall into `~/.codex/skills` after changes.
 Install or refresh the local Codex copy with:
 
 ```bash
-bash skills/youtube-to-obsidian-kb/install-local.sh
+bash skills/video-to-obsidian-kb/install-local.sh
 ```
 
 Treat this skill's `config/runtime.local.toml` as optional and wrapper-only. When it exists, use it for sibling-skill config pointers and staging/log overrides, not for duplicating transcript-engine settings or Obsidian note roots.
@@ -44,7 +44,7 @@ Treat this skill's `config/runtime.local.toml` as optional and wrapper-only. Whe
 
 - `SKILL.md`: runtime workflow entrypoint
 - `config/runtime.example.toml`: optional local config shape
-- `scripts/prepare_youtube_transcript.py`: transcript preparation helper
+- `scripts/prepare_video_transcript.py`: transcript preparation helper
 
 ## Notes
 

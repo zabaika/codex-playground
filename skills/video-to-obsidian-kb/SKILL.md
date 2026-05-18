@@ -1,19 +1,19 @@
 ---
-name: youtube-to-obsidian-kb
-description: Convert a YouTube video URL into linked Obsidian knowledge-base notes by first fetching a local transcript through youtube-transcribe-skill and then applying the article-to-obsidian-kb note workflow. Stop honestly when no transcript can be fetched.
+name: video-to-obsidian-kb
+description: Convert a YouTube or Vimeo video URL into linked Obsidian knowledge-base notes by first fetching a local transcript through video-transcribe-skill and then applying the article-to-obsidian-kb note workflow. Stop honestly when no transcript can be fetched.
 ---
 
-# YouTube To Obsidian KB
+# Video To Obsidian KB
 
 ## Overview
 
-Turn a YouTube URL into compact, Russian-language Obsidian knowledge-base notes with a fail-closed pipeline:
+Turn a YouTube or Vimeo URL into compact, Russian-language Obsidian knowledge-base notes with a fail-closed pipeline:
 
-1. fetch the transcript through the local `youtube-transcribe-skill`
+1. fetch the transcript through the local `video-transcribe-skill`
 2. stage a cleaned markdown transcript locally
 3. apply the same vault-search, update-vs-create, tag-normalization, and note-writing rules used by `article-to-obsidian-kb`
 
-Input YouTube URL: `$ARGUMENTS`
+Input video URL: `$ARGUMENTS`
 
 Do not draft notes from the video title, thumbnail, or short description alone. If the transcript step fails, stop and report that the pipeline could not continue.
 
@@ -22,7 +22,7 @@ Do not draft notes from the video title, thumbnail, or short description alone. 
 1. Read this skill's `config/runtime.local.toml` only when it exists.
 2. Use [config/runtime.example.toml](config/runtime.example.toml) as the canonical reference for wrapper config keys, defaults, and path-resolution notes.
 3. Prefer the existing local configs from sibling skills instead of duplicating machine-specific values:
-   - in this skill's `config/runtime.local.toml`, point `youtube_transcribe_config` to `../../youtube-transcribe-skill/config/runtime.local.toml`
+   - in this skill's `config/runtime.local.toml`, point `video_transcribe_config` to `../../video-transcribe-skill/config/runtime.local.toml`
    - in this skill's `config/runtime.local.toml`, point `article_to_obsidian_config` to `../../article-to-obsidian-kb/config/runtime.local.toml`
 4. Treat this skill's own `config/runtime.local.toml` as optional.
 5. If this skill has a local config, use it only for:
@@ -36,15 +36,15 @@ Do not draft notes from the video title, thumbnail, or short description alone. 
 
 ## Default Workflow
 
-1. Validate that the input is a standard YouTube URL.
+1. Validate that the input is a standard YouTube or Vimeo URL.
 2. Run the local helper:
 
 ```bash
-python3 scripts/prepare_youtube_transcript.py --url "[VIDEO_URL]"
+python3 scripts/prepare_video_transcript.py --url "[VIDEO_URL]"
 ```
 
 3. The helper must:
-   - reuse `youtube-transcribe-skill/scripts/run_youtube_transcribe.py`
+   - reuse `video-transcribe-skill/scripts/run_video_transcribe.py`
    - reuse the sibling local config for transcript settings unless this skill explicitly overrides the path
    - save or reuse the subtitle file produced by the transcript skill
    - create a cleaned markdown transcript under a project-local `scratch/` path
@@ -65,7 +65,7 @@ python3 scripts/prepare_youtube_transcript.py --url "[VIDEO_URL]"
    - inherit the sibling workflow completely, not partially
    - do not stop after note drafting or note updates if the sibling workflow still requires final validation passes
    - when `article-to-obsidian-kb` requires `note-compliance pass` and `regression-sweep pass`, execute both of them for every touched note in this wrapper flow too
-   - do not treat the YouTube wrapper as a shortcut path that may skip final contract validation because the source came from a transcript
+   - do not treat the video wrapper as a shortcut path that may skip final contract validation because the source came from a transcript
 9. Search the configured vault roots before drafting anything and prefer updates over duplicate notes.
 10. Reuse the sibling `article-to-obsidian-kb` final-output contract verbatim.
    - do not redefine the report block names, ordering, or inclusion rules locally

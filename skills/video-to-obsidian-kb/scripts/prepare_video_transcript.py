@@ -20,21 +20,26 @@ except ModuleNotFoundError as exc:  # pragma: no cover
 
 
 DEFAULT_PROJECT_ROOT_ENV = "CODEX_PLAYGROUND_PROJECT_ROOT"
-DEFAULT_TRANSCRIBE_CONFIG_FROM_SKILL = "../../youtube-transcribe-skill/config/runtime.local.toml"
-DEFAULT_TRANSCRIBE_CONFIG_FROM_PROJECT = "skills/youtube-transcribe-skill/config/runtime.local.toml"
+DEFAULT_TRANSCRIBE_CONFIG_FROM_SKILL = "../../video-transcribe-skill/config/runtime.local.toml"
+DEFAULT_TRANSCRIBE_CONFIG_FROM_PROJECT = "skills/video-transcribe-skill/config/runtime.local.toml"
 DEFAULT_ARTICLE_CONFIG_FROM_SKILL = "../../article-to-obsidian-kb/config/runtime.local.toml"
 DEFAULT_ARTICLE_CONFIG_FROM_PROJECT = "skills/article-to-obsidian-kb/config/runtime.local.toml"
 DEFAULT_ARTICLE_ROUTER_FROM_SKILL = "../../article-to-obsidian-kb/scripts/detect_source_route.py"
 DEFAULT_ARTICLE_ROUTER_FROM_PROJECT = "skills/article-to-obsidian-kb/scripts/detect_source_route.py"
-DEFAULT_PREPARED_DIR = "scratch/youtube-to-obsidian-kb"
-DEFAULT_LOG_FILE = "scratch/youtube-to-obsidian-kb.log"
-DEFAULT_TRANSCRIBE_LOG_FILE = "scratch/youtube-transcribe.log"
+DEFAULT_PREPARED_DIR = "scratch/video-to-obsidian-kb"
+DEFAULT_LOG_FILE = "scratch/video-to-obsidian-kb.log"
+DEFAULT_TRANSCRIBE_LOG_FILE = "scratch/video-transcribe.log"
 YOUTUBE_HOSTS = {
     "youtu.be",
     "www.youtu.be",
     "youtube.com",
     "www.youtube.com",
     "m.youtube.com",
+}
+VIMEO_HOSTS = {
+    "vimeo.com",
+    "www.vimeo.com",
+    "player.vimeo.com",
 }
 
 
@@ -102,7 +107,7 @@ def project_root(config: dict, skill_root: Path, article_config_path: Path | Non
     if inferred is not None:
         return inferred
     raise SystemExit(
-        "Could not resolve project root for youtube-to-obsidian-kb. "
+        "Could not resolve project root for video-to-obsidian-kb. "
         "Set CODEX_PLAYGROUND_PROJECT_ROOT, [paths].project_root, or a sibling article-to-obsidian-kb config that resolves project-local paths."
     )
 
@@ -136,17 +141,24 @@ def append_log(path: Path, message: str) -> None:
             handle.write("\n")
 
 
-def is_youtube_url(raw_url: str) -> bool:
+def detect_video_platform(raw_url: str) -> str:
     parsed = urlparse(raw_url.strip())
     if parsed.scheme not in {"http", "https"}:
-        return False
-    if parsed.netloc.lower() not in YOUTUBE_HOSTS:
-        return False
-    if parsed.netloc.lower() in {"youtu.be", "www.youtu.be"}:
-        return bool(parsed.path.strip("/"))
-    if parse_qs(parsed.query).get("v"):
-        return True
-    return parsed.path.startswith("/shorts/")
+        return "unsupported"
+    host = parsed.netloc.lower()
+    if host in YOUTUBE_HOSTS:
+        if host in {"youtu.be", "www.youtu.be"}:
+            return "youtube" if parsed.path.strip("/") else "unsupported"
+        if parse_qs(parsed.query).get("v") or parsed.path.startswith("/shorts/"):
+            return "youtube"
+    if host in VIMEO_HOSTS:
+        if re.search(r"/\d+", parsed.path):
+            return "vimeo"
+    return "unsupported"
+
+
+def is_supported_video_url(raw_url: str) -> bool:
+    return detect_video_platform(raw_url) != "unsupported"
 
 
 def extract_video_id(raw: str) -> str:
@@ -164,6 +176,10 @@ def extract_video_id(raw: str) -> str:
     shorts_match = re.match(r"^/shorts/([\w-]{11})(?:/|$)", parsed.path)
     if shorts_match:
         return shorts_match.group(1)
+    if parsed.netloc.lower() in VIMEO_HOSTS:
+        match = re.search(r"/(\d+)(?:/|$)", parsed.path)
+        if match:
+            return match.group(1)
     return "unknown"
 
 
@@ -262,10 +278,10 @@ def infer_title(subtitle_path: Path, video_id: str) -> str:
         lang_token = lang_suffix.lstrip(".")
         if stem.endswith(f".{lang_token}"):
             stem = stem[: -(len(lang_token) + 1)]
-    match = re.match(r"^(?P<title>.+?) \[(?P<video_id>[\w-]{11})\]$", stem)
+    match = re.match(r"^(?P<title>.+?) \[(?P<video_id>[\w-]{6,})\]$", stem)
     if match:
-        return match.group("title").strip() or f"YouTube {video_id}"
-    return stem.strip() or f"YouTube {video_id}"
+        return match.group("title").strip() or f"Video {video_id}"
+    return stem.strip() or f"Video {video_id}"
 
 
 def infer_language_from_subtitle_path(subtitle_path: Path) -> str:
@@ -321,6 +337,7 @@ def build_transcript_markdown(
     *,
     title: str,
     url: str,
+    platform: str,
     video_id: str,
     subtitle_path: Path,
     prepared_path: Path,
@@ -331,7 +348,7 @@ def build_transcript_markdown(
     lines = [
         f"# {title}",
         "",
-        f"- Source: YouTube",
+        f"- Source: {platform.capitalize()}",
         f"- Video URL: {url}",
         f"- Video ID: {video_id}",
         f"- Subtitle engine: {engine or 'unknown'}",
@@ -371,10 +388,10 @@ def ensure_article_config_is_ready(article_config_path: Path) -> None:
 
 def run_transcribe_runner(url: str, runner_path: Path, transcribe_config_path: Path) -> subprocess.CompletedProcess[str]:
     if not runner_path.exists():
-        raise SystemExit(f"youtube-transcribe runner is missing: {runner_path}")
+        raise SystemExit(f"video-transcribe runner is missing: {runner_path}")
     if not transcribe_config_path.exists():
         raise SystemExit(
-            "YouTube transcript config is missing. "
+            "Video transcript config is missing. "
             f"Expected runtime.local.toml at: {transcribe_config_path}"
         )
     return subprocess.run(
@@ -390,6 +407,7 @@ def prepare_transcript_from_subtitle(
     *,
     subtitle_path: Path,
     url: str,
+    platform: str,
     video_id: str,
     engine: str,
     language: str,
@@ -405,12 +423,13 @@ def prepare_transcript_from_subtitle(
         )
     safe_title = infer_title(subtitle_path, video_id)
     safe_name = re.sub(r'[\\/:*?"<>|]+', " ", safe_title)
-    safe_name = re.sub(r"\s+", " ", safe_name).strip().rstrip(".") or f"YouTube {video_id}"
+    safe_name = re.sub(r"\s+", " ", safe_name).strip().rstrip(".") or f"Video {video_id}"
     prepared_path = prepared_dir / f"{safe_name} [{video_id}].transcript.md"
     prepared_path.write_text(
         build_transcript_markdown(
             title=safe_title,
             url=url,
+            platform=platform,
             video_id=video_id,
             subtitle_path=subtitle_path,
             prepared_path=prepared_path,
@@ -437,9 +456,9 @@ def run_article_router(prepared_path: Path, router_path: Path, title: str) -> su
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Prepare a cleaned markdown transcript for youtube-to-obsidian-kb.",
+        description="Prepare a cleaned markdown transcript for video-to-obsidian-kb.",
     )
-    parser.add_argument("--url", required=True, help="YouTube video URL")
+    parser.add_argument("--url", required=True, help="YouTube or Vimeo video URL")
     parser.add_argument(
         "--config",
         help="Optional path to this skill's runtime.local.toml",
@@ -455,8 +474,9 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    if not is_youtube_url(args.url):
-        raise SystemExit("Expected a standard YouTube URL.")
+    platform = detect_video_platform(args.url)
+    if platform == "unsupported":
+        raise SystemExit("Expected a standard YouTube or Vimeo URL.")
 
     script_dir = Path(__file__).resolve().parent
     skill_root = script_dir.parent
@@ -477,14 +497,14 @@ def main() -> int:
     prepared_dir = prepare_output_dir(config, resolved_project_root)
     current_log_path = log_path(config, resolved_project_root)
     transcribe_config_path = resolve_optional_config(
-        _string_value(skills_cfg.get("youtube_transcribe_config"), ""),
+        _string_value(skills_cfg.get("video_transcribe_config"), ""),
         config_dir,
         DEFAULT_TRANSCRIBE_CONFIG_FROM_SKILL,
         DEFAULT_TRANSCRIBE_CONFIG_FROM_PROJECT,
         resolved_project_root,
     )
     ensure_article_config_is_ready(article_config_path)
-    transcribe_runner = transcribe_config_path.parent.parent / "scripts" / "run_youtube_transcribe.py"
+    transcribe_runner = transcribe_config_path.parent.parent / "scripts" / "run_video_transcribe.py"
     article_router_path = resolve_optional_config(
         "",
         config_dir,
@@ -496,6 +516,7 @@ def main() -> int:
     append_log(current_log_path, "")
     append_log(current_log_path, f"=== run started {datetime.now(timezone.utc).isoformat()} ===")
     append_log(current_log_path, f"URL: {args.url}")
+    append_log(current_log_path, f"Platform: {platform}")
 
     if args.subtitle_file:
         subtitle_path = Path(args.subtitle_file).expanduser().resolve()
@@ -533,6 +554,7 @@ def main() -> int:
     prepared_path = prepare_transcript_from_subtitle(
         subtitle_path=subtitle_path,
         url=args.url,
+        platform=platform,
         video_id=video_id,
         engine=engine_used,
         language=selected_language,

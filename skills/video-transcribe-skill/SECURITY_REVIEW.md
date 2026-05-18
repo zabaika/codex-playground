@@ -1,4 +1,4 @@
-# youtube-transcribe-skill security review
+# video-transcribe-skill security review
 
 This folder contains a local, sanitized fork of the third-party `youtube-transcribe-skill`.
 
@@ -45,14 +45,14 @@ The local fork keeps only the narrowly useful part of the workflow:
 
 ## Local environment status at initial review time
 
-- `youtube-transcribe-skill` is not installed under `~/.codex/skills`
+- `video-transcribe-skill` is not installed under `~/.codex/skills`
 - `yt-dlp` is not present in `PATH`
 - no compatible Chrome MCP tool is available in this Codex session
 
 ## Recommended activation path
 
 1. Install `yt-dlp` from a trusted package source.
-2. Copy this sanitized skill into `~/.codex/skills/youtube-transcribe-skill`.
+2. Copy this sanitized skill into `~/.codex/skills/video-transcribe-skill`.
    - A helper script is included at `install-local.sh`.
 3. Prefer configuring `config/runtime.local.toml` with `provider-script` mode.
 4. Restart Codex so the new skill is discovered.

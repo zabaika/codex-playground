@@ -5,7 +5,7 @@
 [skills]
 # Reuse the sibling skill configs instead of duplicating their machine-specific values here.
 # Keep these as config pointers only; do not copy transcript-engine settings or note roots here.
-youtube_transcribe_config = "../../youtube-transcribe-skill/config/runtime.local.toml"
+video_transcribe_config = "../../video-transcribe-skill/config/runtime.local.toml"
 article_to_obsidian_config = "../../article-to-obsidian-kb/config/runtime.local.toml"
 
 [paths]
@@ -18,6 +18,6 @@ article_to_obsidian_config = "../../article-to-obsidian-kb/config/runtime.local.
 # Leave `project_root` empty unless you need to override automatic resolution.
 project_root = ""
 # Prepared transcript markdown files should stay under scratch/, not repo-local tmp/.
-prepared_transcripts_dir = "scratch/youtube-to-obsidian-kb"
+prepared_transcripts_dir = "scratch/video-to-obsidian-kb"
 # Keep wrapper logs under scratch/ too so cleanup remains one-directory scoped.
-log_file = "scratch/youtube-to-obsidian-kb.log"
+log_file = "scratch/video-to-obsidian-kb.log"
