@@ -14,6 +14,7 @@ Use it as an entry guide. For repository-wide engineering policy, safety rules, 
 - [telegram_agent_bot](./telegram_agent_bot): standalone Telegram task agent project
 - [telegram_shared](./telegram_shared): shared infrastructure primitives for Telegram projects
 - [skills](./skills): local skills and related documentation
+- [plugins](./plugins): local Codex plugin sources and related documentation
 - [tools/kb-index](./tools/kb-index): local retrieval and indexing tool for the Obsidian knowledge base
 
 Keep this block current as the repository evolves:
@@ -50,6 +51,12 @@ When working in `skills`, prefer these sources in this order:
 - the target skill's local docs such as `README.md`, `AGENTS.md`, and `SKILL.md` inside its folder for behavior and maintenance rules
 - [RULEBOOK.md](./RULEBOOK.md) for cross-project rules
 - any skill-local scripts or tests for executable expectations
+
+When working in `plugins`, prefer these sources in this order:
+- [plugins/README.md](./plugins/README.md) for the plugin catalog and installation intent
+- the target plugin's local docs such as `README.md`, `AGENTS.md`, and bundled skill docs for behavior and maintenance rules
+- [RULEBOOK.md](./RULEBOOK.md) for cross-project rules
+- any plugin-local scripts or tests for executable expectations
 
 If README, code, and tests disagree, update them together rather than fixing only one layer.
 

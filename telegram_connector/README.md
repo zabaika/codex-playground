@@ -193,7 +193,7 @@ This installs both LaunchAgents:
 - `com.zabaika.telegram-connector-bridge`
 - `com.zabaika.telegram-connector-digest`
 
-Restart the background service:
+Reload the installed bridge LaunchAgent:
 
 ```bash
 bash telegram_connector/scripts/restart_launch_agent.sh
@@ -202,7 +202,7 @@ bash telegram_connector/scripts/restart_launch_agent.sh
 Service update rule:
 
 - rerun `install_launch_agent.sh` after code changes, `telegram_shared` changes, `runtime.local.toml` changes, prompt-bundle changes, or schedule-related config changes such as `digest.time`
-- use `restart_launch_agent.sh` only to reload the already installed service copy when the installed code and config are already up to date
+- use `restart_launch_agent.sh` only to reload the already installed bridge LaunchAgent when the installed code and config are already up to date
 - the scheduled digest runner uses the shared `common/ttl_runner.py` with two protections:
   - a sidecar `caffeinate -i -w <child_pid>` so a `launchd` start during macOS maintenance wake does not immediately fall back asleep mid-run
   - a hard wall-clock TTL so a stuck Telethon cleanup cannot leave the job in `launchd state=running` forever

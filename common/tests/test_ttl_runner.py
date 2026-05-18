@@ -54,6 +54,7 @@ class TtlRunnerTests(unittest.TestCase):
         self.assertEqual(payload["run_total_timeout_seconds"], 0.2)
         self.assertEqual(payload["termination_grace_seconds"], 0.2)
         self.assertIsNotNone(payload["finished_at"])
+        self.assertIsNotNone(payload["updated_at"])
 
 
 if __name__ == "__main__":
