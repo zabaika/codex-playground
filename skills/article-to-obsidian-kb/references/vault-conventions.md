@@ -202,6 +202,31 @@ Frontmatter is part of the note schema, not optional decoration.
 - For every note type, make sections and bullets additive: do not repeat the same recommendation, example, claim, mechanism, or definition under multiple headings unless the source truly requires cross-reference.
 - Every next block or bullet must add new knowledge instead of duplicating, inverting, or paraphrasing the previous one.
 - Prefer one stronger section over two overlapping ones.
+- For source-derived notes, use a content-first body with earned sections rather than filling a fixed template mechanically.
+- Treat `3-5` body sections as the normal target for a strong source-derived note; go beyond that only when the source clearly contains multiple distinct layers that would otherwise be lost.
+- Before saving any non-`concept` note, check that each section has a distinct informational role; if two sections mostly carry the same signal, merge them or delete the weaker one.
+- Do not create a section only because the schema supports that section family; include it only when the source gives enough independent material for it.
+- Use schema-owned section families when they fit the source cleanly:
+  - `headings.key_theses`
+  - `headings.practice`
+  - `headings.key_lessons`
+  - `headings.adoption_scope`
+  - `headings.platform_systems`
+  - `headings.workflows`
+  - `headings.metrics_effect`
+  - `headings.tools_frameworks`
+  - `headings.pitfalls`
+  - `headings.apply_immediately`
+- Treat those schema-owned families as optional building blocks rather than as a required checklist for every note type.
+- Keep section-family roles distinct:
+  - `headings.key_theses` carries the main ideas, distinctions, and decision logic
+  - `headings.practice` turns those ideas into actions, heuristics, examples, or checklists
+  - `headings.key_lessons` is allowed only when it adds a higher-level synthesis beyond neighboring applied or thesis sections
+  - `headings.adoption_scope` captures rollout motion, spread, user segmentation, and uptake patterns
+  - `headings.platform_systems` captures architecture, internal tools, integration surfaces, and owned technical layers
+  - `headings.workflows` captures loops, handoffs, sequences, and operating cycles
+  - `headings.metrics_effect` captures concrete numbers, before/after signals, impact, and trade-offs
+- If a note would mostly restate the same material under both `headings.practice` and `headings.key_lessons`, keep only the stronger section and drop the other one.
 - In `lessons` notes, merge overlapping lessons instead of keeping two nearby principles with different wording.
 - In `lessons` notes, do not let the lessons collapse into headline-only bullets.
 - Each lesson must contain not only the reusable principle or recommendation itself, but also at least one short explanatory sentence that makes the lesson understandable without relying on the surrounding sections.
@@ -216,7 +241,10 @@ Frontmatter is part of the note schema, not optional decoration.
 - Treat `compact` as the default concept-note shape: one tight definition, then the schema-defined `headings.additional_insights`, then the schema-defined `headings.related_notes`.
 - Switch a concept note to an `expanded` shape only when the compact form would leave a real comprehension gap.
 - Prefer `expanded` concept notes for comparative concepts, easy-to-confuse neighboring concepts, abbreviations or shorthand metric names, and concepts whose recommendation would remain unclear without one more explanatory layer.
-- In an `expanded` concept note, add only one or two short clarifying sections that answer the missing question directly, for example `## Чем отличается`, `## Когда полезен`, or `## Почему метрика шумная`.
+- In an `expanded` concept note, add only one or two short clarifying sections that answer the missing question directly, using schema-owned concept clarifier headings such as:
+  - `headings.concept_compare`
+  - `headings.concept_when_useful`
+  - `headings.concept_metric_noise`
 - If one concept is expanded mostly to contrast it with a nearby concept, make sure the neighboring concept note also exposes that distinction at least briefly instead of leaving the asymmetry invisible from one side.
 - When a source only reinforces an existing concept, update the existing concept note instead of creating a near-duplicate concept file.
 - Before creating a new concept file, run a canonical concept check against the existing vault and reuse the canonical note when the meaning already exists.
@@ -282,6 +310,7 @@ Frontmatter is part of the note schema, not optional decoration.
 - `headings.key_theses` should carry the main ideas, distinctions, and decision logic.
 - `headings.practice` should turn those ideas into actions, heuristics, checklists, or examples.
 - `headings.pitfalls` should focus on failure modes, misleading shortcuts, and concrete ways the approach breaks in practice.
+- `headings.key_lessons` should appear only when it compresses several earlier sections into a stronger synthesis; it should not act as a second copy of `headings.practice` or `headings.key_theses`.
 - Do not restate the same point across these sections with only a polarity flip or minor rewording.
 - If an anti-pattern is only the inverse of an earlier recommendation, either remove it or rewrite it to include a specific mechanism, risk, tradeoff, or consequence that is not already stated above.
 - This pass is especially important for transcripts and long-form spoken sources, where the most useful specificity is often distributed across the material rather than concentrated in the opening section.

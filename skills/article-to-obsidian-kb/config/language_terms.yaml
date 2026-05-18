@@ -32,8 +32,9 @@
   "named_entities": {
     "single": [
       "Accenture",
-      "Microsoft",
       "Atlassian",
+      "GitHub",
+      "Microsoft",
       "RedMonk"
     ],
     "phrases": [

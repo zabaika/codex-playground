@@ -21,6 +21,10 @@ Canonical section-heading strings live in [config/note_schema.yaml](../config/no
 - Do not drop a valid old `source` field just because the note type, title, or section structure changed during normalization.
 - Add new information without duplicating prior statements.
 - Do not replace specific existing detail with a shorter but more generic rewrite.
+- When restructuring a touched note, do not fill every available section family just because the schema supports it.
+- Keep only earned sections whose role is materially distinct in the final note.
+- If two sections end up carrying the same mechanism, recommendation, or example cluster, merge them or delete the weaker one instead of preserving both for symmetry.
+- Prefer one stronger content-first structure over a neater but more repetitive template-shaped rewrite.
 - Treat it as a `scope fork` when a local update surfaces unrelated whole-note legacy cleanup that would materially expand the work or force a strategic choice between full cleanup, rollback, or rerouting the new signal.
 - At that fork, do not silently choose the path yourself. Pause and ask the user which route they want:
   - full cleanup of the touched note

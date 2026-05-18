@@ -20,6 +20,7 @@ EVIDENCE_HEADING = MODULE.EVIDENCE_HEADING
 KEY_THESES_HEADING = MODULE.heading("key_theses")
 PRACTICE_HEADING = MODULE.heading("practice")
 PITFALLS_HEADING = MODULE.heading("pitfalls")
+CONCEPT_COMPARE_HEADING = MODULE.heading("concept_compare")
 
 
 class CheckNoteContractTests(unittest.TestCase):
@@ -512,7 +513,7 @@ tags:
   - metrics
 ---
 **Cycle Time** полезно читать рядом с [[Lead Time]] и [[Cycle Time]] как каноническим label заметки.
-## Чем отличается
+{CONCEPT_COMPARE_HEADING}
 - **Это не plain prose.** Если термин уже оформлен как `wikilink` или совпадает с названием заметки, language-pass не должен требовать его перевода.
 {ADDITIONAL_INSIGHTS_HEADING}
 - 2026-05-18: `Cycle Time` в роли канонического label не должен падать как residue.

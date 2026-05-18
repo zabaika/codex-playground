@@ -278,15 +278,16 @@ python3 -m unittest discover -s skills/article-to-obsidian-kb/tests -q
 - Do not compress several distinct mechanisms into one generic sentence just to keep the note short.
 - Keep operating-model sections additive: each section should cover a different part of how the system works instead of repeating the same mechanism under new headings.
 - If two operating-model sections would describe the same operating behavior, merge or delete the weaker section.
-- Prefer a sectioned structure. When the source supports it, cover:
-  - `## Команда и зона ответственности`
-  - `## Платформы и системы`
-  - `## Метрики`
-  - `## Приоритизация`
-  - `## Сбор обратной связи`
-  - `## Внедрение AI`
-  - `## Покупать или строить`
-- If a standalone lessons note would mostly repeat the operating model, merge the lessons into the operating-model note and add `## Key lessons`.
+- Prefer a content-first sectioned structure built from schema-owned section families rather than a fixed template.
+- Common operating-model section families include:
+  - `headings.adoption_scope`
+  - `headings.platform_systems`
+  - `headings.workflows`
+  - `headings.metrics_effect`
+  - `headings.practice`
+  - `headings.observed_practices`
+- Use only the section families that are earned by the source; do not create a section just because that family exists in the schema.
+- If a standalone lessons note would mostly repeat the operating model, prefer strengthening the operating-model note's applied or synthesis sections instead of mechanically adding `headings.key_lessons`.
 - Preserve surviving `source` provenance when converting, renaming, or restructuring any existing note into `operating-model`; do not reset frontmatter provenance during a structural rewrite.
 
 ### General Note
@@ -341,7 +342,7 @@ python3 -m unittest discover -s skills/article-to-obsidian-kb/tests -q
   - the concept is easy to confuse with a nearby existing concept in the same run or the same note cluster
   - the concept is named by an abbreviation, shorthand metric, or compressed label that hides the mechanism
   - the source relies on the concept for a recommendation, but the default one-paragraph definition would not make the recommendation understandable
-- In an `expanded` concept note, add only one or two short sections that resolve the ambiguity directly, such as `## Чем отличается`, `## Когда полезен`, `## Почему метрика шумная`, or another equally specific heading.
+- In an `expanded` concept note, add only one or two short sections that resolve the ambiguity directly, using schema-owned concept clarifier headings such as `headings.concept_compare`, `headings.concept_when_useful`, or `headings.concept_metric_noise`.
 - Do not expand every concept note by default; use `expanded` only to remove a real comprehension gap.
 - When one concept note is expanded mainly to distinguish it from a nearby concept, update the neighboring concept note enough that the distinction is visible from both sides, even if the neighbor remains compact.
 - If a source only reinforces an existing concept, prefer updating the existing note instead of creating a near-duplicate concept note.
@@ -357,6 +358,19 @@ python3 -m unittest discover -s skills/article-to-obsidian-kb/tests -q
 - Apply the canonical language rules from [references/language-normalization.md](references/language-normalization.md).
 - Apply the canonical update contract from [references/update-patterns.md](references/update-patterns.md) whenever an existing note is touched.
 - Treat [config/note_schema.yaml](config/note_schema.yaml) as the single source of truth for canonical section-heading strings. In code, tests, and docs, prefer `headings.*` schema keys over repeated raw heading literals, and do not translate or locally rename schema-defined headings in individual notes.
+- For any non-`concept` note, build the body as a content-first structure from schema-owned section families instead of filling a rigid type template.
+- Keep `3-5` earned body sections as the normal target for source-derived notes.
+- Before saving, run a section-role pass:
+  - list the current body sections
+  - name the unique informational role of each section
+  - merge or delete any section whose role substantially overlaps with another section
+- Run a section-eligibility pass before finalizing the body:
+  - keep a section only if the source gives enough independent material for that section family
+  - do not create `headings.key_lessons` unless it adds net-new synthesis beyond nearby thesis or applied sections
+  - do not create `headings.metrics_effect` unless the source provides multiple concrete metric, rate, impact, or trade-off signals
+  - do not create `headings.platform_systems` unless the source provides real architecture, tooling, integration-surface, or internal-system detail
+  - do not create `headings.workflows` unless the source provides loops, sequences, handoffs, or operating-cycle structure
+  - do not create `headings.practice` unless the source yields reusable moves, heuristics, or decisions that a reader could plausibly adopt
 - If an update to an existing note turns into a `scope fork` because unrelated legacy cleanup is uncovered, stop and ask the user which path to take instead of silently choosing between full cleanup, rollback, or rerouting the new material.
 - If the chosen path is `full cleanup`, show a short cleanup plan for that note and wait for explicit agreement before rewriting the whole note.
 - Treat verbs like `append`, `merge`, `normalize`, `clean up`, and `update` as insufficient on their own when the operation has more than one plausible interpretation.
@@ -371,6 +385,7 @@ python3 -m unittest discover -s skills/article-to-obsidian-kb/tests -q
   - if the draft keeps multiple related percentages, rates, or metric values, make the basis of each number explicit whenever cadence, denominator, comparison group, or baseline differs
   - when the source contains concrete anchors such as examples, numbers, pipelines, decision rules, explicit limitations, or concrete failure mechanisms, preserve them in `headings.key_theses`, `headings.practice`, `headings.pitfalls`, or a similar section if they materially improve actionability
   - apply the first-mention abbreviation rule from [references/vault-conventions.md](references/vault-conventions.md) during early synthesis when the draft introduces a new compressed label
+  - if the draft already has more than `5` body sections, challenge whether every section is earned and distinct before keeping that structure
   - treat this as an early synthesis guardrail, not only as a late cleanup step
 - Run one final note-compliance pass before saving any touched note:
   - apply the full final-note contract from [references/vault-conventions.md](references/vault-conventions.md) to the final saved artifact
@@ -380,9 +395,11 @@ python3 -m unittest discover -s skills/article-to-obsidian-kb/tests -q
   - re-check the main note body for source-scaffolding under the rule set from [references/vault-conventions.md](references/vault-conventions.md); keep schema-defined dated provenance sections such as `headings.evidence`, `headings.additional_insights`, and `headings.observed_practices` exempt from that cleanup
   - re-check the prose for metaphorical or fashionable jargon and prefer literal operational wording; when a term does not name a concrete role, artifact, step, criterion, mechanism, or constraint, rewrite it into one that does
   - if the note is non-`concept` and has `headings.practice` or another clearly applied section, re-check the checklist rule from [references/vault-conventions.md](references/vault-conventions.md): checklists should preserve real decision structure, and surrounding applied prose should not duplicate the same actions or criteria
+  - for any non-`concept` note, re-run the section-role pass against the final structure and remove any block that now mostly repeats another section after late rewrites
   - compare `headings.key_theses`, `headings.practice`, and `headings.pitfalls` for cross-section duplication; if an anti-pattern only mirrors an earlier recommendation, rewrite it into a concrete failure mode or remove it
   - re-check whether the main lessons or applied sections have been flattened into generic claims; when the source contains concrete anchors such as examples, numbers, pipelines, decision rules, explicit limitations, or concrete failure mechanisms, preserve them in the note if they materially improve actionability
   - if the final note has `headings.key_lessons` or a lessons-style numbered block, re-check that the lessons are not reduced to one-line headlines; expand any lesson that lacks a short explanatory second sentence
+  - if the final note still has both `headings.practice` and `headings.key_lessons`, make sure the latter adds net-new synthesis rather than restating applied advice
   - if the final note contains multiple related percentages, rates, or metric values, re-check that the cadence, denominator, comparison group, or baseline is explicit wherever those numbers could otherwise be confused
   - a strong practical note should usually contain at least some source-native specificity, not only abstract restatements
   - re-check role and artifact terminology where the source contains neighboring English terms such as product, product manager, design, or platform; keep the Russian wording semantically separated instead of collapsing distinct roles into one overloaded noun
