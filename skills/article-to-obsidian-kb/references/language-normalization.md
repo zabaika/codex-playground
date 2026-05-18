@@ -8,6 +8,9 @@
 
 ## English Term Classes
 
+- Resolve canonical identifiers before language cleanup.
+- Treat `wikilinks`, canonical note titles, and other graph identifiers as fixed labels first, and only then evaluate the remaining prose for translation.
+- Do not translate an English phrase just because it contains Latin characters if it is already acting as a canonical identifier inside the note graph.
 - Keep in English by default:
   - canonical engineering process names
   - canonical method or framework names
@@ -23,6 +26,8 @@
 - Do not treat all English prose as one cleanup class.
 - A term should not stay in English only because it appeared that way in the source.
 - A term should not be translated only because it contains Latin characters.
+- Treat title-case entities more conservatively than ordinary prose.
+- Company names, people names, and other name-like labels should not be normalized as if they were generic operational vocabulary unless the note is clearly using them as prose shorthand rather than as names.
 
 ## Keep In English
 

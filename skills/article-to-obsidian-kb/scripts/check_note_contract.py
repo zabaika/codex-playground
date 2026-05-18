@@ -167,6 +167,15 @@ def _extract_wikilink_targets(text: str) -> list[str]:
     return [match.group(1) for match in WIKILINK_RE.finditer(text)]
 
 
+def _extract_wikilink_labels(text: str) -> list[str]:
+    labels: list[str] = []
+    for match in WIKILINK_RE.finditer(text):
+        label = match.group(2)
+        if label:
+            labels.append(label)
+    return labels
+
+
 def _visible_text(line: str, *, keep_inline_code: bool = False) -> str:
     line = URL_RE.sub("", line)
     line = WIKILINK_RE.sub(lambda m: m.group(2) or m.group(1), line)
@@ -253,6 +262,36 @@ def _looks_descriptive_inline_phrase(text: str) -> bool:
     if not letters:
         return False
     return all(not char.isupper() for char in letters)
+
+
+def _looks_titlecase_entity_token(token: str) -> bool:
+    if not token:
+        return False
+    if any(char.isdigit() for char in token):
+        return True
+    return bool(re.fullmatch(r"[A-Z][A-Za-z]+(?:[/-][A-Za-z0-9]+)*", token))
+
+
+def _looks_titlecase_entity_phrase(text: str) -> bool:
+    normalized = _normalize_phrase(text)
+    if not normalized or normalized.lower() == normalized:
+        return False
+    tokens = [token for token in normalized.split(" ") if token]
+    if not (1 <= len(tokens) <= 4):
+        return False
+    return all(_looks_titlecase_entity_token(token) for token in tokens)
+
+
+def _dynamic_canonical_latin_terms(
+    frontmatter: dict[str, object], body: str
+) -> tuple[set[str], set[str]]:
+    dynamic_terms: set[str] = set()
+    title = frontmatter.get("title")
+    if isinstance(title, str) and re.search(r"[A-Za-z]", title):
+        dynamic_terms.add(title.strip())
+    dynamic_terms.update(_extract_wikilink_targets(body))
+    dynamic_terms.update(_extract_wikilink_labels(body))
+    return _partition_latin_terms(dynamic_terms)
 
 
 def _is_mixed_case_shorthand(token: str) -> bool:
@@ -848,15 +887,18 @@ def _check_discouraged_latin_phrases(body: str) -> list[Violation]:
 
 
 def _check_generic_latin_residue(
-    body: str, allow_latin_terms: list[str]
+    frontmatter: dict[str, object], body: str, allow_latin_terms: list[str]
 ) -> list[Violation]:
     violations: list[Violation] = []
     extra_allow_single, extra_allow_phrases = _partition_latin_terms(set(allow_latin_terms))
+    dynamic_allow_single, dynamic_allow_phrases = _dynamic_canonical_latin_terms(frontmatter, body)
     allow_terms = {term for term in extra_allow_single}
     allow_terms.update(term.lower() for term in extra_allow_single)
+    allow_terms.update(dynamic_allow_single)
+    allow_terms.update(term.lower() for term in dynamic_allow_single)
     allow_terms.update(CANONICAL_LATIN_SINGLE_TERMS)
     allow_terms.update(term.lower() for term in CANONICAL_LATIN_SINGLE_TERMS)
-    allow_phrases = CANONICAL_LATIN_PHRASES | extra_allow_phrases
+    allow_phrases = CANONICAL_LATIN_PHRASES | extra_allow_phrases | dynamic_allow_phrases
     for idx, line in enumerate(body.splitlines(), start=1):
         if line.strip() in CANONICAL_HEADINGS:
             continue
@@ -888,6 +930,8 @@ def _check_generic_latin_residue(
                         )
                     )
                     continue
+                if _looks_titlecase_entity_token(token):
+                    continue
                 violations.append(
                     Violation(
                         f"language.unexpected-latin:{token}",
@@ -897,6 +941,8 @@ def _check_generic_latin_residue(
                 )
                 continue
             phrase = _normalize_phrase(visible[group[0].start() : group[-1].end()])
+            if _looks_titlecase_entity_phrase(phrase):
+                continue
             violations.append(
                 Violation(
                     f"language.translate-phrase:{phrase}",
@@ -908,15 +954,18 @@ def _check_generic_latin_residue(
 
 
 def _check_inline_code_phrase_residue(
-    body: str, allow_latin_terms: list[str]
+    frontmatter: dict[str, object], body: str, allow_latin_terms: list[str]
 ) -> list[Violation]:
     violations: list[Violation] = []
     extra_allow_single, extra_allow_phrases = _partition_latin_terms(set(allow_latin_terms))
+    dynamic_allow_single, dynamic_allow_phrases = _dynamic_canonical_latin_terms(frontmatter, body)
     allow_terms = {term for term in extra_allow_single}
     allow_terms.update(term.lower() for term in extra_allow_single)
+    allow_terms.update(dynamic_allow_single)
+    allow_terms.update(term.lower() for term in dynamic_allow_single)
     allow_terms.update(CANONICAL_LATIN_SINGLE_TERMS)
     allow_terms.update(term.lower() for term in CANONICAL_LATIN_SINGLE_TERMS)
-    allow_phrases = CANONICAL_LATIN_PHRASES | extra_allow_phrases
+    allow_phrases = CANONICAL_LATIN_PHRASES | extra_allow_phrases | dynamic_allow_phrases
     for idx, line in enumerate(body.splitlines(), start=1):
         if line.strip() in CANONICAL_HEADINGS:
             continue
@@ -929,10 +978,16 @@ def _check_inline_code_phrase_residue(
                 if len(group) == 1:
                     token = group[0].group(0)
                     if "-" not in token and "/" not in token:
+                        if _is_mixed_case_shorthand(token):
+                            continue
+                        if _looks_titlecase_entity_token(token):
+                            continue
                         continue
                     phrase = token
                 else:
                     phrase = _normalize_phrase(visible[group[0].start() : group[-1].end()])
+                    if _looks_titlecase_entity_phrase(phrase):
+                        continue
                 if not _looks_descriptive_inline_phrase(phrase):
                     continue
                 violations.append(
@@ -1314,8 +1369,8 @@ def collect_violations_from_text(
     body_violations.extend(_check_forbidden_terms(body, forbidden_terms))
     if expect != "structured-council-verdict":
         body_violations.extend(_check_discouraged_latin_phrases(body))
-        body_violations.extend(_check_generic_latin_residue(body, allow_latin_terms))
-        body_violations.extend(_check_inline_code_phrase_residue(body, allow_latin_terms))
+        body_violations.extend(_check_generic_latin_residue(frontmatter, body, allow_latin_terms))
+        body_violations.extend(_check_inline_code_phrase_residue(frontmatter, body, allow_latin_terms))
     body_violations.extend(_check_required_linked_phrases(body, required_linked_phrases))
     body_violations.extend(_check_required_examples(body, required_example_phrases))
     body_violations.extend(

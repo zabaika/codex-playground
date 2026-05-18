@@ -367,6 +367,8 @@ python3 -m unittest discover -s skills/article-to-obsidian-kb/tests -q
   - [references/source-analysis-general.md](references/source-analysis-general.md)
 - Before finalizing the note structure, run a specificity pass on the draft:
   - re-check whether the main lessons or applied sections have been flattened into generic claims during summarization
+  - if the draft has `headings.key_lessons` or a lessons-style block, make sure those lessons are not headline-only bullets; each lesson should keep a short second-step explanation of mechanism, implication, trade-off, or operational meaning
+  - if the draft keeps multiple related percentages, rates, or metric values, make the basis of each number explicit whenever cadence, denominator, comparison group, or baseline differs
   - when the source contains concrete anchors such as examples, numbers, pipelines, decision rules, explicit limitations, or concrete failure mechanisms, preserve them in `headings.key_theses`, `headings.practice`, `headings.pitfalls`, or a similar section if they materially improve actionability
   - apply the first-mention abbreviation rule from [references/vault-conventions.md](references/vault-conventions.md) during early synthesis when the draft introduces a new compressed label
   - treat this as an early synthesis guardrail, not only as a late cleanup step
@@ -380,9 +382,12 @@ python3 -m unittest discover -s skills/article-to-obsidian-kb/tests -q
   - if the note is non-`concept` and has `headings.practice` or another clearly applied section, re-check the checklist rule from [references/vault-conventions.md](references/vault-conventions.md): checklists should preserve real decision structure, and surrounding applied prose should not duplicate the same actions or criteria
   - compare `headings.key_theses`, `headings.practice`, and `headings.pitfalls` for cross-section duplication; if an anti-pattern only mirrors an earlier recommendation, rewrite it into a concrete failure mode or remove it
   - re-check whether the main lessons or applied sections have been flattened into generic claims; when the source contains concrete anchors such as examples, numbers, pipelines, decision rules, explicit limitations, or concrete failure mechanisms, preserve them in the note if they materially improve actionability
+  - if the final note has `headings.key_lessons` or a lessons-style numbered block, re-check that the lessons are not reduced to one-line headlines; expand any lesson that lacks a short explanatory second sentence
+  - if the final note contains multiple related percentages, rates, or metric values, re-check that the cadence, denominator, comparison group, or baseline is explicit wherever those numbers could otherwise be confused
   - a strong practical note should usually contain at least some source-native specificity, not only abstract restatements
   - re-check role and artifact terminology where the source contains neighboring English terms such as product, product manager, design, or platform; keep the Russian wording semantically separated instead of collapsing distinct roles into one overloaded noun
   - re-check English terminology by semantic class under [references/language-normalization.md](references/language-normalization.md): keep canonical engineering terms, stable role labels, named entities, and canonical `wikilink` titles in English, but translate non-canonical organizational shorthand, evaluative prose labels, and descriptive operational phrases that merely label a mechanism, budget, pricing rule, control layer, workflow mode, governance rule, or evaluation pattern
+  - apply canonical-identifier precedence before anglicism cleanup: existing `wikilinks`, canonical note titles, and other graph identifiers win first; only the remaining prose should be normalized
   - do not let inline code preserve non-canonical English prose; backticks are acceptable for canonical commands, identifiers, product names, and stable method names, but not for descriptive labels that should be translated
   - do not mark a note complete until it passes this full-note contract in its final saved form
 - Run one final regression-sweep pass immediately after the note-compliance pass:

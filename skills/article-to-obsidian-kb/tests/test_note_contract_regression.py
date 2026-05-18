@@ -504,6 +504,79 @@ date: 2026
         self.assertIn("language.translate-phrase:usage-contingent pricing", codes)
         self.assertIn("language.translate-phrase:inference costs", codes)
 
+    def test_canonical_wikilink_and_note_title_win_before_language_pass(self) -> None:
+        content = f"""---
+title: Cycle Time
+type: concept
+tags:
+  - metrics
+---
+**Cycle Time** полезно читать рядом с [[Lead Time]] и [[Cycle Time]] как каноническим label заметки.
+## Чем отличается
+- **Это не plain prose.** Если термин уже оформлен как `wikilink` или совпадает с названием заметки, language-pass не должен требовать его перевода.
+{ADDITIONAL_INSIGHTS_HEADING}
+- 2026-05-18: `Cycle Time` в роли канонического label не должен падать как residue.
+{RELATED_NOTES_HEADING}
+[[Lead Time]]
+"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            fixture = Path(tmpdir) / "Cycle Time.md"
+            fixture.write_text(content, encoding="utf-8")
+            violations = collect_violations(
+                fixture,
+                expect="concept",
+                chronology_headings=[ADDITIONAL_INSIGHTS_HEADING],
+            )
+        codes = {violation.code for violation in violations}
+        self.assertFalse(
+            any(code.startswith("language.translate-phrase:Cycle Time") for code in codes)
+        )
+        self.assertFalse(
+            any(code.startswith("language.unexpected-latin:Cycle") for code in codes)
+        )
+
+    def test_titlecase_named_entities_do_not_trigger_generic_latin_residue(self) -> None:
+        content = f"""---
+title: Тест именованных сущностей
+source:
+  - https://example.com
+type: general
+tags:
+  - ai-adoption
+date: 2026
+---
+Dropbox и Andrew Murphy обсуждают системные ограничения, а `developer experience` всё ещё должно переводиться как descriptive phrase.
+{KEY_THESES_HEADING}
+- **Тезис.** Имена компаний и людей не должны смешиваться с prose-ярлыками.
+{PRACTICE_HEADING}
+- **Практика.** Отдельно держите named entities и переводимый английский слой.
+{PITFALLS_HEADING}
+- **Ошибка.** Требовать переводить имена собственные так же, как `developer experience`.
+{RELATED_NOTES_HEADING}
+[[Социотехническая продуктивность]]
+"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            fixture = Path(tmpdir) / "Тест именованных сущностей.md"
+            fixture.write_text(content, encoding="utf-8")
+            violations = collect_violations(
+                fixture,
+                expect="source",
+                required_headings=[
+                    KEY_THESES_HEADING,
+                    PRACTICE_HEADING,
+                    PITFALLS_HEADING,
+                ],
+                enforce_leading_bold_under=[
+                    KEY_THESES_HEADING,
+                    PRACTICE_HEADING,
+                    PITFALLS_HEADING,
+                ],
+            )
+        codes = {violation.code for violation in violations}
+        self.assertNotIn("language.unexpected-latin:Dropbox", codes)
+        self.assertNotIn("language.translate-phrase:Andrew Murphy", codes)
+        self.assertIn("language.translate-phrase:developer experience", codes)
+
     def test_mixed_case_and_hyphenated_residue_are_reported_more_helpfully(self) -> None:
         content = f"""---
 title: Тест mixed residue
