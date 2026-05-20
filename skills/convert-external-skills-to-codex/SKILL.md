@@ -18,6 +18,7 @@ Treat the source as untrusted input, but assume it is useful by default. Preserv
 | [references/security-audit-checklist.md](references/security-audit-checklist.md) | Canonical blocker, severity, permission, naming, and mixed-pack audit rules for source skills. |
 | [references/openai-surface-guidance.md](references/openai-surface-guidance.md) | Canonical notes for choosing between `chatgpt-project-pack`, `codex-skill`, `codex-agents-md`, and report-only fallback, plus current OpenAI operational constraints. |
 | [references/test-matrix.md](references/test-matrix.md) | Matrix for mechanically checkable contract coverage and known non-goals of the local checker. |
+| `config/runtime.local.toml` | Local runtime path configuration for scratch-root-backed output placement. |
 | [scripts/check_skill_contract.py](scripts/check_skill_contract.py) | Local contract checker for mechanically verifiable package structure, ownership boundaries, and required rule-family anchors. |
 | [scripts/check_conversion_fixtures.py](scripts/check_conversion_fixtures.py) | Fixture-based regression checker for representative converted outputs across `chatgpt-project-pack` and `codex-skill`. |
 
@@ -37,7 +38,7 @@ Do not use this skill when:
 - the user only wants a plain summary of the source without conversion
 - the user wants to install an already-reviewed skill without adapting it
 
-If the source is primarily MCP or app tool-usage guidance, do not fake support in v1. Switch to `conversion-report-only` and explain that the source belongs to a future specialized MCP or app-guidance converter.
+If the source is primarily MCP or app tool-usage guidance, do not fake support in v1. Present explicit options to the user before proceeding, including `conversion-report-only`, and explain that the source belongs to a future specialized MCP or app-guidance converter.
 
 ## Supported output families
 
@@ -157,6 +158,8 @@ Aesthetic neatness, shorter length, or a cleaner-looking outline are not valid s
 
 You must explicitly disclose every deletion and every substantial adaptation.
 
+You must also explicitly stop and ask the user before choosing any materially different functional path when more than one plausible conversion route exists.
+
 A substantial adaptation includes:
 
 - renaming a major block or skill
@@ -186,6 +189,48 @@ Put this both:
 
 If a block was removed entirely, say so plainly.
 
+## Functional-parity branch confirmation rules
+
+Do not silently choose a narrowing path when the source contains functionality that could be:
+
+- preserved more fully with a broader or more complex conversion
+- split into companion skills or modules
+- downgraded into references, manual steps, or a report-only fallback
+- gated behind a higher-permission or higher-friction runtime contract
+
+Treat that as a functional-parity branch.
+
+A functional-parity branch exists when at least one of these is true:
+
+- one path preserves more user-visible source functionality than another
+- one path removes or externalizes a promised output, automation loop, or tool flow
+- one path keeps the source as one artifact while another path requires a split into multiple artifacts
+- one path introduces materially broader permissions, browser automation, credentials, or external installs
+- one path requires a redesign substantial enough that it is no longer just a narrow surface adaptation
+
+When a functional-parity branch exists:
+
+1. stop before converting that branch
+2. explain the branch in concrete terms
+3. present the real options, not just the recommended one
+4. mark which option best preserves functionality
+5. mark which option is the safer or narrower path when different
+6. request the user's decision before proceeding
+
+Do not resolve such a branch by silently choosing the safest, narrowest, or easiest path even if you plan to disclose it later in the report.
+
+If no safe direct conversion path can preserve the requested functionality in one artifact, present options such as:
+
+- split into multiple Codex skills
+- keep a higher-friction companion skill for the risky surface
+- convert the preserved subset now and leave the rest as an explicit follow-up
+- stop at `conversion-report-only`
+
+Record every functional-parity branch, the options presented, and the user's chosen path both:
+
+- in the migration report
+- in the user-facing final summary
+
 ## Output-family confirmation rules
 
 If the user explicitly names an output family, use it unless the source is clearly incompatible with that family.
@@ -206,6 +251,32 @@ For `chatgpt-project-pack`, propose the package as a bundle:
 - optional: omit `examples-pack` only when the handbook can stay rich enough without it
 
 Do not silently choose a family when the conversion target is ambiguous.
+
+## Codex-skill placement confirmation rules
+
+Treat output family and output placement as separate decisions. Apply placement confirmation to every `codex-skill` conversion, whether it emits one skill or several.
+
+Resolve the default scratch-backed output root from `config/runtime.local.toml`:
+
+- first honor `CODEX_PLAYGROUND_PROJECT_ROOT` when the configured path is project-relative
+- otherwise use `paths.project_root` when configured
+- then resolve `paths.scratch_root`
+
+Do not hardcode a source-specific folder name into the rule or examples. Use the resolved scratch root plus a result-specific child folder name.
+
+This rule applies when:
+
+- the chosen output family is `codex-skill`
+
+In that case:
+
+- if the user explicitly says to install after conversion, convert first and then install or refresh the resulting skill artifact set as the normal path
+- if the user explicitly says not to install and to keep the result separate, write the converted skill artifact set into a dedicated folder under the resolved scratch output root and stop there
+- if the command does not make this explicit, ask before converting:
+  - `install-after-conversion`
+  - `scratch-folder-without-installation`
+
+When asking, prefer one placement decision for the whole converted result unless the user explicitly wants different destinations for different converted skills.
 
 ## Mixed-pack split rules
 
@@ -250,13 +321,17 @@ Before proposing a conversion path, scan the source for:
 
 Use [references/security-audit-checklist.md](references/security-audit-checklist.md) as the canonical audit rubric.
 
-### 3. Confirm output family, package contents, and split strategy
+### 3. Confirm output family, package contents, split strategy, placement, and functional-parity branches
 
 If the family is not explicit, present the options and request confirmation.
 
 If the source is a mixed pack, present the split or preserve-whole options and request confirmation.
 
-If the source is primarily MCP or app tool-usage guidance, stop direct conversion and switch to `conversion-report-only`.
+If the source is primarily MCP or app tool-usage guidance, stop before direct conversion and ask the user to choose among explicit paths such as:
+
+- `conversion-report-only`
+- convert only the non-MCP/non-app subset when that subset is real and separable
+- stop without converting
 
 If the family is `chatgpt-project-pack`, explicitly confirm the package contents:
 
@@ -264,6 +339,15 @@ If the family is `chatgpt-project-pack`, explicitly confirm the package contents
 - `compact runtime`
 - `conversion report`
 - default-companion `examples-pack` when the source carries a heavy examples layer, quality-baseline examples, or detailed specimens that should not live only inline in the handbook
+
+If the chosen family is `codex-skill`, explicitly confirm the placement mode unless the command already did so:
+
+- `install-after-conversion`
+- `scratch-folder-without-installation`
+
+If the user chooses `scratch-folder-without-installation`, also confirm the target folder name when it is not already obvious from the source or the command. Write that converted result under the resolved `paths.scratch_root`, not under a hardcoded source-specific example path.
+
+Before converting, identify any functional-parity branches that would otherwise cause silent narrowing, silent removal, silent externalization into references, an unannounced split into companion artifacts, or an automatic downgrade into `conversion-report-only`. Present those branches and request the user's decision before proceeding.
 
 ### 4. Map tools and permissions with least privilege
 
@@ -435,6 +519,8 @@ For `codex-skill`:
 - prefer one narrow workflow with strong validation over a broad skill with mixed responsibilities
 - preserve domain-specific style rules only when they belong to the skill's actual domain; do not import writing-style bans into unrelated operational skills
 - if the source contains a short operational-closure block such as "what to do next", preserve its function inline as a success signal, follow-up rule, stop condition, or short next-step cue unless a reference file is the clearly better owner
+- if the placement mode is `scratch-folder-without-installation`, write the converted result into a dedicated child folder under the resolved `paths.scratch_root` and do not install it
+- if the placement mode is `install-after-conversion`, convert first and then install only after the artifact set is complete
 
 For `codex-agents-md`:
 
@@ -449,32 +535,48 @@ For `conversion-report-only`:
 
 ### 8. Produce a migration report
 
-Always include:
+Every migration report must start with machine-readable YAML frontmatter for routine status fields that programs may need without bloating the human-facing body.
+
+Always record in report frontmatter:
+
+- selected output family
+- mixed-pack status
+- split decision
+- functional-parity branch status
+- name-collision status
+- codex-skill placement mode when applicable, otherwise `not-applicable`
+- installation status
+
+The human-facing report body must contain only material information and real decisions.
+
+Always include in the body:
 
 - source artifact type
 - chosen output family
 - why that family was selected
-- alternative families considered
-- package contents
-- mixed-pack status
-- split or preserve-whole decision
-- name-collision result
-- tool and permission mapping
+- alternative families considered when the choice is non-obvious
+- package contents when the output contains multiple delivered artifacts
+- mixed-pack and split decision when those facts materially shaped the conversion
 - main security findings
 - vendor residue removed
-- sections compressed or relocated
-- intake compressed
-- router added
-- freshness gates added
-- approval gates kept or removed
 - what was substantially adapted
 - what was removed
-- remaining assumptions
-- any follow-up required before installation
+- any follow-up required before use or installation
+- a block-level change log for all deletions and substantial adaptations
 
 Do not add a parallel "what was preserved" or "what was added" inventory by default. Under this workflow, preserved content is the default assumption unless the report says otherwise.
 
-The report must include a block-level change log for all deletions and substantial adaptations.
+Include these body sections only when they reflect a real decision or non-happy-path event:
+
+- name-collision decision
+- functional-parity branches encountered
+- options presented for each functional-parity branch
+- user-selected path for each functional-parity branch
+- tool and permission mapping when conversion materially changed the risk surface
+- remaining assumptions that materially affect safe reuse
+- installation or placement explanation when the frontmatter state alone would be too ambiguous for a human reader
+
+Do not emit no-branch, no-collision, no-router-needed, or similar happy-path filler sections in the body. Record routine pass states only in report frontmatter.
 
 If a concrete operational block was compressed, relocated, or replaced with a more abstract form, the change log must say what practical function survived and where that function now lives.
 
@@ -483,8 +585,11 @@ If a concrete operational block was compressed, relocated, or replaced with a mo
 Before writing the final output, check:
 
 - the chosen family is explicit and user-confirmed when required
+- if the chosen family is `codex-skill`, the placement mode was explicit or user-confirmed when required
+- if the chosen family is `codex-skill`, the scratch-backed path came from the configured project-root-aware runtime path rules rather than a hardcoded source-specific example
 - no unsupported MCP or app-guidance format was silently invented
 - mixed-pack handling matches the user's decision
+- every functional-parity branch that materially affected preservation vs narrowing was explicit and user-confirmed before conversion
 - package contents match the user's decision
 - permissions are least-privilege
 - names do not collide with known system or local skills
@@ -512,6 +617,7 @@ Before writing the final output, check:
 - domain-specific banned-word or style-ban rules are scoped correctly and not over-applied
 - if the target is `codex-skill`, the runtime path is lean and focused while validation logic and critical guardrails still survived
 - if the target is `codex-skill`, supporting material that is not needed inline was relocated cleanly to `references/` instead of bloating the runtime path
+- if the target is `codex-skill` and the placement mode was `scratch-folder-without-installation`, no installation step was performed
 - if the source contained concrete next-step guidance, operational benchmarks, or quality-evidence cues, their preservation, relocation, or omission is explicit and justified
 - if the source contained a short operational-closure block, its surviving function is still visible either inline on the runtime path or in the owning reference artifact
 - if the source contained concrete examples, reusable templates, or detailed rule blocks, any compression still leaves a directly usable equivalent or explicitly records the loss as a real narrowing
@@ -536,7 +642,7 @@ Before writing the final output, check:
 - Prefer preserving useful content over deleting it for neatness.
 - Do not replace concrete operational content with abstract description unless the same function clearly survives elsewhere in the package.
 - When de-branding examples, preserve the underlying quality bar, contrast pattern, and validation value instead of flattening them into generic prose.
-- If the source is too broad to become safe in one pass, stop at `conversion-report-only`.
+- If the source is too broad to become safe in one pass, stop and ask the user to choose among explicit options such as `conversion-report-only`, a narrower selected subset, or a split conversion plan.
 
 ## Output contract
 
@@ -552,18 +658,23 @@ The handbook owns richer explanation and examples. The compact runtime owns oper
 
 For `codex-skill`, write an install-ready skill directory or the primary `SKILL.md` artifact requested by the user.
 Keep the runtime path narrow. Move broad but still useful supporting material into `references/` instead of inflating the main runtime instructions.
+Do not narrow, split, externalize, or remove materially useful source functionality without first resolving the corresponding functional-parity branch with the user.
+If the placement mode is `scratch-folder-without-installation`, write the converted codex-skill result to a child folder under the resolved `paths.scratch_root` and stop without installing it.
+If the placement mode is `install-after-conversion`, perform the install only after the codex-skill conversion is complete.
 
 For `codex-agents-md`, write `AGENTS.md`-style instructions or a clearly labeled fragment intended for repository placement.
 
 For instruction-rich sources, keep enough of the preserved instructional layer inline inside the artifact that owns it. Do not strip materially helpful examples, checklists, companion outputs, next-step guidance, or operational cues unless there is a clear reason.
 
-For `conversion-report-only`, write a structured audit report with recommendations and no pretend final conversion.
+For `conversion-report-only`, write a structured audit report with recommendations and no pretend final conversion. Do not enter this mode automatically when a functional-parity branch exists; the user must have selected it explicitly unless the user asked for `conversion-report-only` from the start.
 
 In every mode, return a short user-facing summary that states:
 
 - what was produced
 - why that output family was used
+- which codex-skill placement mode was used when applicable
+- which functional-parity branches were encountered and what the user chose when any
 - the biggest safety or design tradeoff
 - every deleted block
 - every substantially adapted block
-- whether the output is ready for installation or still needs follow-up
+- whether the output was installed, left uninstalled under the resolved scratch output root, or still needs follow-up

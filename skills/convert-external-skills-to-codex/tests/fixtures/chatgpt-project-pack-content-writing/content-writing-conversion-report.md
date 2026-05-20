@@ -1,3 +1,13 @@
+---
+selected_output_family: chatgpt-project-pack
+mixed_pack_status: mixed-pack
+split_decision: preserve-whole
+functional_parity_branch_status: none
+name_collision_status: none
+codex_skill_placement_mode: not-applicable
+installation_status: not-applicable
+---
+
 # Conversion Report
 ## 02 — Content & Writing -> chatgpt-project-pack
 
@@ -34,19 +44,6 @@ Mixed pack confirmed. The source contains 12 writing modules plus shared writing
 
 Preserved as one instruction-rich handbook plus one compact runtime because the modules belong to one coherent writing domain and benefit from one router and one shared writing-rules layer.
 
-### Name-collision result
-
-No installable skill name was emitted, so collision risk with local or system skills was avoided.
-
-### Tool and permission mapping
-
-- `needed_tools`: none expressed inside the converted ChatGPT artifacts
-- `forbidden_tools`: broad default `Read Write WebSearch WebFetch` assumptions
-- `web_required`: only for freshness-sensitive writing tasks
-- `write_required`: no
-- `destructive_actions`: none
-- `approval_expectation`: only for long-form, high-stakes, or explicitly staged work
-
 ### Main security findings
 
 - Original setup was vendor-bound to Claude.
@@ -61,35 +58,6 @@ No installable skill name was emitted, so collision risk with local or system sk
 - `What Claude asks you first`
 - direct `Claude` execution wording across modules
 
-### Sections compressed or relocated
-
-- Long module interviews were compressed into `minimum inputs` and `optional inputs`.
-- Always-active behavior was extracted into a separate compact runtime file.
-- Representative output specimens and the richer writing-rules layer were relocated into a dedicated examples pack.
-
-### Intake compressed
-
-Yes. Original 5 to 7 question module interviews were compressed for the runtime layer into minimum blocking questions plus module-specific optional inputs.
-
-### Router added
-
-Yes. The package now includes an explicit module router for 12 writing workflows.
-
-### Freshness gates added
-
-Yes. Added for:
-
-- SEO and search intent
-- journalist or publication targeting
-- announcement timing
-- recent performance and platform behavior
-- legal or disclosure expectations when relevant
-
-### Approval gates kept or removed
-
-- Kept only where long-form structure or high-stakes staging materially helps
-- Removed as a default expectation for everyday writing tasks
-
 ### What was removed
 
 - frontmatter and installable skill packaging
@@ -101,10 +69,13 @@ Yes. Added for:
 
 - The source was converted from one vendor-bound skill bundle into a `chatgpt-project-pack`.
 - Module intakes were compressed from long interviews into handbook input fields plus compact runtime blocking-question behavior.
+- Always-active behavior was extracted into a compact runtime file, while richer specimens and writing-rules support moved into a dedicated examples pack.
+- The package now uses one explicit router for 12 workflows instead of relying on a long vendor-specific bundle.
 - Explicit `when not to use` guidance was added so the package does not over-trigger on every writing-related chat.
 - Freshness-sensitive modules now require verification instead of assuming current facts.
+- Approval gating now appears only where long-form structure or high-stakes staging materially helps.
 - Writing rules were scoped as public-facing defaults rather than universal law across all domains.
-- Concrete examples were moved into a dedicated examples pack instead of being reduced to abstract descriptions only.
+- Concrete examples were preserved in a dedicated examples pack instead of being reduced to abstract descriptions only.
 
 ### Remaining assumptions
 

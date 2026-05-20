@@ -1,0 +1,14 @@
+# Copy this file to runtime.local.toml and keep runtime.local.toml as the editable local source of truth.
+# Resolve relative paths against the active project root, not the current shell cwd.
+
+[paths]
+# `CODEX_PLAYGROUND_PROJECT_ROOT` takes precedence over this key when both exist.
+# project_root = "/absolute/path/to/Playground"
+
+# Default scratch-backed output root for non-installed conversion artifacts such as:
+# - `codex-skill` outputs when placement mode is `scratch-folder-without-installation`
+# - `chatgpt-project-pack` bundles when the operator wants a scratch-backed write destination
+# - `conversion-report-only` artifacts when no different explicit destination was requested
+#
+# If omitted, the skill defaults to `scratch/convert-external-skills-to-codex`.
+scratch_root = "scratch/convert-external-skills-to-codex"

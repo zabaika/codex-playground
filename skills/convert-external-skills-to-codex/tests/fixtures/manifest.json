@@ -8,6 +8,15 @@
       "runtime_file": "ai-prompting-project-instructions.md",
       "examples_file": "ai-prompting-examples-pack.md",
       "report_file": "ai-prompting-conversion-report.md",
+      "report_metadata": {
+        "selected_output_family": "chatgpt-project-pack",
+        "mixed_pack_status": "mixed-pack",
+        "split_decision": "preserve-whole",
+        "functional_parity_branch_status": "none",
+        "name_collision_status": "none",
+        "codex_skill_placement_mode": "not-applicable",
+        "installation_status": "not-applicable"
+      },
       "requires_examples": true
     },
     {
@@ -18,6 +27,15 @@
       "runtime_file": "content-writing-project-instructions.md",
       "examples_file": "content-writing-examples-pack.md",
       "report_file": "content-writing-conversion-report.md",
+      "report_metadata": {
+        "selected_output_family": "chatgpt-project-pack",
+        "mixed_pack_status": "mixed-pack",
+        "split_decision": "preserve-whole",
+        "functional_parity_branch_status": "none",
+        "name_collision_status": "none",
+        "codex_skill_placement_mode": "not-applicable",
+        "installation_status": "not-applicable"
+      },
       "requires_examples": true
     },
     {
@@ -28,7 +46,16 @@
       "reference_files": [
         "references/prompt-debugger-worked-example.md"
       ],
-      "report_file": "prompt-debugger-conversion-report.md"
+      "report_file": "prompt-debugger-conversion-report.md",
+      "report_metadata": {
+        "selected_output_family": "codex-skill",
+        "mixed_pack_status": "mixed-pack",
+        "split_decision": "selected-module",
+        "functional_parity_branch_status": "none",
+        "name_collision_status": "none",
+        "codex_skill_placement_mode": "not-applicable",
+        "installation_status": "not-installed"
+      }
     },
     {
       "name": "codex-skill-prompt-chain-builder",
@@ -40,7 +67,16 @@
       ],
       "requires_openai_yaml": true,
       "reference_min_code_fences": 2,
-      "report_file": "prompt-chain-builder-conversion-report.md"
+      "report_file": "prompt-chain-builder-conversion-report.md",
+      "report_metadata": {
+        "selected_output_family": "codex-skill",
+        "mixed_pack_status": "mixed-pack",
+        "split_decision": "selected-module",
+        "functional_parity_branch_status": "none",
+        "name_collision_status": "none",
+        "codex_skill_placement_mode": "not-applicable",
+        "installation_status": "not-installed"
+      }
     }
   ]
 }

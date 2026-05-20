@@ -40,11 +40,17 @@ Use when the source is really project-level or repository-level guidance. This o
 
 ### `conversion-report-only`
 
-Use when the source is too broad, too risky, mixed, incompatible, or unsupported as a direct conversion target in v1.
+Use when the user explicitly chooses an audit-only outcome, or when the source was requested as an audit from the start.
 
 ## Unsupported direct target in v1
 
-If the source is mainly about MCP, apps, connectors, tool selection, tool sequencing, read or write distinctions, or confirmation behavior in ChatGPT Developer Mode, do not invent a fake output family. Switch to `conversion-report-only` and recommend a future specialized MCP or app-guidance converter.
+If the source is mainly about MCP, apps, connectors, tool selection, tool sequencing, read or write distinctions, or confirmation behavior in ChatGPT Developer Mode, do not invent a fake output family.
+
+Treat that as a functional-parity branch in the main workflow:
+
+- explain that v1 has no direct specialized target for that source shape
+- present explicit options such as `conversion-report-only`, a narrower selected subset, or deferring to a future specialized MCP or app-guidance converter
+- do not enter `conversion-report-only` automatically unless the user asked for it from the start
 
 ## Operational notes from current OpenAI docs
 

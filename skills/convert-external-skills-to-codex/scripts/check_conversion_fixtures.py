@@ -55,6 +55,85 @@ def check_file_exists(path: Path, code: str) -> list[Violation]:
     return [Violation(code, f"Отсутствует обязательный fixture-файл `{path}`.")]
 
 
+def check_report_frontmatter(
+    report_frontmatter: dict[str, str],
+    expected: dict[str, object],
+    label: str,
+) -> list[Violation]:
+    violations: list[Violation] = []
+    for key, expected_value in expected.items():
+        if key not in report_frontmatter or not report_frontmatter[key]:
+            violations.append(
+                Violation(
+                    f"{label}.report.missing-frontmatter:{key}",
+                    f"В report fixture `{label}` отсутствует frontmatter поле `{key}`.",
+                )
+            )
+            continue
+        if report_frontmatter[key] != str(expected_value):
+            violations.append(
+                Violation(
+                    f"{label}.report.frontmatter-mismatch:{key}",
+                    f"В report fixture `{label}` поле `{key}` должно быть `{expected_value}`, получено `{report_frontmatter[key]}`.",
+                )
+            )
+    return violations
+
+
+def check_branch_trace(
+    report_frontmatter: dict[str, str],
+    report_body: str,
+    label: str,
+    triplet_anchors: tuple[str, str, str],
+) -> list[Violation]:
+    violations: list[Violation] = []
+    status = report_frontmatter.get("functional_parity_branch_status")
+    has_triplet = all(anchor in report_body for anchor in triplet_anchors)
+
+    if status == "encountered" and not has_triplet:
+        violations.append(
+            Violation(
+                f"{label}.report.missing-branch-trace",
+                f"В report fixture `{label}` при `functional_parity_branch_status=encountered` нужен полный branch triplet в body.",
+            )
+        )
+    if status == "none" and has_triplet:
+        violations.append(
+            Violation(
+                f"{label}.report.unexpected-happy-path-section:functional-parity-branch",
+                f"В report fixture `{label}` не нужен branch triplet в body при `functional_parity_branch_status=none`.",
+            )
+        )
+    return violations
+
+
+def check_name_collision_trace(
+    report_frontmatter: dict[str, str],
+    report_body: str,
+    label: str,
+    section_anchor: str,
+) -> list[Violation]:
+    violations: list[Violation] = []
+    status = report_frontmatter.get("name_collision_status")
+    has_section = section_anchor in report_body
+
+    if status == "none" and has_section:
+        violations.append(
+            Violation(
+                f"{label}.report.unexpected-happy-path-section:name-collision",
+                f"В report fixture `{label}` не нужен body section про name collision при `name_collision_status=none`.",
+            )
+        )
+    if status != "none" and not has_section:
+        violations.append(
+            Violation(
+                f"{label}.report.missing-name-collision-trace",
+                f"В report fixture `{label}` при `name_collision_status={status}` нужен body section с решением по коллизии имён.",
+            )
+        )
+    return violations
+
+
 def check_project_pack(fixture: dict[str, object]) -> list[Violation]:
     base = ROOT / str(fixture["path"])
     handbook = base / str(fixture.get("handbook_file", "handbook.md"))
@@ -73,6 +152,7 @@ def check_project_pack(fixture: dict[str, object]) -> list[Violation]:
     handbook_text = handbook.read_text()
     runtime_text = runtime.read_text()
     report_text = report.read_text()
+    report_frontmatter, report_body = split_frontmatter(report_text)
     examples_text = examples.read_text() if examples.exists() else ""
 
     for anchor in (
@@ -126,13 +206,21 @@ def check_project_pack(fixture: dict[str, object]) -> list[Violation]:
             )
         )
 
+    violations.extend(
+        check_report_frontmatter(
+            report_frontmatter,
+            dict(fixture.get("report_metadata", {})),
+            str(fixture["name"]),
+        )
+    )
+
     for anchor in (
         "### Selected output family",
         "### Package contents",
         "### What was removed",
         "### What was substantially adapted",
     ):
-        if anchor not in report_text:
+        if anchor not in report_body:
             violations.append(
                 Violation(
                     f"{fixture['name']}.report.missing-anchor:{anchor}",
@@ -140,13 +228,34 @@ def check_project_pack(fixture: dict[str, object]) -> list[Violation]:
                 )
             )
 
-    if "`chatgpt-project-pack`" not in report_text:
+    if "`chatgpt-project-pack`" not in report_body:
         violations.append(
             Violation(
                 f"{fixture['name']}.report.invalid-family",
                 f"В report fixture `{fixture['name']}` не зафиксирован `chatgpt-project-pack`.",
             )
         )
+
+    violations.extend(
+        check_branch_trace(
+            report_frontmatter,
+            report_body,
+            str(fixture["name"]),
+            (
+                "### Functional-parity branches encountered",
+                "### Options presented for each functional-parity branch",
+                "### User-selected path for each functional-parity branch",
+            ),
+        )
+    )
+    violations.extend(
+        check_name_collision_trace(
+            report_frontmatter,
+            report_body,
+            str(fixture["name"]),
+            "### Name-collision decision",
+        )
+    )
 
     if examples.exists() and count_code_fences(examples_text) < 2:
         violations.append(
@@ -207,6 +316,7 @@ def check_codex_skill(fixture: dict[str, object]) -> list[Violation]:
     skill_text = skill.read_text()
     frontmatter, body = split_frontmatter(skill_text)
     report_text = report.read_text()
+    report_frontmatter, report_body = split_frontmatter(report_text)
 
     for key in ("name", "description"):
         if key not in frontmatter or not frontmatter[key]:
@@ -236,7 +346,7 @@ def check_codex_skill(fixture: dict[str, object]) -> list[Violation]:
     if "broad prompting handbook" in skill_text.lower():
         pass
 
-    if "`codex-skill`" not in report_text:
+    if "`codex-skill`" not in report_body:
         violations.append(
             Violation(
                 f"{fixture['name']}.report.invalid-family",
@@ -244,18 +354,47 @@ def check_codex_skill(fixture: dict[str, object]) -> list[Violation]:
             )
         )
 
+    violations.extend(
+        check_report_frontmatter(
+            report_frontmatter,
+            dict(fixture.get("report_metadata", {})),
+            str(fixture["name"]),
+        )
+    )
+
     for anchor in (
         "## Selected Output Family",
         "## What Was Substantially Adapted",
         "## What Was Removed",
     ):
-        if anchor not in report_text:
+        if anchor not in report_body:
             violations.append(
                 Violation(
                     f"{fixture['name']}.report.missing-anchor:{anchor}",
                     f"В report fixture `{fixture['name']}` отсутствует `{anchor}`.",
                 )
             )
+
+    violations.extend(
+        check_branch_trace(
+            report_frontmatter,
+            report_body,
+            str(fixture["name"]),
+            (
+                "## Functional-Parity Branches Encountered",
+                "## Options Presented For Each Functional-Parity Branch",
+                "## User-Selected Path For Each Functional-Parity Branch",
+            ),
+        )
+    )
+    violations.extend(
+        check_name_collision_trace(
+            report_frontmatter,
+            report_body,
+            str(fixture["name"]),
+            "## Name-Collision Decision",
+        )
+    )
 
     violations.extend(check_no_vendor_residue(skill_text, f"{fixture['name']}.skill"))
 

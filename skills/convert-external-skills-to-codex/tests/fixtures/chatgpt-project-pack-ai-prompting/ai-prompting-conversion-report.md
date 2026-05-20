@@ -1,3 +1,13 @@
+---
+selected_output_family: chatgpt-project-pack
+mixed_pack_status: mixed-pack
+split_decision: preserve-whole
+functional_parity_branch_status: none
+name_collision_status: none
+codex_skill_placement_mode: not-applicable
+installation_status: not-applicable
+---
+
 # Conversion Report
 ## 18 — AI & Prompting -> chatgpt-project-pack
 
@@ -38,19 +48,6 @@ Mixed pack confirmed. The source contains 10 distinct modules plus shared rules.
 
 Preserved as one instruction-rich handbook plus one compact runtime because the modules belong to one coherent prompting domain and benefit from a shared router.
 
-### Name-collision result
-
-No output uses the original skill name as an installable Codex skill, so system-skill collision risk was avoided.
-
-### Tool and permission mapping
-
-- `needed_tools`: none expressed inside the converted ChatGPT artifacts
-- `forbidden_tools`: broad default `Read Write WebSearch WebFetch` assumptions
-- `web_required`: only for freshness-sensitive model or policy questions
-- `write_required`: no
-- `destructive_actions`: none
-- `approval_expectation`: only for staged long-form or high-stakes work, not by default
-
 ### Main security findings
 
 - Overbroad original description triggered on almost any prompting or workflow task.
@@ -65,34 +62,6 @@ No output uses the original skill name as an installable Codex skill, so system-
 - `What Claude asks you first`
 - direct `Claude` execution wording throughout the module descriptions
 
-### Sections compressed or relocated
-
-- Large teaching prose was compressed into module-level purpose, inputs, behavior, and quality bars.
-- Runtime behavior was extracted into a separate compact file instead of staying mixed into the handbook.
-- Representative templates, filled examples, chain structure, voice profile material, and policy companion outputs were relocated into a dedicated examples pack.
-
-### Intake compressed
-
-Original module interviews were compressed into `minimum inputs`, `optional inputs`, and shared blocking-question behavior for the runtime layer.
-
-### Router added
-
-Yes. The package now includes an explicit module router instead of relying on a long table of contents alone.
-
-### Freshness gates added
-
-Yes. Added for:
-
-- model choice and model behavior
-- disclosure and policy norms
-- platform behavior
-- legal or compliance expectations around AI-use policy
-
-### Approval gates kept or removed
-
-- Kept only as an optional pattern for staged long-form or high-stakes work
-- Removed as a default operating expectation
-
 ### What was removed
 
 - frontmatter and installable skill packaging
@@ -105,9 +74,12 @@ Yes. Added for:
 - The source was converted from one vendor-bound mega-skill into a `chatgpt-project-pack`.
 - The original “What Claude asks you first” sections became `minimum inputs` plus compact runtime blocking-question logic.
 - The original long teaching blocks were compressed into operational handbook modules.
-- Voice-training and policy material were neutralized so they preserve function without keeping Prompt Guy branding as the default voice target.
+- Runtime behavior was extracted into a compact instructions file, while templates and richer specimens moved into a dedicated examples pack.
+- The package now relies on an explicit module router instead of one long vendor-specific handbook flow.
 - Freshness-sensitive areas now require current verification instead of making static claims.
-- Concrete examples were moved into a dedicated examples pack so the handbook could stay cleaner without losing operational value.
+- Approval gating was narrowed to optional high-stakes or staged work instead of remaining a default operating pattern.
+- Voice-training and policy material were neutralized so they preserve function without keeping Prompt Guy branding as the default voice target.
+- Concrete examples were preserved in the examples pack so the handbook could stay cleaner without losing operational value.
 
 ### Remaining assumptions
 
