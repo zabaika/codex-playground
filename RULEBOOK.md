@@ -59,6 +59,9 @@ Keep documentation split by responsibility:
 - when changing a shared rule, encode the underlying invariant rather than the last observed example
 - prefer a general rule that covers the failure class over a narrow patch tied to specific words, labels, route/type pairs, or one recent incident
 - use example-specific wording only when the contract truly depends on canonical fixed identifiers such as schema-owned labels, manifest keys, config fields, or other explicit vocabulary
+- when changing the identity, layout, install root, vendor root, runtime path scheme, config location, wrapper relationship, or other structural boundary of a repository-managed tool, audit every path-based dependency and legacy coupling before considering the migration complete
+- this migration audit rule applies not only to renames, but also to moves, splits, merges, wrapper extraction, runtime relocation, vendor-directory reshaping, config-root changes, and similar structural refactors
+- after such a structural migration, add or update a regression check that the new tool no longer depends on obsolete paths, old install names, legacy sibling layouts, or previously copied runtime roots unless backward compatibility is explicitly documented and tested
 - for migrations, conversions, rewrites, or normalization passes over existing material, preserve by default and transform by explicit exception; removal or strong compression must have a stated reason rather than being justified only by neatness or shorter length
 - when a workflow deletes content, relocates it, or substantially adapts its meaning or operational role, disclose that change explicitly in the owning report, summary, or migration notes instead of leaving operators to infer it from the final artifact alone
 - do not replace concrete useful material such as examples, templates, checklists, structured specimens, or other directly usable blocks with a more abstract summary unless a clearly identifiable functional equivalent survives in the same workflow
@@ -208,6 +211,21 @@ Rules:
 - keep the install pattern consistent across local skills: resolve the source directory from the script location, target `${CODEX_HOME:-$HOME/.codex}/skills/<skill-name>`, and make the script safe to rerun for normal refresh flows
 - if the skill is also installed under `~/.codex/skills`, the installed copy should point to that same repo file instead of keeping a second divergent local config
 - if a skill is only an orchestration layer over other local skills, prefer pointing at the sibling skills' local configs instead of copying the same machine-specific values into another file
+- if a repository-managed tool or skill depends on third-party code that has been security-audited or otherwise explicitly approved, treat the audited vendored copy and its exact approved version set as the only normal install source
+- do not silently fetch, upgrade, or replace such audited dependencies from the internet during ordinary install, bootstrap, repair, or refresh flows
+- any change to a vendored dependency version, wheel set, source bundle, plugin, helper binary, provider implementation, or other audited third-party runtime input must be treated as an explicit re-audit event rather than as routine maintenance
+- when a dependency is intentionally pinned because only a reviewed version is trusted, commit the audited inputs needed for reproduction and make the install path consume only those tracked audited artifacts by default
+- a repository-managed tool, skill, or local service must not depend on hidden runtime state that exists only in a previously installed copy, old deployment directory, manual operator setup, or other non-repository location
+- every required runtime asset must be either tracked in the repository as an audited input or bootstrapped deterministically from tracked audited inputs during install
+- track audited third-party inputs such as reviewed source bundles, reviewed wheel sets, reviewed plugins, reviewed provider code, and pinned lockfiles as repository assets when they are required for trusted offline or deterministic install
+- do not treat generated runtime outputs such as `venv/` directories, transient caches, installed package trees, compiled bundles, or one-off operator-built environments as the canonical source of truth
+- if a generated runtime output is required for execution, it must be reproducible from the tracked audited inputs through a documented bootstrap step
+- if a local skill or service requires vendored runtimes, wheels, plugins, helper binaries, models, or provider assets, its install script must validate their presence and bootstrap the runnable local runtime explicitly
+- a successful install must leave the tool runnable without requiring legacy sibling installs, manual copying from older paths, or undocumented post-install repair steps
+- install scripts must fail clearly when required audited inputs are missing instead of silently producing a partially installed runtime
+- if a tool depends on vendored third-party runtime assets, include regression coverage for the runtime contract, not only for business logic
+- such runtime-contract coverage should verify the required vendor layout, successful local bootstrap from tracked audited artifacts, basic import or execution viability of the bootstrapped runtime, and absence of unintended coupling to obsolete install paths or legacy tool identities
+- when a refactor changes install layout, runtime roots, or vendored dependency handling, update those runtime-contract tests in the same change
 - do not modify system-provided Codex skills in place as a normal customization path
 - when a system skill is missing a dependency, validation helper, or local convention, solve that through a project-local wrapper, companion skill, additional checker, or shared rulebook guidance instead of patching the system skill itself
 - treat edits to system skills as an explicit exception path only when a user directly requests that change and the operational tradeoff is understood

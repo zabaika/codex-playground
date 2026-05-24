@@ -34,7 +34,9 @@ Reviewed artifact:
 
 - Use `provider-script`, not `provider-http`
 - Use a dedicated vendor directory under the installed skill
-- Vendor the reviewed Python plugin files manually instead of global `pip` install
+- Materialize the reviewed provider assets from audited local archives via `config/vendor-manifest.toml` instead of fetching them during ordinary install
+- Keep the canonical audit companion files for the provider path in `third_party/bgutil-provider/` and `third_party/bgutil-plugin/`
+- Keep the vendored installed copy byte-for-byte aligned with the reviewed archive payload; integration changes belong only to the surrounding skill code and install/bootstrap layer
 - Keep yt-dlp plugins disabled outside explicit provider modes
 - Prefer Deno script mode so no TypeScript build toolchain is needed
 - Install only runtime dependencies for the provider path

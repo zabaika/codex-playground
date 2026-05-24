@@ -24,6 +24,7 @@ Input video URL: `$ARGUMENTS`
 5. Prefer a provider-based steady-state setup.
 6. Never commit `runtime.local.toml`.
 7. Prefer writing subtitles and logs into a project-local `scratch/` directory via `[paths]`.
+8. Bootstrap and run only from this skill's tracked audited runtime inputs and the runnable local runtime they deterministically produce.
 
 ## Guardrails
 
@@ -36,6 +37,7 @@ Input video URL: `$ARGUMENTS`
 7. Never print cookie values, never inspect cookie databases manually, and never use account passwords in command arguments.
 8. Save files only in the configured subtitle output directory.
 9. Do not request multiple subtitle languages in one download. First detect available languages, then download only the first matching language from the priority list.
+10. Do not replace or repair vendored runtime dependencies from the internet during ordinary install, refresh, or maintenance flows. Use only this skill's tracked audited vendor set.
 
 ## Default Workflow
 

@@ -1,0 +1,77 @@
+[manifest]
+format_version = 1
+
+[vendor.bgutil_plugin]
+kind = "vendored-upstream-subtree"
+source_repo = "Brainicism/bgutil-ytdlp-pot-provider"
+source_ref = "1.3.1"
+source_commit = "7608dd51ee813b48cf9a6d68c6e42cb197ce10e0"
+upstream_subpath = "plugin/yt_dlp_plugins/extractor"
+archive = "video-transcribe-skill/bgutil-plugin-1.3.1.tar.gz"
+sha256 = "f8ebe3e4a88a7a216cfc3ab5a04f4d42a4382ca04e59b478bc7e740d894d7d15"
+install_subdir = "vendor/bgutil-plugin"
+audit_doc = "THIRD_PARTY_AUDIT.md"
+local_modifications = false
+metadata_files = [
+  "third_party/bgutil-plugin/upstream-subpath.txt",
+]
+
+[vendor.bgutil_provider]
+kind = "vendored-upstream-subtree"
+source_repo = "Brainicism/bgutil-ytdlp-pot-provider"
+source_ref = "1.3.1"
+source_commit = "7608dd51ee813b48cf9a6d68c6e42cb197ce10e0"
+upstream_subpath = "server"
+archive = "video-transcribe-skill/bgutil-provider-1.3.1.tar.gz"
+sha256 = "0ebbf897ddb54f84acb3c1d211451f3099a01f3d51a6e85dfefe3c38f7196c47"
+install_subdir = "vendor/bgutil-provider"
+audit_doc = "THIRD_PARTY_AUDIT.md"
+local_modifications = false
+metadata_files = [
+  "third_party/bgutil-provider/package.json",
+  "third_party/bgutil-provider/package-lock.json",
+  "third_party/bgutil-provider/deno.lock",
+]
+
+[vendor.youtube_transcript_api_wheels]
+kind = "audited-wheel-set"
+primary_package = "youtube-transcript-api"
+primary_version = "1.2.4"
+python = "3.14"
+platform = "macosx_10_15_universal2"
+archive = "video-transcribe-skill/youtube-transcript-api-wheels-py314-macosx_10_15_universal2.tar.gz"
+sha256 = "d0ba29f7dfcccce892b860a5d2ca4ad96a1c3255013fa2e3943d4c9d893c6bf4"
+install_subdir = "vendor/youtube-transcript-api/wheels"
+audit_doc = "THIRD_PARTY_AUDIT_YOUTUBE_TRANSCRIPT_API.md"
+local_modifications = false
+metadata_files = [
+  "third_party/youtube-transcript-api/requirements.lock",
+]
+
+[[vendor.youtube_transcript_api_wheels.packages]]
+name = "youtube-transcript-api"
+version = "1.2.4"
+
+[[vendor.youtube_transcript_api_wheels.packages]]
+name = "requests"
+version = "2.32.5"
+
+[[vendor.youtube_transcript_api_wheels.packages]]
+name = "urllib3"
+version = "2.6.3"
+
+[[vendor.youtube_transcript_api_wheels.packages]]
+name = "certifi"
+version = "2026.2.25"
+
+[[vendor.youtube_transcript_api_wheels.packages]]
+name = "charset-normalizer"
+version = "3.4.6"
+
+[[vendor.youtube_transcript_api_wheels.packages]]
+name = "idna"
+version = "3.11"
+
+[[vendor.youtube_transcript_api_wheels.packages]]
+name = "defusedxml"
+version = "0.7.1"

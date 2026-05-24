@@ -1,13 +1,13 @@
 # video-transcribe-skill security review
 
-This folder contains a local, sanitized fork of the third-party `youtube-transcribe-skill`.
+This folder contains a local, sanitized video subtitle skill that keeps only the reviewed local workflow pieces we actually use.
 
 ## Upstream behavior reviewed
 
 Reviewed upstream variant:
 
 - Repository: `feiskyer/claude-code-settings`
-- Path: `plugins/youtube-transcribe-skill/skills/youtube-transcribe-skill/SKILL.md`
+- Path: `skills/video-transcribe-skill/SKILL.md`
 
 ## Main findings
 
@@ -52,8 +52,11 @@ The local fork keeps only the narrowly useful part of the workflow:
 ## Recommended activation path
 
 1. Install `yt-dlp` from a trusted package source.
-2. Copy this sanitized skill into `~/.codex/skills/video-transcribe-skill`.
+2. Install this sanitized skill into `~/.codex/skills/video-transcribe-skill`.
    - A helper script is included at `install-local.sh`.
+   - The helper bootstraps the `youtube-transcript-api` runtime only from audited local archives declared in `config/vendor-manifest.toml`.
+   - The helper validates the companion audit metadata and lockfiles stored in `third_party/` before unpacking runtime assets.
+   - The helper expects those audited archives to exist under the configured local artifacts root from `CODEX_AUDITED_ARTIFACTS_ROOT` or `[artifacts].root_dir`.
 3. Prefer configuring `config/runtime.local.toml` with `provider-script` mode.
 4. Restart Codex so the new skill is discovered.
 5. Use cookie-based retry only for videos that truly require authentication or when the provider path is unavailable.

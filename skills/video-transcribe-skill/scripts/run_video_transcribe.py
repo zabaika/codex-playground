@@ -616,16 +616,17 @@ def main() -> int:
             if not python_path.is_file():
                 yta_result = None
             else:
-                script_path = Path(__file__).resolve().parent / "fetch_with_youtube_transcript_api.py"
                 yta_args = [
                     str(python_path),
-                    str(script_path),
+                    str(Path(__file__).resolve().parent / "fetch_with_youtube_transcript_api.py"),
                     "--url",
                     args.url,
                     "--languages",
                     *subtitles_priority(config),
                     "--output-dir",
                     str(target_output_dir),
+                    "--project-root",
+                    str(resolved_runtime.project_root or target_output_dir.parent),
                 ]
                 if preferred_title:
                     yta_args.extend(["--title", preferred_title])

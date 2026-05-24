@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import importlib.util
+import types
 import sys
 from pathlib import Path
 import unittest
+from unittest import mock
 
 
 RUNNER_PATH = (
@@ -94,6 +96,50 @@ en-x-autogen English (auto-generated), unknown, unknown, unknown vtt
             RUNNER.infer_subtitle_source_type("en-x-autogen", listing),
             "auto-generated",
         )
+
+    def test_youtube_transcript_api_main_path_passes_project_root(self) -> None:
+        config = {
+            "engine": {"order": ["youtube-transcript-api"]},
+            "subtitles": {"language_priority": ["orig", "ru", "en", "uk"]},
+        }
+
+        class FakeResolvedRuntime:
+            def __init__(self) -> None:
+                self.config = config
+                self.output_dir = Path("/tmp/project-root/scratch")
+                self.log_file = None
+                self.project_root = Path("/tmp/project-root")
+
+        captured_args: list[str] = []
+        fake_runtime_paths = types.SimpleNamespace(
+            resolve_runtime_paths=lambda **kwargs: FakeResolvedRuntime()
+        )
+
+        def fake_run_command_with_retry(args, **kwargs):
+            captured_args.extend(args)
+            return mock.Mock(returncode=1, stdout="", stderr=""), "no_subtitles", "No subtitles are available for this video."
+
+        with mock.patch.object(RUNNER, "vendored_yta_python", return_value=Path(sys.executable)), \
+             mock.patch.object(RUNNER, "build_auth_args", return_value=([], {"YTDLP_NO_PLUGINS": "1"})), \
+             mock.patch.object(RUNNER, "build_network_args", return_value=[]), \
+             mock.patch.object(RUNNER, "retry_settings", return_value={"attempts": 1, "initial_delay_seconds": 0.0, "backoff_multiplier": 1.0, "max_delay_seconds": 0.0}), \
+             mock.patch.object(RUNNER, "fetch_video_title", return_value=""), \
+             mock.patch.object(RUNNER, "run_command_with_retry", side_effect=fake_run_command_with_retry), \
+             mock.patch.object(RUNNER, "log_failure"), \
+             mock.patch.object(RUNNER, "append_log"), \
+             mock.patch.object(RUNNER, "build_log_path", return_value=None), \
+             mock.patch.object(RUNNER, "ensure_directory", side_effect=lambda path, label: path), \
+             mock.patch.object(RUNNER, "detect_video_platform", return_value="youtube"), \
+             mock.patch.object(RUNNER, "subtitles_priority", return_value=["orig", "ru", "en", "uk"]), \
+             mock.patch.object(RUNNER, "engine_order", return_value=["youtube-transcript-api"]), \
+             mock.patch.dict(sys.modules, {"runtime_paths": fake_runtime_paths}), \
+             mock.patch("sys.argv", ["run_video_transcribe.py", "--url", "https://www.youtube.com/watch?v=So5lre3ioVM"]):
+            exit_code = RUNNER.main()
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("--project-root", captured_args)
+        project_root_index = captured_args.index("--project-root")
+        self.assertEqual(captured_args[project_root_index + 1], "/tmp/project-root")
 
 
 if __name__ == "__main__":

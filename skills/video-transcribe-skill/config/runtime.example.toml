@@ -3,6 +3,12 @@
 [engine]
 order = ["youtube-transcript-api", "yt-dlp"]
 
+[artifacts]
+# Local root for audited vendor archives used to bootstrap this skill without
+# network access during ordinary install or refresh flows.
+# Keep the actual machine-specific path only in runtime.local.toml.
+root_dir = ""
+
 [paths]
 # Project-root-relative paths follow RULEBOOK.md.
 # Resolution order for the base directory:
@@ -50,7 +56,7 @@ browser = "chrome"
 
 [provider]
 # Used only for provider-script/provider-http modes.
-# Requires the external yt-dlp PO token provider plugin to be installed.
+# Uses the audited bgutil provider assets bundled inside this skill.
 kind = "bgutil"
 disable_innertube = true
 plugin_dir = "~/.codex/skills/video-transcribe-skill/vendor/bgutil-plugin"

@@ -30,3 +30,5 @@ Reviewed artifact:
 - first attempt for public videos
 - safer low-complexity path
 - fallback to the reviewed bgutil provider when it fails
+- installed only from the audited local wheel-set archive declared in `config/vendor-manifest.toml`
+- governed by the canonical reviewed lockfile in `third_party/youtube-transcript-api/requirements.lock`
