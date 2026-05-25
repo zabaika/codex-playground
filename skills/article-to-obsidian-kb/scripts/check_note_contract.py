@@ -44,6 +44,7 @@ PRACTICE_HEADING = heading("practice")
 PITFALLS_HEADING = heading("pitfalls")
 TOOLS_FRAMEWORKS_HEADING = heading("tools_frameworks")
 APPLY_IMMEDIATELY_HEADING = heading("apply_immediately")
+KEY_LESSONS_HEADING = heading("key_lessons")
 ADDITIONAL_INSIGHTS_HEADING = heading("additional_insights")
 EVIDENCE_HEADING = heading("evidence")
 OBSERVED_PRACTICES_HEADING = heading("observed_practices")
@@ -66,6 +67,45 @@ DISCOURAGED_LATIN_SINGLE_TERMS = discouraged_single_terms()
 DISCOURAGED_LATIN_PHRASES = discouraged_phrases()
 DISCOURAGED_TRANSLATIONS = discouraged_translations()
 DISCOURAGED_SINGLE_AS_PHRASES = DISCOURAGED_LATIN_SINGLE_TERMS
+DEFAULT_SOURCE_BOLD_HEADINGS = (
+    KEY_THESES_HEADING,
+    PRACTICE_HEADING,
+    KEY_LESSONS_HEADING,
+    PITFALLS_HEADING,
+    TOOLS_FRAMEWORKS_HEADING,
+    APPLY_IMMEDIATELY_HEADING,
+)
+SOURCE_SCAFFOLDING_EXEMPT_HEADINGS = {
+    EVIDENCE_HEADING,
+    ADDITIONAL_INSIGHTS_HEADING,
+    OBSERVED_PRACTICES_HEADING,
+    RUN_STATUS_HEADING,
+    RELATED_NOTES_HEADING,
+}
+SOURCE_SCAFFOLDING_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
+    (
+        re.compile(r"\bэта заметка\b", re.IGNORECASE),
+        "artifact-self-reference",
+    ),
+    (
+        re.compile(
+            r"\b(?:в|из|во)\s+(?:этом|втором)\s+(?:материале|видео|выпуске|транскрипте|эфире)\b|\bиз эфира(?: от \d{4}-\d{2}-\d{2})?\b",
+            re.IGNORECASE,
+        ),
+        "source-container-reference",
+    ),
+    (
+        re.compile(r"\bпо словам (?:спикера|автора)\b", re.IGNORECASE),
+        "attribution-clause",
+    ),
+    (
+        re.compile(
+            r"\b(?:спикер|автор|источник)\b(?:\s+\w+){0,2}\s+(?:выделяет|говорит|отмечает|считает|рекомендует|показывает|отделяет|называет|подчеркивает|подчёркивает)\b",
+            re.IGNORECASE,
+        ),
+        "source-actor-reporting-verb",
+    ),
+)
 
 
 @dataclass(frozen=True)
@@ -1065,6 +1105,32 @@ def _check_bold_leading_bullets(
     return violations
 
 
+def _check_source_scaffolding(body: str) -> list[Violation]:
+    violations: list[Violation] = []
+    current_heading: str | None = None
+    for idx, line in enumerate(body.splitlines(), start=1):
+        heading_match = HEADING_RE.match(line)
+        if heading_match:
+            current_heading = heading_match.group(0)
+            continue
+        if current_heading in SOURCE_SCAFFOLDING_EXEMPT_HEADINGS:
+            continue
+        visible = _normalize_phrase(_visible_text(line, keep_inline_code=True))
+        if not visible:
+            continue
+        for pattern, label in SOURCE_SCAFFOLDING_PATTERNS:
+            if pattern.search(visible):
+                violations.append(
+                    Violation(
+                        f"prose.source-scaffolding:{label}",
+                        "В основном теле заметки осталась source-scaffolding формулировка; перепишите ее в idea-first knowledge-base стиль и оставьте provenance в frontmatter или dated sections.",
+                        idx,
+                    )
+                )
+                break
+    return violations
+
+
 def _check_required_related_links(
     body: str, required_related_links: list[str]
 ) -> list[Violation]:
@@ -1288,7 +1354,9 @@ def collect_violations(
     allow_latin_terms = allow_latin_terms or []
     required_headings = required_headings or []
     forbidden_headings = forbidden_headings or []
-    enforce_leading_bold_under = enforce_leading_bold_under or []
+    enforce_leading_bold_under = _resolve_leading_bold_headings(
+        expect, enforce_leading_bold_under or []
+    )
     required_related_links = required_related_links or []
     chronology_headings = chronology_headings or []
 
@@ -1340,7 +1408,9 @@ def collect_violations_from_text(
     allow_latin_terms = allow_latin_terms or []
     required_headings = required_headings or []
     forbidden_headings = forbidden_headings or []
-    enforce_leading_bold_under = enforce_leading_bold_under or []
+    enforce_leading_bold_under = _resolve_leading_bold_headings(
+        expect, enforce_leading_bold_under or []
+    )
     required_related_links = required_related_links or []
     chronology_headings = chronology_headings or []
 
@@ -1371,6 +1441,8 @@ def collect_violations_from_text(
         body_violations.extend(_check_discouraged_latin_phrases(body))
         body_violations.extend(_check_generic_latin_residue(frontmatter, body, allow_latin_terms))
         body_violations.extend(_check_inline_code_phrase_residue(frontmatter, body, allow_latin_terms))
+    if expect == "source":
+        body_violations.extend(_check_source_scaffolding(body))
     body_violations.extend(_check_required_linked_phrases(body, required_linked_phrases))
     body_violations.extend(_check_required_examples(body, required_example_phrases))
     body_violations.extend(
@@ -1399,6 +1471,14 @@ def collect_violations_from_text(
         )
     )
     return violations
+
+
+def _resolve_leading_bold_headings(expect: str, headings: list[str]) -> list[str]:
+    if headings:
+        return headings
+    if expect != "source":
+        return []
+    return list(DEFAULT_SOURCE_BOLD_HEADINGS)
 
 
 def main() -> int:

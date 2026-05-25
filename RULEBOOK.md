@@ -56,6 +56,9 @@ Keep documentation split by responsibility:
 - when a workflow already has a local contract harness, any change to that workflow's output contract, checker, or contract-facing documentation should trigger the harness before the change is considered complete, even if the edit looks like "docs only"
 - when documenting a workflow rule, prefer concrete behavioral requirements over vague verbs such as `append`, `clean up`, `normalize`, `improve`, `update`, or `fix` when more than one exact operation is plausible
 - if a rule depends on position, ordering, insertion point, stop condition, or fallback behavior, spell that out explicitly instead of relying on implication or common sense
+- when a quality rule is primarily semantic or editorial and cannot be exhaustively reduced to deterministic pattern matching, keep the canonical rule in documentation and treat any checker coverage as partial regression protection only
+- for such semantic or editorial rules, document the human pass as mandatory, label the checker coverage as partial in the owning test matrix or checker docs, and do not present representative pattern checks as if they fully prove compliance
+- if a checker is added for that kind of rule family, prefer a small number of durable failure classes over a long brittle blacklist of recent wording examples
 - when changing a shared rule, encode the underlying invariant rather than the last observed example
 - prefer a general rule that covers the failure class over a narrow patch tied to specific words, labels, route/type pairs, or one recent incident
 - use example-specific wording only when the contract truly depends on canonical fixed identifiers such as schema-owned labels, manifest keys, config fields, or other explicit vocabulary

@@ -24,6 +24,80 @@ CONCEPT_COMPARE_HEADING = MODULE.heading("concept_compare")
 
 
 class CheckNoteContractTests(unittest.TestCase):
+    def test_source_notes_default_to_bold_leading_checks(self) -> None:
+        content = f"""---
+title: Тест default bold
+source:
+  - https://example.com
+type: general
+tags:
+  - workflow
+date: 2026
+---
+Короткое вступление.
+{KEY_THESES_HEADING}
+- Это длинный bullet без начального выделения, который должен ловиться дефолтной source-note проверкой на scanability.
+"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            fixture = Path(tmpdir) / "Тест default bold.md"
+            fixture.write_text(content, encoding="utf-8")
+            violations = collect_violations(
+                fixture,
+                expect="source",
+                required_headings=[KEY_THESES_HEADING],
+            )
+        codes = {violation.code for violation in violations}
+        self.assertIn(f"emphasis.missing-leading-bold:{KEY_THESES_HEADING}", codes)
+
+    def test_source_scaffolding_is_rejected_outside_provenance_sections(self) -> None:
+        fixture = (
+            Path(__file__).resolve().parent
+            / "fixtures"
+            / "source-scaffolding-regression.md"
+        )
+        violations = collect_violations(
+            fixture,
+            expect="source",
+            required_headings=[
+                KEY_THESES_HEADING,
+                PRACTICE_HEADING,
+            ],
+        )
+        codes = {violation.code for violation in violations}
+        self.assertIn("prose.source-scaffolding:artifact-self-reference", codes)
+        self.assertIn("prose.source-scaffolding:attribution-clause", codes)
+        self.assertIn("prose.source-scaffolding:source-container-reference", codes)
+        self.assertIn("prose.source-scaffolding:source-actor-reporting-verb", codes)
+
+    def test_source_scaffolding_is_allowed_in_evidence_sections(self) -> None:
+        content = f"""---
+title: Тест provenance exemption
+source:
+  - https://example.com
+type: general
+tags:
+  - workflow
+date: 2026
+---
+Короткое вступление.
+{KEY_THESES_HEADING}
+- **Прямой вывод.** Формулировка остается knowledge-base style.
+{EVIDENCE_HEADING}
+- 2026-05-12: по словам спикера, в выпуске подтвердился тот же риск.
+"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            fixture = Path(tmpdir) / "Тест provenance exemption.md"
+            fixture.write_text(content, encoding="utf-8")
+            violations = collect_violations(
+                fixture,
+                expect="source",
+                required_headings=[KEY_THESES_HEADING, EVIDENCE_HEADING],
+            )
+        codes = {violation.code for violation in violations}
+        self.assertFalse(
+            any(code.startswith("prose.source-scaffolding:") for code in codes)
+        )
+
     def test_second_pass_catches_leftovers_from_first_pass(self) -> None:
         fixture = (
             Path(__file__).resolve().parent
@@ -226,11 +300,6 @@ tags:
                 PITFALLS_HEADING,
             ],
             forbidden_headings=["## Суть"],
-            enforce_leading_bold_under=[
-                KEY_THESES_HEADING,
-                PRACTICE_HEADING,
-                PITFALLS_HEADING,
-            ],
             required_related_links=[
                 "Найм с AI-усилением",
                 "Оркестрация мультиагентных систем",
