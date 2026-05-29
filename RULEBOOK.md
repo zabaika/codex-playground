@@ -73,6 +73,58 @@ Keep documentation split by responsibility:
 - before compressing or deleting a useful block because it feels too heavy in its current location, first test whether it belongs under a different canonical owner; relocate to the correct owner before choosing lossier transformations
 - for complex multi-file or multi-output systems, maintain a regression harness for mechanically checkable contract rules and update that harness in the same change when the output contract evolves
 
+### Agent Coding Discipline
+
+- treat coding work as a constrained execution task, not as permission to improvise product decisions, architecture changes, or cleanup outside the user request
+
+#### 1. Think Before Coding
+
+**Don't assume. Don't hide confusion. Surface tradeoffs.**
+
+- before implementing, state assumptions explicitly when they affect behavior, scope, or risk
+- if more than one plausible interpretation exists, surface the alternatives instead of silently choosing one
+- if a simpler approach exists, say so and push back when the requested direction is overbuilt
+- if a key requirement is unclear, stop and name the exact confusion instead of filling the gap with guessed intent
+
+#### 2. Simplicity First
+
+**Minimum code that solves the problem. Nothing speculative.**
+
+- do not add features beyond what was requested
+- do not introduce abstractions for single-use code
+- do not add flexibility, configurability, or extension points that were not requested
+- do not add defensive handling for scenarios that are impossible or unsupported in the current system
+- if the implementation is materially longer or more layered than necessary, rewrite it smaller before calling it done
+- use the senior-engineer test: if a strong reviewer would call the solution overcomplicated, simplify it
+
+#### 3. Surgical Changes
+
+**Touch only what you must. Clean up only your own mess.**
+
+- when editing existing code, change only lines that trace directly to the user request
+- do not opportunistically improve adjacent code, comments, naming, or formatting
+- do not refactor unrelated code just because you noticed a better shape
+- match the existing local style unless the user asked for a broader cleanup
+- if you notice unrelated dead code or debt, mention it separately; do not remove it unasked
+- remove imports, variables, functions, or files only when your own change made them unused
+- do not treat pre-existing dead code as part of your cleanup budget unless the user explicitly asked for it
+
+#### 4. Goal-Driven Execution
+
+**Define success criteria. Loop until verified.**
+
+- translate vague tasks into verifiable outcomes before implementation
+- prefer checks that can prove the change, such as a reproducing test, a contract check, or an explicit observable behavior change
+- for multi-step tasks, state a short plan where each step names its verification check
+- do not stop at `implemented`; stop only when the success criteria have been verified or a concrete blocker is surfaced
+- prefer strong, local success criteria over broad phrases like `make it work`, because weak criteria force repeated clarification and invite silent drift
+
+Examples:
+
+- `add validation` -> `write tests for invalid inputs, then make them pass`
+- `fix the bug` -> `write a test that reproduces it, then make it pass`
+- `refactor X` -> `ensure relevant tests pass before and after`
+
 ## 1. Architecture Rules
 
 Use a split architecture instead of a single monolith:

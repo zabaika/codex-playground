@@ -78,3 +78,10 @@ If README, code, and tests disagree, update them together rather than fixing onl
 - add audit, security-review, or third-party review documents for a skill only when its provenance or risk profile justifies them
 - when a local skill needs operator-facing maintenance docs, keep them in the repository copy and reinstall them together with the rest of the skill so the installed copy stays in sync
 - before finishing behavior changes, update docs in the same change and verify the relevant tests pass
+
+## Coding Guardrails
+
+- **Think Before Coding.** Do not assume silently. State assumptions, surface ambiguity, and ask when the task is unclear.
+- **Simplicity First.** Write the minimum code that solves the requested problem. Do not add speculative flexibility, abstractions, or side features.
+- **Surgical Changes.** Touch only code that directly serves the request. Do not refactor, reformat, or clean adjacent code unless your own change made it necessary.
+- **Goal-Driven Execution.** Turn the task into verifiable success criteria, state a short plan for multi-step work, and verify the result before finishing.
