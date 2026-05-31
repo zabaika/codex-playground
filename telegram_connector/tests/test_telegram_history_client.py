@@ -835,11 +835,11 @@ user_password = "pw_x"
             telegram_history_client.current_read_inbox_max_id = original_current_read
 
         self.assertEqual(result["processed_messages"], 0)
-        self.assertTrue(result["marked_read"])
-        self.assertEqual(result["current_read_max_id"], 5)
-        self.assertEqual(result["marked_read_from"], 6)
-        self.assertEqual(result["marked_read_until"], 10)
-        self.assertEqual(mark_calls, [(1, 10)])
+        self.assertFalse(result["marked_read"])
+        self.assertIsNone(result["current_read_max_id"])
+        self.assertIsNone(result["marked_read_from"])
+        self.assertIsNone(result["marked_read_until"])
+        self.assertEqual(mark_calls, [])
 
     def test_sync_one_channel_mark_read_skips_ack_when_range_already_read(self) -> None:
         conn = sqlite3.connect(":memory:")

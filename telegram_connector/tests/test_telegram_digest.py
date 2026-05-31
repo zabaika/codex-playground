@@ -1,3 +1,4 @@
+import asyncio
 import importlib.util
 import io
 import json
@@ -133,6 +134,69 @@ class TelegramDigestTests(unittest.TestCase):
         self.assertEqual(result.batch_prompt_template, "Batch={batch_index}; Count={message_count}; Prev={previous_batch_summary}; {message_block}")
         self.assertEqual(result.final_prompt_template, "Final={channel_name}; Total={message_count}; Batches={batch_count}; {batch_summary_block}")
         self.assertEqual(result.openai_api_key, "op://Personal/item/openai_api_key")
+
+    def test_run_sync_reuses_single_telethon_client_for_all_channels(self) -> None:
+        original_connect_db = telegram_digest.history_client.connect_db
+        original_init_db = telegram_digest.history_client.init_db
+        original_resolve_channels_argument = telegram_digest.history_client.resolve_channels_argument
+        original_open_telethon_client = telegram_digest.history_client.open_telethon_client
+        original_sync_one_channel = telegram_digest.history_client.sync_one_channel
+        client_calls: list[str] = []
+        seen_channels: list[tuple[str, int, bool, str | None]] = []
+
+        class FakeClient:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return None
+
+        shared_client = FakeClient()
+        try:
+            telegram_digest.history_client.connect_db = lambda runtime: sqlite3.connect(":memory:")
+            telegram_digest.history_client.init_db = lambda conn: None
+            telegram_digest.history_client.resolve_channels_argument = lambda runtime, channel: ["@a", "@b"]
+
+            async def fake_open_telethon_client(runtime, auth_mode):
+                client_calls.append(auth_mode)
+                return shared_client
+
+            async def fake_sync_one_channel(conn, runtime_arg, args_arg, mode_arg, channel_arg, *, client=None, auth_mode_override=None):
+                seen_channels.append((channel_arg, args_arg.limit, client is shared_client, auth_mode_override))
+                return {"channel": channel_arg, "processed_messages": 1}
+
+            telegram_digest.history_client.open_telethon_client = fake_open_telethon_client
+            telegram_digest.history_client.sync_one_channel = fake_sync_one_channel
+
+            results = asyncio.run(
+                telegram_digest.run_sync(
+                    object(),
+                    channel=None,
+                    since="2026-05-30",
+                    until="2026-05-30",
+                    total_limit=4,
+                    use_ocr=False,
+                    mark_read=True,
+                    mode="backfill",
+                    auth_mode="user",
+                )
+            )
+        finally:
+            telegram_digest.history_client.connect_db = original_connect_db
+            telegram_digest.history_client.init_db = original_init_db
+            telegram_digest.history_client.resolve_channels_argument = original_resolve_channels_argument
+            telegram_digest.history_client.open_telethon_client = original_open_telethon_client
+            telegram_digest.history_client.sync_one_channel = original_sync_one_channel
+
+        self.assertEqual(client_calls, ["user"])
+        self.assertEqual(
+            seen_channels,
+            [
+                ("@a", 2, True, "user"),
+                ("@b", 2, True, "user"),
+            ],
+        )
+        self.assertEqual(results, [{"channel": "@a", "processed_messages": 1}, {"channel": "@b", "processed_messages": 1}])
 
     def test_resolve_digest_config_falls_back_to_common_process_timeout_defaults(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -507,6 +571,73 @@ batch_digest_template = "Batch={batch_index}"
             "https://t.me/tlbootcamp/245467 - Ищу продактов для интервью о встречах",
             formatted,
         )
+
+    def test_repair_popular_links_in_summary_rewrites_external_urls_to_message_links(self) -> None:
+        messages = [
+            {
+                "channel_id": 1869930854,
+                "title": "Живу в Испании Чат | Digital nomad visa Spain",
+                "username": "nomadespanolchat",
+                "message_id": 10293,
+                "date_utc": "2026-05-30T08:20:11+00:00",
+                "text": "https://www.boe.es/eli/es/ai/2022/07/21/(2)",
+                "ocr_text": None,
+            },
+            {
+                "channel_id": 1869930854,
+                "title": "Живу в Испании Чат | Digital nomad visa Spain",
+                "username": "nomadespanolchat",
+                "message_id": 10297,
+                "date_utc": "2026-05-30T08:53:04+00:00",
+                "text": "есть  https://www.seg-social.es/wps/portal/wss/internet/InformacionUtil/32078/32253",
+                "ocr_text": None,
+            },
+            {
+                "channel_id": 1869930854,
+                "title": "Живу в Испании Чат | Digital nomad visa Spain",
+                "username": "nomadespanolchat",
+                "message_id": 10306,
+                "date_utc": "2026-05-30T14:44:17+00:00",
+                "text": "ну, если вы в РФ и банк в РФ, то, наверное, проще взять выписку с печатью в самом банке.",
+                "ocr_text": None,
+            },
+            {
+                "channel_id": 1869930854,
+                "title": "Живу в Испании Чат | Digital nomad visa Spain",
+                "username": "nomadespanolchat",
+                "message_id": 10312,
+                "date_utc": "2026-05-30T16:31:43+00:00",
+                "text": "Доверенность делается в консульстве рф на Васю или брата/свата/маму",
+                "ocr_text": None,
+            },
+            {
+                "channel_id": 1869930854,
+                "title": "Живу в Испании Чат | Digital nomad visa Spain",
+                "username": "nomadespanolchat",
+                "message_id": 10310,
+                "date_utc": "2026-05-30T15:41:11+00:00",
+                "text": "Всем привет! Кому-нибудь удалось в последние несколько дней поймать ситу на отпечатки?",
+                "ocr_text": None,
+            },
+        ]
+        summary = "\n".join(
+            [
+                "Главные темы дня: подтверждение доходов и банковских выписок для документов, а также вопросы по записи на отпечатки.",
+                "Наиболее популярное",
+                "1. https://www.boe.es/eli/es/ai/2022/07/21/(2) - Соглашение Испании и Молдовы по соцстраху",
+                "2. https://www.seg-social.es/wps/portal/wss/internet/InformacionUtil/32078/32253 - Страница Seg-Social по теме соглашения",
+                "3. https://t.me/nomadespanolchat/10306 - Как проверяют выписки из банковских приложений",
+                "4. https://t.me/nomadespanolchat/10312 - Доверенность в консульстве РФ для получения выписки",
+                "5. https://t.me/nomadespanolchat/10310 - Есть ли запись на отпечатки в последние дни",
+            ]
+        )
+
+        repaired = telegram_digest.repair_popular_links_in_summary(summary, messages)
+
+        self.assertIn("https://t.me/nomadespanolchat/10293 - Соглашение Испании и Молдовы по соцстраху", repaired)
+        self.assertIn("https://t.me/nomadespanolchat/10297 - Страница Seg-Social по теме соглашения", repaired)
+        self.assertNotIn("https://www.boe.es/eli/es/ai/2022/07/21/(2)", repaired)
+        self.assertNotIn("https://www.seg-social.es/wps/portal/wss/internet/InformacionUtil/32078/32253", repaired)
 
     def test_format_digest_summary_for_telegram_normalizes_lead_line_named_as_main_topics(self) -> None:
         formatted = telegram_digest.format_digest_summary_for_telegram(

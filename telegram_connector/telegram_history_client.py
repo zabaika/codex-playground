@@ -985,17 +985,20 @@ async def sync_one_channel(
     args: argparse.Namespace,
     mode: str,
     channel: str,
+    *,
+    client: Any | None = None,
+    auth_mode_override: str | None = None,
 ) -> dict[str, Any]:
-    auth_mode = resolve_auth_mode(runtime, args.auth_mode, channel)
-    client = await open_telethon_client(runtime, auth_mode)
-    async with client:
+    auth_mode = auth_mode_override or resolve_auth_mode(runtime, args.auth_mode, channel)
+
+    async def _sync_with_client(active_client: Any) -> dict[str, Any]:
         entity_ref = build_entity_lookup_reference(channel)
         try:
-            entity = await client.get_entity(entity_ref)
+            entity = await active_client.get_entity(entity_ref)
         except ValueError:
             if channel.startswith("-100") and channel[1:].isdigit():
-                await client.get_dialogs()
-                entity = await client.get_entity(entity_ref)
+                await active_client.get_dialogs()
+                entity = await active_client.get_entity(entity_ref)
             else:
                 raise
         upsert_channel(conn, entity)
@@ -1006,7 +1009,7 @@ async def sync_one_channel(
             scan_limit = None
 
         if mode in {"backfill", "tail", "update"}:
-            iterator = client.iter_messages(entity, limit=scan_limit)
+            iterator = active_client.iter_messages(entity, limit=scan_limit)
         else:
             raise SystemExit(f"Unsupported sync mode: {mode}")
 
@@ -1060,13 +1063,13 @@ async def sync_one_channel(
             if exists:
                 skipped_existing += 1
                 if args.download_media and getattr(message, "media", None) and media_needs_download(conn, entity.id, message.id):
-                    downloaded_path, downloaded_size = await download_media_if_present(runtime, client, message, entity.id)
+                    downloaded_path, downloaded_size = await download_media_if_present(runtime, active_client, message, entity.id)
                     stage_write(message, sender_username, sender_display_name, downloaded_path, downloaded_size)
                     if downloaded_path:
                         refreshed_existing_media += 1
                 continue
             if args.download_media and getattr(message, "media", None):
-                downloaded_path, downloaded_size = await download_media_if_present(runtime, client, message, entity.id)
+                downloaded_path, downloaded_size = await download_media_if_present(runtime, active_client, message, entity.id)
             stage_write(message, sender_username, sender_display_name, downloaded_path, downloaded_size)
             highest_message_id = max(highest_message_id or message.id, message.id)
             processed += 1
@@ -1108,11 +1111,11 @@ async def sync_one_channel(
         if getattr(args, "mark_read", False):
             if auth_mode != "user":
                 raise SystemExit("Mark-as-read is only supported in user auth mode.")
-            if mark_read_target_id is not None:
-                current_read_max_id = await current_read_inbox_max_id(client, entity)
+            if mark_read_target_id is not None and highest_message_id is not None:
+                current_read_max_id = await current_read_inbox_max_id(active_client, entity)
                 if current_read_max_id is None or mark_read_target_id > current_read_max_id:
                     marked_read_from = (current_read_max_id + 1) if current_read_max_id is not None else 1
-                    await client.send_read_acknowledge(entity, max_id=mark_read_target_id)
+                    await active_client.send_read_acknowledge(entity, max_id=mark_read_target_id)
                     marked_read_until = mark_read_target_id
         return {
             "channel": channel,
@@ -1132,6 +1135,13 @@ async def sync_one_channel(
             "marked_read_from": marked_read_from,
             "marked_read_until": marked_read_until,
         }
+
+    if client is not None:
+        return await _sync_with_client(client)
+
+    client = await open_telethon_client(runtime, auth_mode)
+    async with client:
+        return await _sync_with_client(client)
 
 
 async def sync_messages(runtime: RuntimeConfig, args: argparse.Namespace, mode: str) -> int:

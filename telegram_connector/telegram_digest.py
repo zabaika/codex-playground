@@ -51,6 +51,10 @@ MAIN_TOPICS_DAY_HEADING = "Главные темы дня"
 MOST_POPULAR_HEADING = "Наиболее популярное"
 OPEN_QUESTIONS_HEADING = "Незакрытые вопросы/продолжения"
 QUESTION_ANSWER_LINKS_HEADING = "Связки вопрос-ответ/развитие темы"
+POPULAR_LINK_LINE_RE = re.compile(
+    r"^(?P<prefix>\d+\.\s+)?(?P<link><?https?://\S+>?)(?P<sep>\s*-\s+)(?P<title>\S.*)$",
+    re.IGNORECASE,
+)
 
 
 @dataclass
@@ -435,31 +439,43 @@ async def run_sync(
     plans = allocate_sync_limits(channels, total_limit)
     try:
         results = []
-        for plan in plans:
-            if plan.limit <= 0:
-                continue
-            args = SimpleNamespace(
-                channel=plan.channel,
-                limit=plan.limit,
-                since=since,
-                until=until,
-                download_media=use_ocr,
-                ocr=use_ocr,
-                mark_read=mark_read,
-                auth_mode=auth_mode,
-            )
-            try:
-                results.append(await history_client.sync_one_channel(conn, runtime, args, mode, plan.channel))
-            except Exception as exc:
-                results.append(
-                    {
-                        "channel": plan.channel,
-                        "mode": mode,
-                        "auth_mode": auth_mode,
-                        "status": "error",
-                        "error": str(exc) or exc.__class__.__name__,
-                    }
+        client = await history_client.open_telethon_client(runtime, auth_mode)
+        async with client:
+            for plan in plans:
+                if plan.limit <= 0:
+                    continue
+                args = SimpleNamespace(
+                    channel=plan.channel,
+                    limit=plan.limit,
+                    since=since,
+                    until=until,
+                    download_media=use_ocr,
+                    ocr=use_ocr,
+                    mark_read=mark_read,
+                    auth_mode=auth_mode,
                 )
+                try:
+                    results.append(
+                        await history_client.sync_one_channel(
+                            conn,
+                            runtime,
+                            args,
+                            mode,
+                            plan.channel,
+                            client=client,
+                            auth_mode_override=auth_mode,
+                        )
+                    )
+                except Exception as exc:
+                    results.append(
+                        {
+                            "channel": plan.channel,
+                            "mode": mode,
+                            "auth_mode": auth_mode,
+                            "status": "error",
+                            "error": str(exc) or exc.__class__.__name__,
+                        }
+                    )
         return results
     finally:
         conn.close()
@@ -602,6 +618,142 @@ def build_message_link(message: dict[str, Any]) -> str | None:
     if channel_id is None:
         return None
     return f"https://t.me/c/{channel_id}/{message_id}"
+
+
+def is_telegram_message_link(value: str) -> bool:
+    normalized = value.strip().strip("<>")
+    return bool(re.match(r"^https?://t\.me/(?:c/\d+|[A-Za-z0-9_]+)/\d+$", normalized, flags=re.IGNORECASE))
+
+
+def normalize_similarity_tokens(value: str) -> list[str]:
+    lowered = value.lower().replace("ё", "е")
+    cleaned = re.sub(r"[^0-9a-zа-я]+", " ", lowered, flags=re.IGNORECASE)
+    return [token for token in cleaned.split() if len(token) >= 2]
+
+
+def build_popular_link_candidates(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    candidates: list[dict[str, Any]] = []
+    for message in messages:
+        link = build_message_link(message)
+        message_text = " ".join(
+            part.strip()
+            for part in (
+                str(message.get("text") or ""),
+                str(message.get("ocr_text") or ""),
+            )
+            if part and part.strip()
+        )
+        candidates.append(
+            {
+                "message": message,
+                "link": link,
+                "message_id": int(message.get("message_id") or 0),
+                "text_lower": message_text.lower(),
+                "token_set": set(normalize_similarity_tokens(message_text)),
+            }
+        )
+    return candidates
+
+
+def score_popular_link_candidate(
+    title_tokens: list[str],
+    candidate: dict[str, Any],
+    *,
+    claimed_message_id: int | None,
+) -> float:
+    if not title_tokens:
+        return 0.0
+    message_tokens = candidate["token_set"]
+    if not message_tokens:
+        return 0.0
+    overlap = set(title_tokens) & message_tokens
+    if not overlap:
+        return 0.0
+    score = len(overlap) / len(set(title_tokens))
+    message_id = candidate["message_id"]
+    if claimed_message_id is not None and message_id:
+        if message_id == claimed_message_id:
+            score += 0.5
+        elif message_id % 1000 == claimed_message_id % 1000:
+            score += 0.25
+        elif abs(message_id - claimed_message_id) <= 10:
+            score += 0.1
+    if len(overlap) >= 3:
+        score += 0.1
+    return score
+
+
+def repair_popular_links_in_summary(summary: str, messages: list[dict[str, Any]]) -> str:
+    if not summary.strip() or MOST_POPULAR_HEADING not in summary or not messages:
+        return summary
+
+    candidates = build_popular_link_candidates(messages)
+    valid_links = {
+        candidate["link"]: candidate["message"]
+        for candidate in candidates
+        if candidate["link"]
+    }
+
+    repaired_lines: list[str] = []
+    in_popular_section = False
+    for raw_line in summary.splitlines():
+        stripped = raw_line.strip()
+        if re.match(r"^Наиболее популярное\b", stripped, flags=re.IGNORECASE):
+            in_popular_section = True
+            repaired_lines.append(raw_line)
+            continue
+        if in_popular_section and re.match(r"^(?:Незакрытые вопросы|Связки вопрос-ответ|Главные темы)", stripped, flags=re.IGNORECASE):
+            in_popular_section = False
+        if not in_popular_section:
+            repaired_lines.append(raw_line)
+            continue
+
+        match = POPULAR_LINK_LINE_RE.match(stripped)
+        if not match:
+            repaired_lines.append(raw_line)
+            continue
+
+        raw_link = match.group("link").strip()
+        normalized_link = raw_link.strip("<>")
+        if normalized_link in valid_links:
+            repaired_lines.append(raw_line)
+            continue
+
+        best_message: dict[str, Any] | None = None
+        if not is_telegram_message_link(normalized_link):
+            exact_url_matches = [candidate["message"] for candidate in candidates if normalized_link.lower() in candidate["text_lower"]]
+            if exact_url_matches:
+                best_message = exact_url_matches[0]
+
+        if best_message is None:
+            title = match.group("title").strip()
+            title_tokens = normalize_similarity_tokens(title)
+            claimed_message_id: int | None = None
+            claimed_match = re.search(r"/(\d+)$", normalized_link)
+            if claimed_match:
+                try:
+                    claimed_message_id = int(claimed_match.group(1))
+                except ValueError:
+                    claimed_message_id = None
+
+            best_score = 0.0
+            for candidate in candidates:
+                if not candidate["link"]:
+                    continue
+                score = score_popular_link_candidate(title_tokens, candidate, claimed_message_id=claimed_message_id)
+                if score > best_score:
+                    best_score = score
+                    best_message = candidate["message"]
+            if best_score < 0.34:
+                best_message = None
+
+        repaired_link = build_message_link(best_message) if best_message is not None else None
+        if not repaired_link:
+            repaired_lines.append(raw_line)
+            continue
+        prefix = match.group("prefix") or ""
+        repaired_lines.append(f"{prefix}{repaired_link}{match.group('sep')}{match.group('title').strip()}")
+    return "\n".join(repaired_lines)
 
 
 def truncate_text(value: str, limit: int) -> str:
@@ -1002,7 +1154,7 @@ def format_digest_summary_for_telegram(summary: str) -> str:
         return MAIN_TOPICS_DAY_HEADING
 
     def is_popular_link_line(value: str) -> bool:
-        return bool(re.match(r"^<?https?://\S+>?\s*-\s+\S", value, flags=re.IGNORECASE))
+        return bool(POPULAR_LINK_LINE_RE.match(value))
 
     def resolve_heading(value: str) -> tuple[str, str] | None:
         heading_patterns = (
@@ -1261,7 +1413,7 @@ def summarize_channel_batches(
                 usage=result.usage,
                 response_id=result.response_id,
             )
-            return len(unique_message_ids), result.text, False
+            return len(unique_message_ids), repair_popular_links_in_summary(result.text, all_messages), False
         char_limit_reached = True
     for batch, batch_input in iter_rendered_message_batches(
         batch_source,
@@ -1340,9 +1492,10 @@ def summarize_channel_batches(
     if not batch_summaries:
         return 0, "Новых сообщений в выбранном периоде нет.", False
     if len(batch_summaries) == 1:
+        summary_text = batch_summaries[0].split("\n", 1)[1] if "\n" in batch_summaries[0] else batch_summaries[0]
         return (
             len(unique_message_ids),
-            batch_summaries[0].split("\n", 1)[1] if "\n" in batch_summaries[0] else batch_summaries[0],
+            repair_popular_links_in_summary(summary_text, all_messages),
             char_limit_reached,
         )
 
@@ -1406,7 +1559,7 @@ def summarize_channel_batches(
         usage=final_result.usage,
         response_id=final_result.response_id,
     )
-    return len(unique_message_ids), final_result.text, char_limit_reached
+    return len(unique_message_ids), repair_popular_links_in_summary(final_result.text, all_messages), char_limit_reached
 
 
 def cmd_run(args: argparse.Namespace) -> int:
