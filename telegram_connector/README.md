@@ -432,6 +432,33 @@ Additional notes:
 - multi-channel export creates one CSV per channel
 - CSV also includes normalized message-analysis fields from `messages`, including `grouped_id`, `content_hash`, and `imported_at`
 
+#### `fetch-message`
+
+Description:
+Fetch one Telegram message by URL, store it in SQLite, and export a Markdown source artifact for downstream note workflows.
+
+CLI:
+
+```bash
+python3 telegram_connector/telegram_history_client.py fetch-message --url https://t.me/bezaspera/2833
+```
+
+Operator example:
+
+```bash
+python3 telegram_connector/telegram_history_client.py fetch-message \
+  --url https://t.me/bezaspera/2833 \
+  --output-dir "scratch/article-to-obsidian-kb/telegram"
+```
+
+Additional notes:
+
+- this command always uses `user` auth because direct message lookup by URL should not depend on bot visibility rules
+- the fetched channel and message are always written to the local SQLite history database; there is no opt-out flag
+- the exported `.md` file is a staging source artifact: it keeps source metadata and reconstructs Telegram links inline in the message body whenever that is safe
+- if a Telegram entity is too broken to inline safely, the exporter keeps the original body text and adds that URL under `Unresolved Links`
+- if `--output-dir` is omitted, the file is written under `scratch/article-to-obsidian-kb/telegram/`
+
 #### `ocrhistory`
 
 Description:

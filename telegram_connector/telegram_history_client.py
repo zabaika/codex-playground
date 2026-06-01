@@ -13,6 +13,7 @@ from dataclasses import field
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -35,6 +36,7 @@ DB_FILE = DATA_DIR / "telegram_history.sqlite3"
 MEDIA_DIR = DATA_DIR / "media"
 SESSION_DIR = DATA_DIR / "sessions"
 EXPORT_DIR = DATA_DIR / "exports"
+SINGLE_MESSAGE_EXPORT_DIR = REPO_ROOT / "scratch" / "article-to-obsidian-kb" / "telegram"
 OP_REFERENCE_PREFIX = shared_secrets.OP_REFERENCE_PREFIX
 _SECRET_CACHE = shared_secrets._SECRET_CACHE
 SQLITE_CONFIG = common_sqlite.load_sqlite_config()
@@ -336,6 +338,7 @@ def ensure_dirs(runtime: RuntimeConfig) -> None:
     runtime.media_root.mkdir(parents=True, exist_ok=True)
     SESSION_DIR.mkdir(parents=True, exist_ok=True)
     EXPORT_DIR.mkdir(parents=True, exist_ok=True)
+    SINGLE_MESSAGE_EXPORT_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def connect_db(runtime: RuntimeConfig) -> sqlite3.Connection:
@@ -584,6 +587,25 @@ def message_text(message: Any) -> str:
     return getattr(message, "message", None) or getattr(message, "text", None) or ""
 
 
+def parse_message_url(url: str) -> tuple[str, int]:
+    raw = url.strip()
+    if not raw:
+        raise SystemExit("Telegram message URL is required.")
+    normalized = raw if "://" in raw else f"https://{raw}"
+    parsed = urlparse(normalized)
+    if parsed.netloc not in {"t.me", "www.t.me"}:
+        raise SystemExit(f"Unsupported Telegram URL: {url}")
+
+    parts = [part for part in parsed.path.split("/") if part]
+    if len(parts) == 2 and parts[1].isdigit():
+        return f"@{parts[0]}", int(parts[1])
+    if len(parts) == 3 and parts[0] == "s" and parts[2].isdigit():
+        return f"@{parts[1]}", int(parts[2])
+    if len(parts) == 3 and parts[0] == "c" and parts[1].isdigit() and parts[2].isdigit():
+        return f"-100{parts[1]}", int(parts[2])
+    raise SystemExit(f"Unsupported Telegram message URL format: {url}")
+
+
 def message_media_kind(message: Any) -> str | None:
     if getattr(message, "photo", None):
         return "photo"
@@ -603,10 +625,182 @@ def message_media_kind(message: Any) -> str | None:
     return None
 
 
+def extract_message_links(message: Any) -> list[dict[str, str]]:
+    text = message_text(message)
+    entities = getattr(message, "entities", None) or []
+    links: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for entity in entities:
+        url = optional_text(getattr(entity, "url", None))
+        offset = int(getattr(entity, "offset", 0) or 0)
+        length = int(getattr(entity, "length", 0) or 0)
+        label = None
+        if length > 0:
+            text_range = utf16_entity_range_to_python_range(text, offset, length)
+            if text_range is None:
+                continue
+            start, end = text_range
+            raw_label = text[start:end]
+            label = optional_text(raw_label.splitlines()[0])
+        if url is None and label and label.startswith(("http://", "https://")):
+            url = label
+        if url is None:
+            continue
+        effective_label = label or url
+        item = (effective_label, url)
+        if item in seen:
+            continue
+        seen.add(item)
+        links.append({"label": effective_label, "url": url})
+    return links
+
+
+def escape_markdown_link_label(value: str) -> str:
+    return value.replace("\\", "\\\\").replace("[", "\\[").replace("]", "\\]")
+
+
+def build_utf16_offset_map(text: str) -> dict[int, int]:
+    offsets = {0: 0}
+    utf16_units = 0
+    for index, char in enumerate(text):
+        utf16_units += 2 if ord(char) > 0xFFFF else 1
+        offsets[utf16_units] = index + 1
+    return offsets
+
+
+def utf16_entity_range_to_python_range(text: str, offset: int, length: int) -> tuple[int, int] | None:
+    if offset < 0 or length <= 0:
+        return None
+    utf16_offsets = build_utf16_offset_map(text)
+    end_offset = offset + length
+    if offset not in utf16_offsets or end_offset not in utf16_offsets:
+        return None
+    return utf16_offsets[offset], utf16_offsets[end_offset]
+
+
+def render_message_body_with_inline_links(message: Any) -> tuple[str, list[dict[str, str]]]:
+    text = message_text(message)
+    entities = getattr(message, "entities", None) or []
+    link_entities: list[tuple[int, int, str, str]] = []
+    fallback_links: list[dict[str, str]] = []
+    seen_fallbacks: set[tuple[str, str]] = set()
+
+    for entity in entities:
+        offset = int(getattr(entity, "offset", 0) or 0)
+        length = int(getattr(entity, "length", 0) or 0)
+        text_range = utf16_entity_range_to_python_range(text, offset, length)
+        if text_range is None:
+            continue
+        start, end = text_range
+        raw_label = text[start:end]
+        url = optional_text(getattr(entity, "url", None))
+        label = optional_text(raw_label)
+        if url is None and label and label.startswith(("http://", "https://")):
+            url = label
+        if url is None:
+            continue
+        if "\n" in raw_label:
+            item = (raw_label.splitlines()[0].strip() or url, url)
+            if item not in seen_fallbacks:
+                seen_fallbacks.add(item)
+                fallback_links.append({"label": item[0], "url": item[1]})
+            continue
+        link_entities.append((start, end, raw_label, url))
+
+    if not link_entities:
+        return text, fallback_links
+
+    rendered_parts: list[str] = []
+    cursor = 0
+    for start, end, raw_label, url in sorted(link_entities, key=lambda item: (item[0], item[1])):
+        if start < cursor:
+            item = (raw_label.strip() or url, url)
+            if item not in seen_fallbacks:
+                seen_fallbacks.add(item)
+                fallback_links.append({"label": item[0], "url": item[1]})
+            continue
+        rendered_parts.append(text[cursor:start])
+        label = escape_markdown_link_label(raw_label)
+        rendered_parts.append(f"[{label}]({url})")
+        cursor = end
+    rendered_parts.append(text[cursor:])
+    return "".join(rendered_parts), fallback_links
+
+
 def channel_dir(runtime: RuntimeConfig, channel_id: int) -> Path:
     path = runtime.media_root / str(channel_id)
     path.mkdir(parents=True, exist_ok=True)
     return path
+
+
+def message_subject_line(message: Any) -> str:
+    for line in message_text(message).splitlines():
+        candidate = optional_text(line)
+        if candidate:
+            return candidate
+    return f"message {getattr(message, 'id', 'unknown')}"
+
+
+def compose_single_message_title(entity: Any, message: Any) -> str:
+    channel_name = entity_display_name(entity) or optional_text(getattr(entity, "username", None)) or "Telegram"
+    subject = message_subject_line(message)
+    if subject.casefold().startswith(channel_name.casefold()):
+        return subject
+    return f"{channel_name} - {subject}"
+
+
+def sanitize_note_filename(value: str) -> str:
+    cleaned = re.sub(r'[\\/:*?"<>|]+', " ", value)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip().strip(".")
+    return cleaned or "telegram-message"
+
+
+def render_single_message_source(entity: Any, message: Any, source_url: str) -> str:
+    channel_name = entity_display_name(entity) or "Unknown channel"
+    username = optional_text(getattr(entity, "username", None))
+    channel_ref = f"@{username}" if username else str(getattr(entity, "id", "unknown"))
+    date_utc = serialize_datetime(getattr(message, "date", None)) or "unknown"
+    body, fallback_links = render_message_body_with_inline_links(message)
+    body = body.strip() or "(message has no text body)"
+    lines = [
+        f"# {compose_single_message_title(entity, message)}",
+        "",
+        f"Source URL: {source_url}",
+        f"Source type: telegram_message",
+        f"Channel: {channel_name} ({channel_ref})",
+        f"Message ID: {getattr(message, 'id', 'unknown')}",
+        f"Date UTC: {date_utc}",
+        "",
+        "## Message Text",
+        "",
+        body,
+    ]
+    if fallback_links:
+        lines.extend(
+            [
+                "",
+                "## Unresolved Links",
+                "",
+            ]
+        )
+        for link in fallback_links:
+            lines.append(f"- [{link['label']}]({link['url']})")
+    return "\n".join(lines) + "\n"
+
+
+def export_single_message_source(
+    entity: Any,
+    message: Any,
+    source_url: str,
+    output_dir: str | None,
+) -> Path:
+    base_dir = Path(output_dir).expanduser() if output_dir else SINGLE_MESSAGE_EXPORT_DIR
+    base_dir.mkdir(parents=True, exist_ok=True)
+    title = compose_single_message_title(entity, message)
+    file_name = f"{sanitize_note_filename(title)} [tg-{getattr(message, 'id', 'unknown')}].md"
+    output_path = base_dir / file_name
+    output_path.write_text(render_single_message_source(entity, message, source_url), encoding="utf-8")
+    return output_path
 
 
 def minimal_entity_json(entity: Any) -> str:
@@ -985,20 +1179,17 @@ async def sync_one_channel(
     args: argparse.Namespace,
     mode: str,
     channel: str,
-    *,
-    client: Any | None = None,
-    auth_mode_override: str | None = None,
 ) -> dict[str, Any]:
-    auth_mode = auth_mode_override or resolve_auth_mode(runtime, args.auth_mode, channel)
-
-    async def _sync_with_client(active_client: Any) -> dict[str, Any]:
+    auth_mode = resolve_auth_mode(runtime, args.auth_mode, channel)
+    client = await open_telethon_client(runtime, auth_mode)
+    async with client:
         entity_ref = build_entity_lookup_reference(channel)
         try:
-            entity = await active_client.get_entity(entity_ref)
+            entity = await client.get_entity(entity_ref)
         except ValueError:
             if channel.startswith("-100") and channel[1:].isdigit():
-                await active_client.get_dialogs()
-                entity = await active_client.get_entity(entity_ref)
+                await client.get_dialogs()
+                entity = await client.get_entity(entity_ref)
             else:
                 raise
         upsert_channel(conn, entity)
@@ -1009,7 +1200,7 @@ async def sync_one_channel(
             scan_limit = None
 
         if mode in {"backfill", "tail", "update"}:
-            iterator = active_client.iter_messages(entity, limit=scan_limit)
+            iterator = client.iter_messages(entity, limit=scan_limit)
         else:
             raise SystemExit(f"Unsupported sync mode: {mode}")
 
@@ -1063,13 +1254,13 @@ async def sync_one_channel(
             if exists:
                 skipped_existing += 1
                 if args.download_media and getattr(message, "media", None) and media_needs_download(conn, entity.id, message.id):
-                    downloaded_path, downloaded_size = await download_media_if_present(runtime, active_client, message, entity.id)
+                    downloaded_path, downloaded_size = await download_media_if_present(runtime, client, message, entity.id)
                     stage_write(message, sender_username, sender_display_name, downloaded_path, downloaded_size)
                     if downloaded_path:
                         refreshed_existing_media += 1
                 continue
             if args.download_media and getattr(message, "media", None):
-                downloaded_path, downloaded_size = await download_media_if_present(runtime, active_client, message, entity.id)
+                downloaded_path, downloaded_size = await download_media_if_present(runtime, client, message, entity.id)
             stage_write(message, sender_username, sender_display_name, downloaded_path, downloaded_size)
             highest_message_id = max(highest_message_id or message.id, message.id)
             processed += 1
@@ -1111,11 +1302,11 @@ async def sync_one_channel(
         if getattr(args, "mark_read", False):
             if auth_mode != "user":
                 raise SystemExit("Mark-as-read is only supported in user auth mode.")
-            if mark_read_target_id is not None and highest_message_id is not None:
-                current_read_max_id = await current_read_inbox_max_id(active_client, entity)
+            if mark_read_target_id is not None:
+                current_read_max_id = await current_read_inbox_max_id(client, entity)
                 if current_read_max_id is None or mark_read_target_id > current_read_max_id:
                     marked_read_from = (current_read_max_id + 1) if current_read_max_id is not None else 1
-                    await active_client.send_read_acknowledge(entity, max_id=mark_read_target_id)
+                    await client.send_read_acknowledge(entity, max_id=mark_read_target_id)
                     marked_read_until = mark_read_target_id
         return {
             "channel": channel,
@@ -1135,13 +1326,6 @@ async def sync_one_channel(
             "marked_read_from": marked_read_from,
             "marked_read_until": marked_read_until,
         }
-
-    if client is not None:
-        return await _sync_with_client(client)
-
-    client = await open_telethon_client(runtime, auth_mode)
-    async with client:
-        return await _sync_with_client(client)
 
 
 async def sync_messages(runtime: RuntimeConfig, args: argparse.Namespace, mode: str) -> int:
@@ -1458,6 +1642,35 @@ def export_channel_csv(
     return output, len(rows)
 
 
+async def fetch_and_export_message(runtime: RuntimeConfig, conn: sqlite3.Connection, url: str, output_dir: str | None) -> dict[str, Any]:
+    channel, message_id = parse_message_url(url)
+    client = await open_telethon_client(runtime, "user")
+    async with client:
+        entity_ref = build_entity_lookup_reference(channel)
+        try:
+            entity = await client.get_entity(entity_ref)
+        except ValueError:
+            if channel.startswith("-100") and channel[1:].isdigit():
+                await client.get_dialogs()
+                entity = await client.get_entity(entity_ref)
+            else:
+                raise
+        message = await client.get_messages(entity, ids=message_id)
+        if message is None:
+            raise SystemExit(f"Message {message_id} was not found for '{channel}'.")
+        upsert_channel(conn, entity)
+        sender_username, sender_display_name = await resolve_sender_metadata(entity, message)
+        upsert_message(conn, entity, message, sender_username, sender_display_name, None, None)
+        output_path = export_single_message_source(entity, message, url, output_dir)
+    return {
+        "channel": channel,
+        "message_id": message_id,
+        "output_file": str(output_path),
+        "saved_to_db": True,
+        "auth_mode": "user",
+    }
+
+
 def cmd_init_db(args: argparse.Namespace) -> int:
     runtime = resolve_runtime()
     conn = connect_db(runtime)
@@ -1531,6 +1744,17 @@ def cmd_export_csv(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_fetch_message(args: argparse.Namespace) -> int:
+    import asyncio
+
+    runtime = resolve_runtime()
+    conn = connect_db(runtime)
+    init_db(conn)
+    result = asyncio.run(fetch_and_export_message(runtime, conn, args.url, args.output_dir))
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    return 0
+
+
 def cmd_inspect_state(args: argparse.Namespace) -> int:
     runtime = resolve_runtime()
     conn = connect_db(runtime)
@@ -1600,6 +1824,14 @@ def build_parser() -> argparse.ArgumentParser:
     export_csv.add_argument("--output", help="Optional CSV output path.")
     export_csv.add_argument("--auth-mode", choices=["auto", "bot", "user"], default=None, help="Accepted for bot-command compatibility; export reads from local SQLite only.")
     export_csv.set_defaults(func=cmd_export_csv)
+
+    fetch_message = subparsers.add_parser(
+        "fetch-message",
+        help="Fetch one Telegram message by URL, store it in SQLite, and export a Markdown source artifact.",
+    )
+    fetch_message.add_argument("--url", required=True, help="Telegram message URL such as https://t.me/channel/123.")
+    fetch_message.add_argument("--output-dir", help="Directory for the exported Markdown source file.")
+    fetch_message.set_defaults(func=cmd_fetch_message)
 
     sync = subparsers.add_parser("sync", help="Unified sync command for backfill, tail, and update modes.")
     sync.add_argument("--mode", choices=["backfill", "tail", "update"], required=True, help="Sync mode.")

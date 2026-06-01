@@ -488,6 +488,118 @@ user_password = "pw_x"
         self.assertEqual(args.command, "export-csv")
         self.assertEqual(args.auth_mode, "user")
 
+    def test_fetch_message_parser_accepts_url_and_output_dir(self) -> None:
+        parser = telegram_history_client.build_parser()
+        args = parser.parse_args(
+            [
+                "fetch-message",
+                "--url",
+                "https://t.me/bezaspera/2833",
+                "--output-dir",
+                "/tmp/telegram-message",
+            ]
+        )
+        self.assertEqual(args.command, "fetch-message")
+        self.assertEqual(args.url, "https://t.me/bezaspera/2833")
+        self.assertEqual(args.output_dir, "/tmp/telegram-message")
+
+    def test_parse_message_url_supports_public_and_internal_channel_links(self) -> None:
+        self.assertEqual(
+            telegram_history_client.parse_message_url("https://t.me/bezaspera/2833"),
+            ("@bezaspera", 2833),
+        )
+        self.assertEqual(
+            telegram_history_client.parse_message_url("https://t.me/s/bezaspera/2833"),
+            ("@bezaspera", 2833),
+        )
+        self.assertEqual(
+            telegram_history_client.parse_message_url("https://t.me/c/1449711572/53403"),
+            ("-1001449711572", 53403),
+        )
+
+    def test_utf16_entity_range_to_python_range_handles_emoji_prefix(self) -> None:
+        text = "👋 Григорий Бакунов"
+        start = len("👋 ".encode("utf-16-le")) // 2
+        length = len("Григорий".encode("utf-16-le")) // 2
+        self.assertEqual(
+            telegram_history_client.utf16_entity_range_to_python_range(text, start, length),
+            (2, 10),
+        )
+
+    def test_render_message_body_with_inline_links_uses_utf16_offsets(self) -> None:
+        class LinkEntity:
+            offset = len("👋 ".encode("utf-16-le")) // 2
+            length = len("Григорий Бакунов".encode("utf-16-le")) // 2
+            url = "https://t.me/addmeto"
+
+        class Message:
+            message = "👋 Григорий Бакунов — спикер"
+            text = message
+            entities = [LinkEntity()]
+
+        rendered, unresolved = telegram_history_client.render_message_body_with_inline_links(Message())
+        self.assertEqual(unresolved, [])
+        self.assertEqual(
+            rendered,
+            "👋 [Григорий Бакунов](https://t.me/addmeto) — спикер",
+        )
+
+    def test_render_single_message_source_keeps_metadata_body_and_links(self) -> None:
+        class Entity:
+            id = 1
+            username = "bezaspera"
+            title = "Без aspera"
+
+        class LinkEntity:
+            offset = 0
+            length = 9
+            url = "https://t.me/bezaspera/2833"
+
+        class Message:
+            id = 2833
+            message = "30 постов\nРазбор списка"
+            text = message
+            date = datetime(2026, 5, 14, 14, 27, 1, tzinfo=timezone.utc)
+            entities = [LinkEntity()]
+
+        rendered = telegram_history_client.render_single_message_source(
+            Entity(),
+            Message(),
+            "https://t.me/bezaspera/2833",
+        )
+        self.assertIn("# Без aspera - 30 постов", rendered)
+        self.assertIn("Source type: telegram_message", rendered)
+        self.assertIn("## Message Text", rendered)
+        self.assertIn("[30 постов](https://t.me/bezaspera/2833)\nРазбор списка", rendered)
+        self.assertNotIn("## Unresolved Links", rendered)
+
+    def test_render_single_message_source_falls_back_for_multiline_link_entity(self) -> None:
+        class Entity:
+            id = 1
+            username = "jobfortm"
+            title = "Job for IT-TOP"
+
+        class LinkEntity:
+            offset = 0
+            length = 18
+            url = "https://t.me/addmeto"
+
+        class Message:
+            id = 4720
+            message = "Григорий Бакунов\n(bobuk)"
+            text = message
+            date = datetime(2026, 4, 24, 6, 30, 1, tzinfo=timezone.utc)
+            entities = [LinkEntity()]
+
+        rendered = telegram_history_client.render_single_message_source(
+            Entity(),
+            Message(),
+            "https://t.me/jobfortm/4720",
+        )
+        self.assertIn("Григорий Бакунов\n(bobuk)", rendered)
+        self.assertIn("## Unresolved Links", rendered)
+        self.assertIn("- [Григорий Бакунов](https://t.me/addmeto)", rendered)
+
     def test_sync_parsers_accept_since_until(self) -> None:
         parser = telegram_history_client.build_parser()
         backfill_args = parser.parse_args(["sync", "--mode", "backfill", "--channel", "@vcnews", "--since", "2026-03-15", "--until", "2026-03-16"])
@@ -506,6 +618,137 @@ user_password = "pw_x"
         self.assertEqual(ocr_pending_args.channel, "@vcnews")
         self.assertEqual(ocr_pending_args.since, "2026-03-15")
         self.assertEqual(ocr_pending_args.until, "2026-03-16")
+
+    def test_fetch_and_export_message_saves_sqlite_row_and_markdown_source(self) -> None:
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        telegram_history_client.init_db(conn)
+        runtime = telegram_history_client.RuntimeConfig(
+            db_path=Path("/tmp/db.sqlite3"),
+            media_root=Path("/tmp/media"),
+            user_session_name="user",
+            bot_session_name="bot",
+            api_id="1",
+            api_hash="hash",
+            phone="+1",
+            bot_token="token",
+            user_password="pw",
+            tesseract_binary="tesseract",
+            vision_prompt="prompt",
+            sync_batch_size=500,
+            sync_total_limit=6000,
+            sync_mode_limits={"backfill": 100, "tail": 100, "update": 100},
+            default_auth_mode="user",
+            public_auth_mode="bot",
+            private_auth_mode="user",
+            default_channels=[],
+        )
+
+        class Entity:
+            id = 77
+            username = "bezaspera"
+            title = "Без aspera"
+
+        class LinkEntity:
+            offset = 0
+            length = 9
+            url = "https://t.me/bezaspera/1"
+
+        class Message:
+            id = 2833
+            message = "30 постов\nРазбор списка"
+            text = message
+            date = datetime(2026, 5, 14, 14, 27, 1, tzinfo=timezone.utc)
+            edit_date = None
+            sender_id = None
+            post = True
+            views = None
+            forwards = None
+            replies = None
+            media = None
+            grouped_id = None
+            sender = None
+            entities = [LinkEntity()]
+
+        class FakeClient:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return None
+
+            async def get_entity(self, channel):
+                self.channel = channel
+                return Entity()
+
+            async def get_messages(self, entity, ids):
+                self.ids = ids
+                return Message()
+
+        fake_client = FakeClient()
+        original_open = telegram_history_client.open_telethon_client
+        try:
+            async def fake_open(runtime, auth_mode):
+                self.assertEqual(auth_mode, "user")
+                return fake_client
+
+            telegram_history_client.open_telethon_client = fake_open
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                result = asyncio.run(
+                    telegram_history_client.fetch_and_export_message(
+                        runtime,
+                        conn,
+                        "https://t.me/bezaspera/2833",
+                        tmp_dir,
+                    )
+                )
+                output_path = Path(result["output_file"])
+                self.assertTrue(output_path.exists())
+                text = output_path.read_text(encoding="utf-8")
+        finally:
+            telegram_history_client.open_telethon_client = original_open
+
+        self.assertEqual(fake_client.channel, "@bezaspera")
+        self.assertEqual(fake_client.ids, 2833)
+        row = conn.execute(
+            "SELECT message_id, text, sender_username FROM messages WHERE channel_id = 77 AND message_id = 2833"
+        ).fetchone()
+        self.assertEqual(row["message_id"], 2833)
+        self.assertEqual(row["text"], "30 постов\nРазбор списка")
+        self.assertEqual(row["sender_username"], "bezaspera")
+        self.assertIn("[30 постов](https://t.me/bezaspera/1)", text)
+        self.assertNotIn("## Unresolved Links", text)
+
+    def test_export_single_message_source_uses_article_skill_scratch_dir_by_default(self) -> None:
+        class Entity:
+            id = 1
+            username = "bezaspera"
+            title = "Без aspera"
+
+        class Message:
+            id = 2833
+            message = "30 постов"
+            text = message
+            date = datetime(2026, 5, 14, 14, 27, 1, tzinfo=timezone.utc)
+            entities = []
+
+        original_dir = telegram_history_client.SINGLE_MESSAGE_EXPORT_DIR
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            telegram_history_client.SINGLE_MESSAGE_EXPORT_DIR = Path(tmp_dir) / "scratch" / "article-to-obsidian-kb" / "telegram"
+            try:
+                output_path = telegram_history_client.export_single_message_source(
+                    Entity(),
+                    Message(),
+                    "https://t.me/bezaspera/2833",
+                    None,
+                )
+            finally:
+                telegram_history_client.SINGLE_MESSAGE_EXPORT_DIR = original_dir
+
+        self.assertEqual(
+            output_path.parent,
+            Path(tmp_dir) / "scratch" / "article-to-obsidian-kb" / "telegram",
+        )
 
     def test_parse_until_datetime_uses_end_of_day_for_date_only(self) -> None:
         self.assertEqual(
@@ -835,11 +1078,11 @@ user_password = "pw_x"
             telegram_history_client.current_read_inbox_max_id = original_current_read
 
         self.assertEqual(result["processed_messages"], 0)
-        self.assertFalse(result["marked_read"])
-        self.assertIsNone(result["current_read_max_id"])
-        self.assertIsNone(result["marked_read_from"])
-        self.assertIsNone(result["marked_read_until"])
-        self.assertEqual(mark_calls, [])
+        self.assertTrue(result["marked_read"])
+        self.assertEqual(result["current_read_max_id"], 5)
+        self.assertEqual(result["marked_read_from"], 6)
+        self.assertEqual(result["marked_read_until"], 10)
+        self.assertEqual(mark_calls, [(1, 10)])
 
     def test_sync_one_channel_mark_read_skips_ack_when_range_already_read(self) -> None:
         conn = sqlite3.connect(":memory:")
