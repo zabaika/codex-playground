@@ -28,7 +28,8 @@ from telegram_shared.config import load_runtime_config as shared_load_runtime_co
 
 APP_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = Path(os.environ.get("TELEGRAM_CONNECTOR_PROJECT_ROOT", "")).expanduser() if os.environ.get("TELEGRAM_CONNECTOR_PROJECT_ROOT") else APP_DIR
-BASE_DIR = PROJECT_ROOT
+# Runtime state must live next to the executed module, not in the source checkout.
+BASE_DIR = APP_DIR
 CONFIG_DIR = BASE_DIR / "config"
 RUNTIME_LOCAL_FILE = CONFIG_DIR / "runtime.local.toml"
 DATA_DIR = BASE_DIR / "data"

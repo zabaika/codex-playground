@@ -16,6 +16,24 @@ assert SPEC.loader is not None
 SPEC.loader.exec_module(telegram_connector)
 
 
+def load_bridge_module_with_env(**env: str):
+    spec = importlib.util.spec_from_file_location("telegram_bridge_module_env", MODULE_PATH)
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    original_env = {key: os.environ.get(key) for key in env}
+    try:
+        for key, value in env.items():
+            os.environ[key] = value
+        spec.loader.exec_module(module)
+    finally:
+        for key, value in original_env.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+    return module
+
+
 class TelegramConnectorTests(unittest.TestCase):
     def setUp(self) -> None:
         self._original_load_runtime_config = telegram_connector.load_runtime_config
@@ -29,6 +47,15 @@ class TelegramConnectorTests(unittest.TestCase):
 
     def tearDown(self) -> None:
         telegram_connector.load_runtime_config = self._original_load_runtime_config
+
+    def test_runtime_paths_stay_relative_to_app_dir_when_project_root_env_is_set(self) -> None:
+        module = load_bridge_module_with_env(
+            TELEGRAM_CONNECTOR_PROJECT_ROOT="/tmp/fake-project-root"
+        )
+
+        self.assertEqual(module.BASE_DIR, module.APP_DIR)
+        self.assertEqual(module.DATA_DIR, module.APP_DIR / "data")
+        self.assertEqual(module.RUNTIME_LOCAL_FILE, module.APP_DIR / "config" / "runtime.local.toml")
 
     def test_build_history_command_for_backfill_with_media(self) -> None:
         command = telegram_connector.build_history_command("/backfill @vcnews 200 media")
@@ -706,7 +733,7 @@ class TelegramConnectorTests(unittest.TestCase):
         self.assertIn("Latest rounds:", text)
         self.assertIn("final: ok, input=100, cached=25 (25.0%), output=15", text)
 
-    def test_project_root_override_points_data_files_to_project_dir(self) -> None:
+    def test_project_root_override_does_not_redirect_data_files(self) -> None:
         original = os.environ.get("TELEGRAM_CONNECTOR_PROJECT_ROOT")
         with tempfile.TemporaryDirectory() as tmp_dir:
             os.environ["TELEGRAM_CONNECTOR_PROJECT_ROOT"] = tmp_dir
@@ -719,8 +746,8 @@ class TelegramConnectorTests(unittest.TestCase):
         else:
             os.environ["TELEGRAM_CONNECTOR_PROJECT_ROOT"] = original
 
-        self.assertEqual(module.BASE_DIR, Path(tmp_dir))
-        self.assertEqual(module.DATA_DIR, Path(tmp_dir) / "data")
+        self.assertEqual(module.BASE_DIR, module.APP_DIR)
+        self.assertEqual(module.DATA_DIR, module.APP_DIR / "data")
 
     def test_handle_history_command_passes_minimal_secret_env_to_subprocess(self) -> None:
         update = {

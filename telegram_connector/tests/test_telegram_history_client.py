@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 import asyncio
 import types
+from typing import Any
 
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "telegram_history_client.py"
@@ -21,7 +22,34 @@ assert SPEC.loader is not None
 SPEC.loader.exec_module(telegram_history_client)
 
 
+def load_history_client_module_with_env(**env: str) -> Any:
+    spec = importlib.util.spec_from_file_location("telegram_history_client_module_env", MODULE_PATH)
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    original_env = {key: os.environ.get(key) for key in env}
+    try:
+        for key, value in env.items():
+            os.environ[key] = value
+        spec.loader.exec_module(module)
+    finally:
+        for key, value in original_env.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+    return module
+
+
 class TelegramHistoryClientTests(unittest.TestCase):
+    def test_runtime_paths_stay_relative_to_app_dir_when_project_root_env_is_set(self) -> None:
+        module = load_history_client_module_with_env(
+            TELEGRAM_CONNECTOR_PROJECT_ROOT="/tmp/fake-project-root"
+        )
+
+        self.assertEqual(module.BASE_DIR, module.APP_DIR)
+        self.assertEqual(module.DATA_DIR, module.APP_DIR / "data")
+        self.assertEqual(module.SESSION_DIR, module.APP_DIR / "data" / "sessions")
+
     def test_init_db_creates_expected_tables(self) -> None:
         conn = sqlite3.connect(":memory:")
         telegram_history_client.init_db(conn)
@@ -220,7 +248,7 @@ user_password = "pw_x"
             [("@a", 5000), ("@b", 1000)],
         )
 
-    def test_project_root_override_points_runtime_paths_to_project_dir(self) -> None:
+    def test_project_root_override_does_not_redirect_runtime_paths(self) -> None:
         original = os.environ.get("TELEGRAM_CONNECTOR_PROJECT_ROOT")
         with tempfile.TemporaryDirectory() as tmp_dir:
             os.environ["TELEGRAM_CONNECTOR_PROJECT_ROOT"] = tmp_dir
@@ -233,9 +261,9 @@ user_password = "pw_x"
         else:
             os.environ["TELEGRAM_CONNECTOR_PROJECT_ROOT"] = original
 
-        self.assertEqual(module.BASE_DIR, Path(tmp_dir))
-        self.assertEqual(module.DATA_DIR, Path(tmp_dir) / "data")
-        self.assertEqual(module.DB_FILE, Path(tmp_dir) / "data" / "telegram_history.sqlite3")
+        self.assertEqual(module.BASE_DIR, module.APP_DIR)
+        self.assertEqual(module.DATA_DIR, module.APP_DIR / "data")
+        self.assertEqual(module.DB_FILE, module.APP_DIR / "data" / "telegram_history.sqlite3")
 
     def test_parse_channel_list_supports_single_and_multiple_channels(self) -> None:
         self.assertEqual(telegram_history_client.parse_channel_list("@vcnews"), ["@vcnews"])
