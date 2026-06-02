@@ -52,7 +52,10 @@ MOST_POPULAR_HEADING = "Наиболее популярное"
 OPEN_QUESTIONS_HEADING = "Незакрытые вопросы/продолжения"
 QUESTION_ANSWER_LINKS_HEADING = "Связки вопрос-ответ/развитие темы"
 POPULAR_LINK_LINE_RE = re.compile(
-    r"^(?P<prefix>\d+\.\s+)?(?P<link><?https?://\S+>?)(?P<sep>\s*-\s+)(?P<title>\S.*)$",
+    r"^(?P<prefix>(?:\d+\.\s+|[-•]\s+)?)"
+    r"(?P<link><?https?://\S+>?)"
+    r"(?P<sep>\s*-\s+)"
+    r"(?P<title>\S.*)$",
     re.IGNORECASE,
 )
 

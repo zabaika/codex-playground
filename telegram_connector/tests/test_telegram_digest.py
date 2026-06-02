@@ -639,6 +639,67 @@ batch_digest_template = "Batch={batch_index}"
         self.assertNotIn("https://www.boe.es/eli/es/ai/2022/07/21/(2)", repaired)
         self.assertNotIn("https://www.seg-social.es/wps/portal/wss/internet/InformacionUtil/32078/32253", repaired)
 
+    def test_repair_popular_links_in_summary_rewrites_bulleted_external_and_public_links(self) -> None:
+        messages = [
+            {
+                "channel_id": 1449711572,
+                "title": "Mentors @ GetMentor.dev",
+                "username": None,
+                "message_id": 54394,
+                "date_utc": "2026-06-01T06:23:32+00:00",
+                "text": "ещё наброс про ИИ конкретно для 1Сников делал недавно: https://habr.com/ru/articles/1040812/",
+                "ocr_text": None,
+            },
+            {
+                "channel_id": 1449711572,
+                "title": "Mentors @ GetMentor.dev",
+                "username": None,
+                "message_id": 54397,
+                "date_utc": "2026-06-01T08:25:33+00:00",
+                "text": "https://tolk.ws/@wingedfox/630-kak-pisat-knizhku-s-ii-uroki-i-vyvody?utm_source=tolk_ref&utm_campaign=44b085b8d9910756 Вот немного про мой опыт затачивания ИИшки в процессе написания книги",
+                "ocr_text": None,
+            },
+            {
+                "channel_id": 1449711572,
+                "title": "Mentors @ GetMentor.dev",
+                "username": None,
+                "message_id": 54404,
+                "date_utc": "2026-06-01T16:36:16+00:00",
+                "text": "Мы запускаем Гильдию ИИ-Инженеров 🤖 https://t.me/ai_engineers_guild",
+                "ocr_text": None,
+            },
+            {
+                "channel_id": 1449711572,
+                "title": "Mentors @ GetMentor.dev",
+                "username": None,
+                "message_id": 54401,
+                "date_utc": "2026-06-01T15:57:06+00:00",
+                "text": "нарушу ли я правила, если кину сюда анонс макрокомьюинити ИИ инжинерной гильдии?",
+                "ocr_text": None,
+            },
+        ]
+        summary = "\n".join(
+            [
+                "Главные темы дня",
+                "ИИ в работе и запуск гильдии ИИ-инженеров",
+                "Наиболее популярное",
+                "- https://habr.com/ru/articles/1040812/ - ИИ для 1С: обсуждение статьи и оговорок к её выводам",
+                "- https://tolk.ws/@wingedfox/630-kak-pisat-knizhku-s-ii-uroki-i-vyvody?utm_source=tolk_ref&utm_campaign=44b085b8d9910756 - Опыт использования ИИ при написании книги",
+                "- https://t.me/ai_engineers_guild - Запуск Гильдии ИИ-инженеров",
+                "- https://t.me/c/1449711572/54401 - Можно ли публиковать анонс сообщества в чате",
+            ]
+        )
+
+        repaired = telegram_digest.repair_popular_links_in_summary(summary, messages)
+
+        self.assertIn("- https://t.me/c/1449711572/54394 - ИИ для 1С: обсуждение статьи и оговорок к её выводам", repaired)
+        self.assertIn("- https://t.me/c/1449711572/54397 - Опыт использования ИИ при написании книги", repaired)
+        self.assertIn("- https://t.me/c/1449711572/54404 - Запуск Гильдии ИИ-инженеров", repaired)
+        self.assertIn("- https://t.me/c/1449711572/54401 - Можно ли публиковать анонс сообщества в чате", repaired)
+        self.assertNotIn("https://habr.com/ru/articles/1040812/", repaired)
+        self.assertNotIn("https://tolk.ws/@wingedfox/630-kak-pisat-knizhku-s-ii-uroki-i-vyvody?utm_source=tolk_ref&utm_campaign=44b085b8d9910756", repaired)
+        self.assertNotIn("https://t.me/ai_engineers_guild - Запуск Гильдии ИИ-инженеров", repaired)
+
     def test_format_digest_summary_for_telegram_normalizes_lead_line_named_as_main_topics(self) -> None:
         formatted = telegram_digest.format_digest_summary_for_telegram(
             "\n".join(
