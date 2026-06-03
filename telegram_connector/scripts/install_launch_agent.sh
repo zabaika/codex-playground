@@ -16,6 +16,8 @@ DIGEST_STARTUP_LOG="$PROJECT_LOG_DIR/digest.startup.log"
 DIGEST_STDOUT_LOG="$PROJECT_LOG_DIR/digest.stdout.log"
 DIGEST_STDERR_LOG="$PROJECT_LOG_DIR/digest.stderr.log"
 DIGEST_LAST_ATTEMPT_LOG="$PROJECT_LOG_DIR/digest.last_attempt.json"
+BRIDGE_LAUNCHER="$SERVICE_ROOT/scripts/telegram-connector-bridge-launcher"
+DIGEST_LAUNCHER="$SERVICE_ROOT/scripts/telegram-connector-digest-launcher"
 
 resolve_python_bin() {
   local explicit="${PYTHON_BIN:-}"
@@ -116,6 +118,13 @@ EOF
 
 chmod +x "$SERVICE_ROOT/scripts/run_telegram_bridge.sh"
 
+cat > "$BRIDGE_LAUNCHER" <<EOF
+#!/bin/sh
+exec /bin/bash "$SERVICE_ROOT/scripts/run_telegram_bridge.sh"
+EOF
+
+chmod +x "$BRIDGE_LAUNCHER"
+
 cat > "$SERVICE_ROOT/scripts/run_telegram_digest.sh" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
@@ -163,6 +172,13 @@ EOF
 
 chmod +x "$SERVICE_ROOT/scripts/run_telegram_digest.sh"
 
+cat > "$DIGEST_LAUNCHER" <<EOF
+#!/bin/sh
+exec /bin/bash "$SERVICE_ROOT/scripts/run_telegram_digest.sh"
+EOF
+
+chmod +x "$DIGEST_LAUNCHER"
+
 cat > "$BRIDGE_PLIST_PATH" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -173,7 +189,7 @@ cat > "$BRIDGE_PLIST_PATH" <<EOF
 
     <key>ProgramArguments</key>
     <array>
-      <string>$SERVICE_ROOT/scripts/run_telegram_bridge.sh</string>
+      <string>$BRIDGE_LAUNCHER</string>
     </array>
 
     <key>EnvironmentVariables</key>
@@ -213,7 +229,7 @@ cat > "$DIGEST_PLIST_PATH" <<EOF
 
     <key>ProgramArguments</key>
     <array>
-      <string>$SERVICE_ROOT/scripts/run_telegram_digest.sh</string>
+      <string>$DIGEST_LAUNCHER</string>
     </array>
 
     <key>EnvironmentVariables</key>

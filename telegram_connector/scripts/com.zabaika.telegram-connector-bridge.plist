@@ -7,7 +7,7 @@
 
     <key>ProgramArguments</key>
     <array>
-      <string>__SERVICE_ROOT__/scripts/run_telegram_bridge.sh</string>
+      <string>__SERVICE_ROOT__/scripts/telegram-connector-bridge-launcher</string>
     </array>
 
     <key>EnvironmentVariables</key>

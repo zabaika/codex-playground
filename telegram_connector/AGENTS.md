@@ -60,6 +60,7 @@ If README, code, and tests disagree, update them together.
 - Child subprocesses must receive only the allowlisted env subset they need.
 - After changing bridge code, `telegram_shared`, or `config/runtime.local.toml`, redeploy the launchd service with `scripts/install_launch_agent.sh`, not only `scripts/restart_launch_agent.sh`.
 - `restart_launch_agent.sh` only reloads the already installed plist/service-root copy; it does not recopy fresh code or config into `~/Library/Application Support/telegram_connector_service`.
+- Keep LaunchAgent `ProgramArguments[0]` pointed at the generated `telegram-connector-*-launcher` executable. The launcher invokes the shell runner through `/bin/bash`; do not restore direct plist execution of `run_telegram_*.sh`.
 - Scheduled `digest` is a one-shot job, not a daemon: keep the outer hard TTL in the shared runner and keep `bridge` free of that TTL mechanism.
 
 ## Testing

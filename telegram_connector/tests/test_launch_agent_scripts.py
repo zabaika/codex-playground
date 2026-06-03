@@ -5,6 +5,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 INSTALLER = ROOT / "scripts" / "install_launch_agent.sh"
 RESTARTER = ROOT / "scripts" / "restart_launch_agent.sh"
+BRIDGE_PLIST_TEMPLATE = ROOT / "scripts" / "com.zabaika.telegram-connector-bridge.plist"
 
 
 class LaunchAgentScriptTests(unittest.TestCase):
@@ -15,6 +16,8 @@ class LaunchAgentScriptTests(unittest.TestCase):
         self.assertIn('STDOUT_LOG="$PROJECT_LOG_DIR/bridge.stdout.log"', content)
         self.assertIn('STDERR_LOG="$PROJECT_LOG_DIR/bridge.stderr.log"', content)
         self.assertIn('DIGEST_LAST_ATTEMPT_LOG="$PROJECT_LOG_DIR/digest.last_attempt.json"', content)
+        self.assertIn('BRIDGE_LAUNCHER="$SERVICE_ROOT/scripts/telegram-connector-bridge-launcher"', content)
+        self.assertIn('DIGEST_LAUNCHER="$SERVICE_ROOT/scripts/telegram-connector-digest-launcher"', content)
         self.assertIn('rm -f "$PROJECT_LOG_DIR"/bridge.startup.log', content)
         self.assertNotIn('"$SERVICE_ROOT"/data/launchd', content)
 
@@ -28,12 +31,14 @@ class LaunchAgentScriptTests(unittest.TestCase):
         self.assertIn('printf \'[%s] starting telegram bridge from %s\\n\'', content)
         self.assertIn('STARTUP_LOG="\\$TELEGRAM_CONNECTOR_PROJECT_ROOT/data/launchd/bridge.startup.log"', content)
         self.assertIn('exec "$PYTHON_BIN" "\\$ROOT/telegram_bridge.py" listen --run-commands', content)
+        self.assertIn('exec /bin/bash "$SERVICE_ROOT/scripts/run_telegram_bridge.sh"', content)
         self.assertIn('AUDIT_LOG="\\$TELEGRAM_CONNECTOR_PROJECT_ROOT/data/launchd/digest.last_attempt.json"', content)
         self.assertIn('arming digest ttl=%ss grace=%ss', content)
         self.assertIn('exec "$PYTHON_BIN" "\\$ROOT/common/ttl_runner.py" \\', content)
         self.assertIn('--audit-file "\\$AUDIT_LOG" \\', content)
         self.assertIn('--use-caffeinate \\', content)
         self.assertIn('-- "$PYTHON_BIN" "\\$ROOT/telegram_digest.py" run', content)
+        self.assertIn('exec /bin/bash "$SERVICE_ROOT/scripts/run_telegram_digest.sh"', content)
 
     def test_installer_sets_project_root_env_in_plist(self) -> None:
         content = INSTALLER.read_text(encoding="utf-8")
@@ -47,6 +52,11 @@ class LaunchAgentScriptTests(unittest.TestCase):
         self.assertIn('launchctl load "$PLIST_PATH"', content)
         self.assertIn('com.zabaika.telegram-connector-bridge', content)
 
+    def test_bridge_plist_template_uses_launcher_entrypoint(self) -> None:
+        content = BRIDGE_PLIST_TEMPLATE.read_text(encoding="utf-8")
+        self.assertIn("__SERVICE_ROOT__/scripts/telegram-connector-bridge-launcher", content)
+        self.assertNotIn("__SERVICE_ROOT__/scripts/run_telegram_bridge.sh", content)
+
     def test_launch_agent_installer_copies_digest_script(self) -> None:
         content = INSTALLER.read_text(encoding="utf-8")
         self.assertIn('cp "$SOURCE_ROOT/telegram_digest.py" "$SERVICE_ROOT/telegram_digest.py"', content)
@@ -58,7 +68,8 @@ class LaunchAgentScriptTests(unittest.TestCase):
         self.assertIn('<key>StartCalendarInterval</key>', content)
         self.assertIn('<key>Hour</key>', content)
         self.assertIn('<key>Minute</key>', content)
-        self.assertIn('run_telegram_digest.sh', content)
+        self.assertIn('<string>$DIGEST_LAUNCHER</string>', content)
+        self.assertIn('<string>$BRIDGE_LAUNCHER</string>', content)
 
 
 if __name__ == "__main__":
