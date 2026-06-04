@@ -3,6 +3,7 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 
 SCRIPT_PATH = (
@@ -66,6 +67,61 @@ class DetectSourceRouteTests(unittest.TestCase):
         )
         route, _, _ = detect_route(load_source_text(source), "")
         self.assertEqual("general", route)
+
+    def test_load_source_text_reads_pdf_via_pdftotext(self) -> None:
+        temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(temp_dir.cleanup)
+        path = Path(temp_dir.name) / "source.pdf"
+        path.write_bytes(b"%PDF-1.7\n")
+        with mock.patch.object(
+            MODULE.subprocess,
+            "run",
+            return_value=mock.Mock(returncode=0, stdout="Engineering platform workflow\n", stderr=""),
+        ) as mocked_run:
+            text = load_source_text(path)
+        self.assertEqual("Engineering platform workflow", text)
+        mocked_run.assert_called_once_with(
+            ["pdftotext", str(path), "-"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=MODULE.PDFTOTEXT_TIMEOUT_SECONDS,
+        )
+
+    def test_load_source_text_raises_clear_error_when_pdftotext_is_missing(self) -> None:
+        temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(temp_dir.cleanup)
+        path = Path(temp_dir.name) / "source.pdf"
+        path.write_bytes(b"%PDF-1.7\n")
+        with mock.patch.object(
+            MODULE.subprocess,
+            "run",
+            side_effect=FileNotFoundError("pdftotext not found"),
+        ):
+            with self.assertRaisesRegex(
+                ValueError,
+                "Could not extract text from PDF source .*Install `pdftotext` or provide an extracted text file",
+            ):
+                load_source_text(path)
+
+    def test_load_source_text_raises_clear_error_when_pdftotext_times_out(self) -> None:
+        temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(temp_dir.cleanup)
+        path = Path(temp_dir.name) / "source.pdf"
+        path.write_bytes(b"%PDF-1.7\n")
+        with mock.patch.object(
+            MODULE.subprocess,
+            "run",
+            side_effect=MODULE.subprocess.TimeoutExpired(
+                cmd=["pdftotext", str(path), "-"],
+                timeout=MODULE.PDFTOTEXT_TIMEOUT_SECONDS,
+            ),
+        ):
+            with self.assertRaisesRegex(
+                ValueError,
+                rf"Could not extract text from PDF source .*`pdftotext` exceeded {MODULE.PDFTOTEXT_TIMEOUT_SECONDS}s",
+            ):
+                load_source_text(path)
 
 
 if __name__ == "__main__":

@@ -5,6 +5,9 @@ import argparse
 import json
 from pathlib import Path
 import re
+import subprocess
+
+PDFTOTEXT_TIMEOUT_SECONDS = 30
 
 
 ENGINEERING_RULES = [
@@ -216,7 +219,42 @@ GENERAL_PRIORITY_PATTERNS = [
 ]
 
 
+def extract_pdf_text(path: Path) -> str:
+    try:
+        result = subprocess.run(
+            ["pdftotext", str(path), "-"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=PDFTOTEXT_TIMEOUT_SECONDS,
+        )
+    except FileNotFoundError as exc:
+        raise ValueError(
+            f"Could not extract text from PDF source {path}. "
+            "Install `pdftotext` or provide an extracted text file."
+        ) from exc
+    except subprocess.TimeoutExpired as exc:
+        raise ValueError(
+            f"Could not extract text from PDF source {path}: "
+            f"`pdftotext` exceeded {PDFTOTEXT_TIMEOUT_SECONDS}s."
+        ) from exc
+    if result.returncode != 0:
+        stderr = (result.stderr or "").strip()
+        detail = f" {stderr}" if stderr else ""
+        raise ValueError(
+            f"Could not extract text from PDF source {path} with `pdftotext`.{detail}"
+        )
+    text = result.stdout.strip()
+    if not text:
+        raise ValueError(
+            f"Could not extract text from PDF source {path}: `pdftotext` returned empty output."
+        )
+    return text
+
+
 def load_source_text(path: Path) -> str:
+    if path.suffix.lower() == ".pdf":
+        return extract_pdf_text(path)
     return path.read_text(encoding="utf-8")
 
 
