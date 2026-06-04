@@ -19,6 +19,8 @@ council_verdict = "/absolute/path/to/Ideas/LLM Council results"
 # Optional absolute project-root override used when installed-copy runtime
 # must still relativize project-local `source` artifacts such as
 # `scratch/llm-council/council-payload-...json`.
+# Also use this when multiple local anchors could imply different project roots
+# and you want one explicit canonical base.
 # `CODEX_PLAYGROUND_PROJECT_ROOT` takes precedence over this key when both exist.
 # project_root = "/absolute/path/to/Playground"
 # Keep temporary and staging files for this skill under scratch/, not repo-local tmp/.

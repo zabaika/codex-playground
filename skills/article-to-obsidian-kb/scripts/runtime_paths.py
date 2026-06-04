@@ -69,6 +69,25 @@ def derive_project_root_from_kb_index_config(config: dict[str, object]) -> Path 
     return None
 
 
+def _consensus_project_root(candidates: list[Path]) -> Path:
+    unique_candidates: list[Path] = []
+    seen: set[Path] = set()
+    for candidate in candidates:
+        resolved = candidate.resolve(strict=False)
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        unique_candidates.append(resolved)
+    if len(unique_candidates) == 1:
+        return unique_candidates[0]
+    formatted = ", ".join(str(candidate) for candidate in unique_candidates)
+    raise ValueError(
+        "Project root could not be resolved unambiguously from local anchors. "
+        f"Derived candidates: {formatted}. "
+        "Set CODEX_PLAYGROUND_PROJECT_ROOT or paths.project_root explicitly."
+    )
+
+
 def resolve_project_root(
     *,
     config: dict[str, object] | None,
@@ -84,12 +103,17 @@ def resolve_project_root(
             configured_root = string_value(paths.get("project_root"), "")
             if configured_root:
                 return resolve_against(skill_dir, configured_root)
-
+    local_candidates: list[Path] = []
+    if config:
         derived_root = derive_project_root_from_kb_index_config(config)
         if derived_root is not None:
-            return derived_root
-
-    return infer_repo_root(skill_dir)
+            local_candidates.append(derived_root)
+    inferred_root = infer_repo_root(skill_dir)
+    if inferred_root is not None:
+        local_candidates.append(inferred_root)
+    if not local_candidates:
+        return None
+    return _consensus_project_root(local_candidates)
 
 
 def resolve_project_local_path(
