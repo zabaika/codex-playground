@@ -119,7 +119,15 @@ Bullet format:
 
 ## Write Path Hygiene
 
+### Pre-Write Approval Pass
+
 - Finalize the note content in staging first and then perform one destination write for the finished artifact.
+- Before any destination write, present a diff for every updated destination note and wait for explicit user approval.
+- Diffs for newly created notes are optional unless the user explicitly asks to review them too.
+- Treat this staged diff review as a required approval gate for the whole run: do not write updated or created notes to the destination vault until the user has approved proceeding.
+
+### Post-Write Verification Pass
+
 - Prefer a single copy or move of the finalized artifact over several incremental destination rewrites.
 - Immediately read the destination note back after that write and verify the expected final state before running further checks, searches, or user-facing reporting.
 - If the read-back content does not match the intended final artifact, stop and investigate the mismatch before retrying; do not spend repeated attempts on blind rewrites against a stale assumption about what was saved.

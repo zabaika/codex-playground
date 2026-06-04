@@ -204,6 +204,11 @@ Frontmatter is part of the note schema, not optional decoration.
 - Prefer one stronger section over two overlapping ones.
 - For source-derived notes, use a content-first body with earned sections rather than filling a fixed template mechanically.
 - Treat `3-5` body sections as the normal target for a strong source-derived note; go beyond that only when the source clearly contains multiple distinct layers that would otherwise be lost.
+- For source-derived notes, prefer topic-first prose over source-reporting prose.
+- The note should read as a note about the mechanism, risk, operating model, recommendation, or concept itself, not as a note about the source artifact.
+- Rewrite source-container or source-actor phrasing into direct subject prose whenever the source identity is not materially needed for interpretation.
+- Keep source attribution when it materially changes interpretation, scope, provenance, or trustworthiness of a concrete claim, number, or observation.
+- This is especially important for the intro and other stable body sections; provenance-oriented sections such as dated evidence logs remain exempt from this de-meta preference.
 - Before saving any non-`concept` note, check that each section has a distinct informational role; if two sections mostly carry the same signal, merge them or delete the weaker one.
 - Do not create a section only because the schema supports that section family; include it only when the source gives enough independent material for it.
 - Use schema-owned section families when they fit the source cleanly:

@@ -95,12 +95,19 @@ SOURCE_SCAFFOLDING_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
         "source-container-reference",
     ),
     (
+        re.compile(
+            r"\b(?:в|во)\s+статье\b|\b(?:этот|это)\s+(?:материал|текст|доклад|подкаст)\b",
+            re.IGNORECASE,
+        ),
+        "source-container-reference",
+    ),
+    (
         re.compile(r"\bпо словам (?:спикера|автора)\b", re.IGNORECASE),
         "attribution-clause",
     ),
     (
         re.compile(
-            r"\b(?:спикер|автор|источник)\b(?:\s+\w+){0,2}\s+(?:выделяет|говорит|отмечает|считает|рекомендует|показывает|отделяет|называет|подчеркивает|подчёркивает)\b",
+            r"\b(?:спикер|автор|источник|статья|материал|текст|доклад|подкаст)\b(?:\s+\w+){0,3}\s+(?:выделяет|говорит|отмечает|считает|рекомендует|показывает|разбирает|собирает|сводит|объясняет|описывает|подчеркивает|подчёркивает)\b",
             re.IGNORECASE,
         ),
         "source-actor-reporting-verb",
@@ -812,6 +819,35 @@ def _check_duplicate_headings(body: str) -> list[Violation]:
     return violations
 
 
+def _check_source_note_demeta_intro(body: str) -> list[Violation]:
+    violations: list[Violation] = []
+    lines = body.splitlines()
+    intro_lines: list[str] = []
+    for idx, line in enumerate(lines, start=1):
+        if HEADING_RE.match(line):
+            break
+        if line.strip():
+            intro_lines.append(line.strip())
+    if not intro_lines:
+        return violations
+    intro = " ".join(intro_lines)
+    patterns = (
+        r"^(?:Статья|Материал|Текст|Доклад|Подкаст)\b",
+        r"^(?:Авторы)\b",
+    )
+    for pattern in patterns:
+        if re.search(pattern, intro, re.IGNORECASE):
+            violations.append(
+                Violation(
+                    "prose.de-meta:intro-source-reporting",
+                    "Вводный абзац source-derived note должен быть topic-first, а не начинаться с source-reporting phrasing про сам source artifact.",
+                    1,
+                )
+            )
+            break
+    return violations
+
+
 def _check_required_headings(body: str, required_headings: list[str]) -> list[Violation]:
     violations: list[Violation] = []
     lines = set(line.strip() for line in body.splitlines())
@@ -1428,6 +1464,7 @@ def collect_violations_from_text(
     body_violations: list[Violation] = []
     if require_intro_before_first_heading and expect == "source":
         body_violations.extend(_check_intro_before_first_heading(body))
+        body_violations.extend(_check_source_note_demeta_intro(body))
     if expect == "structured-council-verdict":
         body_violations.extend(_check_council_verdict_shape(body))
     body_violations.extend(_check_duplicate_headings(body))

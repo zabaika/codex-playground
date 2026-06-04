@@ -171,8 +171,9 @@ python3 scripts/detect_source_route.py --source-file "[SOURCE_FILE]"
 10. Re-check final titles, tags, links, duplicate risk, and chronology against the canonical contracts before saving.
    - Re-run the canonical closing-section deduplication pass after inline wikilinks are finalized.
    - Treat existing note titles inside wikilinks as canonical identifiers; do not translate, prune, or de-anglicize links just because their titles contain English terms.
-11. After each destination write, run the canonical post-write verification from [references/update-patterns.md](references/update-patterns.md) before continuing with more checks, searches, or reporting.
-12. After all destination writes are complete, refresh `kb-index` once when and only when all of these are true:
+11. Before any destination write, run the canonical pre-write approval pass from [references/update-patterns.md](references/update-patterns.md).
+12. After each destination write, run the canonical post-write verification pass from [references/update-patterns.md](references/update-patterns.md) before continuing with more checks, searches, or reporting.
+13. After all destination writes are complete, refresh `kb-index` once when and only when all of these are true:
    - the run actually created or updated at least one note
    - `paths.kb_index_config` is present
    - the run is not a dry-run or analysis-only pass
@@ -184,7 +185,7 @@ python3 scripts/detect_source_route.py --source-file "[SOURCE_FILE]"
 
    - Treat this as a best-effort post-write sync, not as part of note generation itself.
    - If the index refresh fails, do not roll back already-saved notes. Report the failure briefly in the final response and let the scheduled auto-update recover later.
-13. When you add or tighten a mechanically checkable note-contract rule in this skill, update the local contract harness in the same change.
+14. When you add or tighten a mechanically checkable note-contract rule in this skill, update the local contract harness in the same change.
    - This applies to rules about frontmatter, tags, headings, spacing, closing sections, wikilinks, language cleanup, emphasis, or preservation of explicitly required examples.
    - Update at least one of:
      - the checker under `scripts/`
@@ -192,7 +193,7 @@ python3 scripts/detect_source_route.py --source-file "[SOURCE_FILE]"
      - a clean passing fixture
      - a `unittest` that proves the new rule is enforced
    - Do not treat semantic source understanding as testable by this harness. The harness exists to protect deterministic output constraints after note drafting, not to prove that every future source was interpreted perfectly.
-14. When this skill's contract layer changes, run the local note-contract tests before finishing the change.
+15. When this skill's contract layer changes, run the local note-contract tests before finishing the change.
    - Treat changes to any of these files as a required test trigger:
      - `SKILL.md`
      - `config/runtime.example.toml`
@@ -387,6 +388,8 @@ python3 -m unittest discover -s skills/article-to-obsidian-kb/tests -q
   - apply the first-mention abbreviation rule from [references/vault-conventions.md](references/vault-conventions.md) during early synthesis when the draft introduces a new compressed label
   - if the draft already has more than `5` body sections, challenge whether every section is earned and distinct before keeping that structure
   - treat this as an early synthesis guardrail, not only as a late cleanup step
+- Before finalizing any source-derived note, run the mandatory de-meta pass from [references/vault-conventions.md](references/vault-conventions.md).
+- Apply that pass to the intro and stable body sections so the saved note remains topic-first rather than source-reporting by default.
 - Run one final note-compliance pass before saving any touched note:
   - apply the full final-note contract from [references/vault-conventions.md](references/vault-conventions.md) to the final saved artifact
   - this pass is mandatory for every major rule family in that canonical contract, not just for the family you touched most recently
@@ -394,6 +397,7 @@ python3 -m unittest discover -s skills/article-to-obsidian-kb/tests -q
   - if you updated an existing note, run this pass against the whole merged note rather than only the latest fragment
   - re-check the main note body for source-scaffolding under the rule set from [references/vault-conventions.md](references/vault-conventions.md); keep schema-defined dated provenance sections such as `headings.evidence`, `headings.additional_insights`, and `headings.observed_practices` exempt from that cleanup
   - re-check the prose for metaphorical or fashionable jargon and prefer literal operational wording; when a term does not name a concrete role, artifact, step, criterion, mechanism, or constraint, rewrite it into one that does
+  - re-check source-derived notes for residual source-reporting prose in the intro and stable body sections, using the canonical de-meta rule from [references/vault-conventions.md](references/vault-conventions.md)
   - if the note is non-`concept` and has `headings.practice` or another clearly applied section, re-check the checklist rule from [references/vault-conventions.md](references/vault-conventions.md): checklists should preserve real decision structure, and surrounding applied prose should not duplicate the same actions or criteria
   - for any non-`concept` note, re-run the section-role pass against the final structure and remove any block that now mostly repeats another section after late rewrites
   - compare `headings.key_theses`, `headings.practice`, and `headings.pitfalls` for cross-section duplication; if an anti-pattern only mirrors an earlier recommendation, rewrite it into a concrete failure mode or remove it

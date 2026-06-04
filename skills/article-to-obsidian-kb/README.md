@@ -20,7 +20,9 @@ The skill:
 - Repository source of truth: `skills/article-to-obsidian-kb/`
 - Installed Codex copy: `~/.codex/skills/article-to-obsidian-kb`
 
-Edit the repository copy first. Reinstall into `~/.codex/skills` after changes.
+Make all edits only in the repository copy.
+Do not modify `~/.codex/skills/article-to-obsidian-kb` directly.
+Refresh the installed Codex copy only by reinstalling from `skills/article-to-obsidian-kb/`.
 
 ## Installation
 

@@ -31,6 +31,8 @@ Keep documentation split by responsibility:
 - when a workflow produces both a machine-readable payload and one or more human-readable derived artifacts, designate exactly one of them as the canonical source of truth and treat the others as derived views rather than parallel primary artifacts
 - when a workflow depends on canonical labels, headings, section names, statuses, field names, or other repeated identifiers, keep those literals in one machine-readable schema, manifest, or config owner and make every other layer reference that owner instead of duplicating the same strings by hand
 - treat local renaming, translation, or stylistic rewriting of schema-owned identifiers as a contract change rather than as ordinary content editing; update the canonical owner first, then update every consumer as one explicit migration
+- when a repository-managed tool or skill is installed or copied into a runtime location such as `~/.codex/skills`, treat the repository copy as the only editable owner and the installed/runtime copy as a derived artifact
+- do not edit the installed/runtime copy directly; change the repository copy and then refresh the installed copy through the canonical install or sync path
 
 ### Wrapper and Orchestration Inheritance
 

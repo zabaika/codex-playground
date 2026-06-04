@@ -20,10 +20,93 @@ EVIDENCE_HEADING = MODULE.EVIDENCE_HEADING
 KEY_THESES_HEADING = MODULE.heading("key_theses")
 PRACTICE_HEADING = MODULE.heading("practice")
 PITFALLS_HEADING = MODULE.heading("pitfalls")
+KEY_LESSONS_HEADING = MODULE.heading("key_lessons")
 CONCEPT_COMPARE_HEADING = MODULE.heading("concept_compare")
 
 
 class CheckNoteContractTests(unittest.TestCase):
+    def test_source_note_intro_must_not_start_with_source_artifact_reporting(self) -> None:
+        content = f"""---
+title: Тест de-meta intro
+source:
+  - https://example.com
+type: lessons
+tags:
+  - developer-productivity
+date: 2026
+---
+Статья ACM собирает в одну рамку восемь частых заблуждений о генеративном AI в разработке.
+{KEY_LESSONS_HEADING}
+1. **Тезис.** На написание кода уходит около `14%` времени.
+{RELATED_NOTES_HEADING}
+[[Percent Time Coding]]
+"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            fixture = Path(tmpdir) / "Тест de-meta intro.md"
+            fixture.write_text(content, encoding="utf-8")
+            violations = collect_violations(
+                fixture,
+                expect="source",
+                required_headings=[KEY_LESSONS_HEADING],
+            )
+        codes = {violation.code for violation in violations}
+        self.assertIn("prose.de-meta:intro-source-reporting", codes)
+        self.assertIn("prose.source-scaffolding:source-actor-reporting-verb", codes)
+
+    def test_topic_first_intro_passes_demeta_guardrail(self) -> None:
+        content = f"""---
+title: Тест topic-first intro
+source:
+  - https://example.com
+type: lessons
+tags:
+  - developer-productivity
+date: 2026
+---
+Главная ошибка в разговоре о генеративном AI в разработке — переоценка локального ускорения кодинга и недооценка всей инженерной системы.
+{KEY_LESSONS_HEADING}
+1. **Тезис.** На написание кода уходит около `14%` времени.
+{RELATED_NOTES_HEADING}
+[[Percent Time Coding]]
+"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            fixture = Path(tmpdir) / "Тест topic-first intro.md"
+            fixture.write_text(content, encoding="utf-8")
+            violations = collect_violations(
+                fixture,
+                expect="source",
+                required_headings=[KEY_LESSONS_HEADING],
+            )
+        codes = {violation.code for violation in violations}
+        self.assertNotIn("prose.de-meta:intro-source-reporting", codes)
+
+    def test_research_attribution_is_not_auto_flagged_as_demeta_failure(self) -> None:
+        content = f"""---
+title: Тест research attribution
+source:
+  - https://example.com
+type: lessons
+tags:
+  - developer-productivity
+date: 2026
+---
+Главное ограничение AI в разработке видно уже на уровне распределения времени.
+{KEY_LESSONS_HEADING}
+1. **Инженеры тратят на кодирование заметно меньше времени, чем кажется.** Исследование Microsoft за `2025` год показывает, что на написание кода приходится около `14%` времени.
+{RELATED_NOTES_HEADING}
+[[Percent Time Coding]]
+"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            fixture = Path(tmpdir) / "Тест research attribution.md"
+            fixture.write_text(content, encoding="utf-8")
+            violations = collect_violations(
+                fixture,
+                expect="source",
+                required_headings=[KEY_LESSONS_HEADING],
+            )
+        codes = {violation.code for violation in violations}
+        self.assertNotIn("prose.de-meta:intro-source-reporting", codes)
+
     def test_source_notes_default_to_bold_leading_checks(self) -> None:
         content = f"""---
 title: Тест default bold
