@@ -414,6 +414,7 @@ Rules:
 - normalize only deliberately supported command invocations
 - ambiguous free-form input must not trigger execution
 - only allow command execution from explicitly authorized callers or contexts
+- access-control helpers for command execution must fail closed when the required allowlist or authorization config is empty
 - if command execution is disabled for a surface, receiving inbound events must not silently trigger the underlying worker path anyway
 
 ## 7. Authorization and Access Rules
@@ -503,6 +504,7 @@ Database safety:
 
 - use parameterized SQL only
 - do not interpolate user-provided strings into SQL
+- do not accept SQL identifiers such as table or column names as free-form strings; use fixed constants or a narrow allowlist when dynamic identifiers are truly required
 
 Nullability convention:
 

@@ -75,7 +75,7 @@ openai_api_key = "<secret reference or local secret>"
 Notes:
 
 - `bridge.allowed_chat_ids` limits who may run `/agent` and `/reset`
-- `bridge.allowed_user_ids` and `bridge.allowed_usernames` add per-user protection on top of the chat allowlist
+- `bridge.allowed_user_ids` and `bridge.allowed_usernames` add per-user protection on top of the chat allowlist; if both are empty, bridge commands are denied
 - `bridge.allowed_usernames` may be a comma-separated value or a `keychain://...` reference that resolves to a comma-separated list
 - `bridge.default_command = "agent"` means plain text is treated as `/agent ...`; set it empty to require explicit commands
 - `bridge.text_chunk_size` controls Telegram reply chunking

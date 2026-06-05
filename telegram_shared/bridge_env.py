@@ -60,7 +60,7 @@ def is_user_allowed(
     allowed_usernames: set[str],
 ) -> bool:
     if not allowed_user_ids and not allowed_usernames:
-        return True
+        return False
     normalized_username = username.lower().lstrip("@")
     if allowed_user_ids and str(user_id or "") not in allowed_user_ids:
         return False

@@ -143,10 +143,10 @@ def merge_candidate_row(candidates: dict[str, dict[str, object]], row, source: s
             record['fts_rank'] = fts_rank
 
 
-def fetch_like_rows(conn, field_name: str, query_terms: list[str], limit: int) -> list:
+def fetch_links_out_rows(conn, query_terms: list[str], limit: int) -> list:
     if not query_terms:
         return []
-    clauses = " OR ".join(f"LOWER({field_name}) LIKE ?" for _ in query_terms)
+    clauses = " OR ".join("LOWER(links_out_json) LIKE ?" for _ in query_terms)
     params = [f"%{term}%" for term in query_terms]
     params.append(limit)
     return conn.execute(
@@ -273,7 +273,7 @@ def search_index(
         fts_params,
     ).fetchall()
     title_rows = fetch_title_rows(conn, query_terms, 50, note_type=note_type) if mode == 'title-first' else []
-    links_rows = [] if mode == 'title-first' else fetch_like_rows(conn, 'links_out_json', query_terms, 20)
+    links_rows = [] if mode == 'title-first' else fetch_links_out_rows(conn, query_terms, 20)
     candidates: dict[str, dict[str, object]] = {}
     for row in title_rows:
         merge_candidate_row(candidates, row, 'title')

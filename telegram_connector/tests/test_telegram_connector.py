@@ -759,7 +759,7 @@ class TelegramConnectorTests(unittest.TestCase):
                 "from": {"id": 7, "username": "alice"},
             },
         }
-        config = {"bridge": {"allowed_chat_ids": "42"}}
+        config = {"bridge": {"allowed_chat_ids": "42", "allowed_user_ids": "7"}}
         original_exists = telegram_connector.resolve_history_client_path
         original_run = telegram_connector.subprocess.run
         original_send = telegram_connector.send_text_chunks
@@ -801,7 +801,7 @@ class TelegramConnectorTests(unittest.TestCase):
                 "from": {"id": 7, "username": "alice"},
             },
         }
-        config = {"bridge": {"allowed_chat_ids": "42"}}
+        config = {"bridge": {"allowed_chat_ids": "42", "allowed_user_ids": "7"}}
         original_run = telegram_connector.subprocess.run
         original_send = telegram_connector.send_text_chunks
         sent_messages: list[str] = []
@@ -855,6 +855,37 @@ class TelegramConnectorTests(unittest.TestCase):
         self.assertEqual(captured["chat_id"], 42)
         self.assertIn("not allowed", str(captured["text"]))
 
+    def test_handle_history_command_rejects_empty_user_allowlist(self) -> None:
+        update = {
+            "update_id": 3,
+            "message": {
+                "date": 123,
+                "text": "/update 10",
+                "chat": {"id": 42, "type": "private"},
+                "from": {"id": 7, "username": "alice"},
+            },
+        }
+        config = {"bridge": {"allowed_chat_ids": "42"}}
+        original_send = telegram_connector.send_text_message
+        original_run = telegram_connector.subprocess.run
+        captured: dict[str, object] = {}
+
+        def fail_run(*args, **kwargs):
+            raise AssertionError("subprocess.run should not be called with an empty user allowlist")
+
+        telegram_connector.send_text_message = lambda token, chat_id, text, parse_mode=None: captured.update(
+            {"chat_id": chat_id, "text": text}
+        )
+        telegram_connector.subprocess.run = fail_run
+        try:
+            telegram_connector.handle_history_command("bot-token", config, update, secret_env={})
+        finally:
+            telegram_connector.send_text_message = original_send
+            telegram_connector.subprocess.run = original_run
+
+        self.assertEqual(captured["chat_id"], 42)
+        self.assertIn("not allowed", str(captured["text"]))
+
     def test_handle_history_command_serves_agent_stats_without_subprocess(self) -> None:
         update = {
             "update_id": 3,
@@ -865,7 +896,14 @@ class TelegramConnectorTests(unittest.TestCase):
                 "from": {"id": 7, "username": "alice"},
             },
         }
-        config = {"bridge": {"allowed_chat_ids": "42", "agent_stats_row_limit": "200", "text_chunk_size": "3900"}}
+        config = {
+            "bridge": {
+                "allowed_chat_ids": "42",
+                "allowed_user_ids": "7",
+                "agent_stats_row_limit": "200",
+                "text_chunk_size": "3900",
+            }
+        }
         original_summary = telegram_connector.fetch_digest_usage_summary
         original_send_chunks = telegram_connector.send_text_chunks
         original_run = telegram_connector.subprocess.run
@@ -922,6 +960,7 @@ class TelegramConnectorTests(unittest.TestCase):
         config = {
             "bridge": {
                 "allowed_chat_ids": "42",
+                "allowed_user_ids": "7",
                 "text_chunk_size": "3900",
                 "top_models_api_url": "https://example.invalid/top-models",
                 "top_models_timeout_seconds": "15",
@@ -1001,6 +1040,7 @@ class TelegramConnectorTests(unittest.TestCase):
         config = {
             "bridge": {
                 "allowed_chat_ids": "42",
+                "allowed_user_ids": "7",
                 "text_chunk_size": "3900",
                 "top_models_api_url": "https://example.invalid/top-models",
                 "top_models_timeout_seconds": "15",

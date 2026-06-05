@@ -8,9 +8,9 @@ default_chat_id = ""
 [bridge]
 # Allowed Telegram chat ids. Empty = do not restrict by chat.
 allowed_chat_ids = ""
-# Allowed Telegram user ids from message.from.id. Empty = do not restrict by stable user id.
+# Allowed Telegram user ids from message.from.id. Empty denies bridge commands unless usernames are configured.
 allowed_user_ids = ""
-# Allowed Telegram usernames from message.from.username. Empty = do not restrict by username.
+# Allowed Telegram usernames from message.from.username. Empty denies bridge commands unless user ids are configured.
 allowed_usernames = ""
 default_command = "agent"
 text_chunk_size = "3900"

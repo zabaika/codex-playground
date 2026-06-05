@@ -71,7 +71,7 @@ Main config groups:
 - `processing.model` is the default OpenAI model used by digest and other analysis commands
 - `processing.ocr` controls whether processing flows should download image media and run OCR by default
 - `bridge.allowed_chat_ids` restricts which Telegram chats may invoke bridge commands; if it is empty, the bridge falls back to `telegram.default_chat_id` when that value is set
-- `bridge.allowed_user_ids` and `bridge.allowed_usernames` further restrict which senders may trigger bot commands; `@name` and `name` are treated the same
+- `bridge.allowed_user_ids` and `bridge.allowed_usernames` further restrict which senders may trigger bot commands; if both are empty, bridge commands are denied; `@name` and `name` are treated the same
 - `bridge.text_chunk_size` controls how long Telegram text replies may grow before the bot splits them into multiple messages
 - `bridge.agent_stats_row_limit` limits `/agent-stats` to a recent window from `ai_usage_log`
 - `bridge.top_models_*` controls the external ranking source, timeout, cache TTL, and default result limit for `/top-models`
@@ -161,7 +161,7 @@ Telegram bot commands are executed only while the local bridge process is runnin
 If `telegram_bridge.py listen --run-commands` is not running, the bot can receive messages in Telegram but it will not execute history-client commands.
 
 Bridge commands are accepted with or without the leading `/`.
-Bot-triggered commands can be restricted by `[bridge].allowed_chat_ids` and, when configured, by `[bridge].allowed_user_ids` or `[bridge].allowed_usernames`.
+Bot-triggered commands require `[bridge].allowed_user_ids` or `[bridge].allowed_usernames`; `[bridge].allowed_chat_ids` can further restrict the allowed chats.
 If auth is omitted in a bot command, `user` is used by default.
 
 Bot command quick reference:
