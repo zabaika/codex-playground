@@ -561,8 +561,9 @@ def iter_channel_messages(
         history_client.parse_until_datetime(until),
     ]
     if max_messages is not None:
+        # base_sql is a local constant query and limit is parameterized.
         sql = (
-            "SELECT * FROM ("
+            "SELECT * FROM ("  # nosec B608
             + base_sql
             + """
             ORDER BY m.date_utc DESC, m.message_id DESC
@@ -1102,6 +1103,7 @@ def run_openai_digest(
     for attempt in range(1, retry_attempts + 1):
         started_at = time.perf_counter()
         try:
+            # Fixed OpenAI HTTPS endpoint built in code.
             with urlopen_func(req, timeout=timeout_seconds) as resp:
                 response = json.loads(resp.read().decode("utf-8"))
             latency_ms = int((time.perf_counter() - started_at) * 1000)

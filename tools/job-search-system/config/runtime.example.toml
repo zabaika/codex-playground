@@ -1,0 +1,14 @@
+[paths]
+db_path = '/absolute/path/to/project/data/job_search.sqlite'
+artifact_root = '/absolute/path/to/project/data/artifacts'
+sqlite_config_path = '/absolute/path/to/repo/common/config/sqlite.toml'
+
+[runtime]
+default_locale = 'en'
+enable_ai_extraction = false
+api_max_body_bytes = 1048576
+api_allow_local_file_sources = false
+
+[integrations]
+# Optional read-only retrieval integration for resume-positioning evidence.
+kb_index_config_path = ''

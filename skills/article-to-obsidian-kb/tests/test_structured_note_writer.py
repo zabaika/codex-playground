@@ -88,7 +88,7 @@ class StructuredNoteWriterTests(unittest.TestCase):
             text = output_path.read_text(encoding="utf-8")
             self.assertIn("type: council-verdict", text)
             self.assertIn("scratch/llm-council/council-payload-20260503-231500.json", text)
-            self.assertNotIn("/Users/andrejzabaev/Documents/Playground/scratch/llm-council", text)
+            self.assertNotIn("/example/Playground/scratch/llm-council", text)
             self.assertIn(COUNCIL_VERDICT_HEADING, text)
             self.assertIn(COUNCIL_ADVISOR_POSITIONS_HEADING, text)
             self.assertIn(COUNCIL_PEER_REVIEW_HEADING, text)
@@ -141,32 +141,33 @@ class StructuredNoteWriterTests(unittest.TestCase):
                 WRITER.load_payload(payload_path)
 
     def test_display_source_path_relativizes_project_local_absolute_paths(self) -> None:
-        absolute = "/Users/andrejzabaev/Documents/Playground/scratch/llm-council/council-payload-20260504-000458.json"
+        project_root = WRITER.SKILL_DIR.parent.parent
+        absolute = str(project_root / "scratch/llm-council/council-payload-20260504-000458.json")
         self.assertEqual(
             "scratch/llm-council/council-payload-20260504-000458.json",
             WRITER.display_source_path(absolute),
         )
 
     def test_display_source_path_uses_project_root_override_for_installed_copy_layout(self) -> None:
-        absolute = "/Users/andrejzabaev/Documents/Playground/scratch/llm-council/council-payload-20260504-000458.json"
+        absolute = "/example/Playground/scratch/llm-council/council-payload-20260504-000458.json"
         self.assertEqual(
             "scratch/llm-council/council-payload-20260504-000458.json",
             WRITER.display_source_path(
                 absolute,
-                config={"paths": {"project_root": "/Users/andrejzabaev/Documents/Playground"}},
+                config={"paths": {"project_root": "/example/Playground"}},
             ),
         )
 
     def test_display_source_path_prefers_env_project_root_over_config(self) -> None:
-        absolute = "/Users/andrejzabaev/Documents/Playground/scratch/llm-council/council-payload-20260504-000458.json"
+        absolute = "/example/Playground/scratch/llm-council/council-payload-20260504-000458.json"
         old_env = os.environ.get("CODEX_PLAYGROUND_PROJECT_ROOT")
         try:
-            os.environ["CODEX_PLAYGROUND_PROJECT_ROOT"] = "/Users/andrejzabaev/Documents/Playground"
+            os.environ["CODEX_PLAYGROUND_PROJECT_ROOT"] = "/example/Playground"
             self.assertEqual(
                 "scratch/llm-council/council-payload-20260504-000458.json",
                 WRITER.display_source_path(
                     absolute,
-                    config={"paths": {"project_root": "/Users/andrejzabaev/WrongRoot"}},
+                    config={"paths": {"project_root": "/example/WrongRoot"}},
                 ),
             )
         finally:

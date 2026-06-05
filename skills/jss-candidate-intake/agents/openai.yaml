@@ -1,0 +1,4 @@
+interface:
+  display_name: "JSS Candidate Intake"
+  short_description: "Create and confirm candidate profiles"
+  default_prompt: "Use $jss-candidate-intake to ingest candidate sources, build a validated profile draft, and confirm the canonical profile."

@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["core_profile", "field_statuses", "external_profiles", "languages"],
+  "properties": {
+    "core_profile": {
+      "type": "object",
+      "properties": {
+        "full_name": {"type": "string"},
+        "primary_email": {"type": "string"},
+        "primary_phone": {"type": "string"},
+        "current_location": {"type": "string"},
+        "current_title": {"type": "string"},
+        "summary_text": {"type": "string"}
+      },
+      "additionalProperties": true
+    },
+    "external_profiles": {
+      "type": "array",
+      "items": {"type": "object"}
+    },
+    "languages": {
+      "type": "array",
+      "items": {"type": "object"}
+    },
+    "work_authorizations": {
+      "type": "array",
+      "items": {"type": "object"}
+    },
+    "targets": {"type": "object"},
+    "compensation": {"type": "object"},
+    "platform_preferences": {"type": "object"},
+    "search_preferences": {"type": "object"},
+    "field_statuses": {
+      "type": "object",
+      "additionalProperties": {
+        "enum": ["confirmed", "inferred", "conflicting", "missing"]
+      }
+    }
+  },
+  "additionalProperties": false
+}

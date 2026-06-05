@@ -372,6 +372,11 @@ class TelegramAgentWorkerTests(unittest.TestCase):
         parsed = telegram_agent_worker.validate_public_http_url("https://1.1.1.1/test")
         self.assertEqual(parsed.hostname, "1.1.1.1")
 
+    def test_public_only_redirect_handler_rejects_local_redirect_target(self) -> None:
+        handler = telegram_agent_worker.PublicOnlyRedirectHandler()
+        with self.assertRaises(ValueError):
+            handler.redirect_request(object(), None, 302, "Found", {}, "http://127.0.0.1:8000/private")
+
 
 if __name__ == "__main__":
     unittest.main()

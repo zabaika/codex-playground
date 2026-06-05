@@ -39,6 +39,48 @@ Root skill docs in this folder should act as a catalog and navigation layer only
 - Local docs: [README.md](./llm-council/README.md)
 - Install: [install-local.sh](./llm-council/install-local.sh)
 
+### jss-candidate-intake
+
+- Creates/selects candidates, prepares AI extraction requests, imports validated profile drafts, reviews conflicts, and confirms canonical candidate profiles through `tools/job-search-system`.
+- Entry: [SKILL.md](./jss-candidate-intake/SKILL.md)
+- Commands: [references/commands.md](./jss-candidate-intake/references/commands.md)
+- Install: [install-local.sh](./jss-candidate-intake/install-local.sh)
+
+### jss-career-pathing
+
+- Runs career-pathing lite/full workflows: role comparison, title-inflation risk, primary target role, capability gaps, brand plan, and trajectory ranking.
+- Entry: [SKILL.md](./jss-career-pathing/SKILL.md)
+- Commands: [references/commands.md](./jss-career-pathing/references/commands.md)
+- Install: [install-local.sh](./jss-career-pathing/install-local.sh)
+
+### jss-job-board-operations
+
+- Produces manual job-board checklists, saved-search settings, URL enrichment seeds, board action logs, artifact usage records, and reconciliation views without browser automation.
+- Entry: [SKILL.md](./jss-job-board-operations/SKILL.md)
+- Commands: [references/commands.md](./jss-job-board-operations/references/commands.md)
+- Install: [install-local.sh](./jss-job-board-operations/install-local.sh)
+
+### jss-job-search-playbook
+
+- Generates search strategy, saved-search design pack, reusable outreach message, compensation framing, and lightweight interview-prep artifacts.
+- Entry: [SKILL.md](./jss-job-search-playbook/SKILL.md)
+- Commands: [references/commands.md](./jss-job-search-playbook/references/commands.md)
+- Install: [install-local.sh](./jss-job-search-playbook/install-local.sh)
+
+### jss-resume-positioning
+
+- Generates role-based and vacancy-aware resume artifacts, positioning briefs, quality gates, persisted resume roast reports, and final accepted resume artifacts.
+- Entry: [SKILL.md](./jss-resume-positioning/SKILL.md)
+- Commands: [references/commands.md](./jss-resume-positioning/references/commands.md)
+- Install: [install-local.sh](./jss-resume-positioning/install-local.sh)
+
+### jss-vacancy-pipeline
+
+- Imports raw or structured vacancy batches, normalizes/dedupes/scores/ranks vacancies, manages shortlist/processed state, application drafts, payloads, touchpoints, reminders, and reports.
+- Entry: [SKILL.md](./jss-vacancy-pipeline/SKILL.md)
+- Commands: [references/commands.md](./jss-vacancy-pipeline/references/commands.md)
+- Install: [install-local.sh](./jss-vacancy-pipeline/install-local.sh)
+
 ### video-to-obsidian-kb
 
 - Turns a YouTube or Vimeo URL into linked Obsidian notes by fetching a local transcript first and then reusing the shared note workflow.

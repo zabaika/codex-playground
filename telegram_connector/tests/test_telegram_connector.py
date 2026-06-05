@@ -935,6 +935,37 @@ class TelegramConnectorTests(unittest.TestCase):
         self.assertEqual(captured["chat_id"], 42)
         self.assertIn("not allowed", str(captured["text"]))
 
+    def test_handle_history_command_rejects_missing_chat_allowlist(self) -> None:
+        update = {
+            "update_id": 3,
+            "message": {
+                "date": 123,
+                "text": "/update 10",
+                "chat": {"id": 42, "type": "private"},
+                "from": {"id": 7, "username": "alice"},
+            },
+        }
+        config = {"bridge": {"allowed_chat_ids": "", "allowed_user_ids": "7", "allowed_usernames": ""}}
+        original_send = telegram_connector.send_text_message
+        original_run = telegram_connector.subprocess.run
+        captured: dict[str, object] = {}
+
+        def fail_run(*args, **kwargs):
+            raise AssertionError("subprocess.run should not be called without a chat allowlist")
+
+        telegram_connector.send_text_message = lambda token, chat_id, text, parse_mode=None: captured.update(
+            {"chat_id": chat_id, "text": text}
+        )
+        telegram_connector.subprocess.run = fail_run
+        try:
+            telegram_connector.handle_history_command("bot-token", config, update, secret_env={})
+        finally:
+            telegram_connector.send_text_message = original_send
+            telegram_connector.subprocess.run = original_run
+
+        self.assertEqual(captured["chat_id"], 42)
+        self.assertIn("allowlist is not configured", str(captured["text"]))
+
     def test_handle_history_command_rejects_empty_user_allowlist(self) -> None:
         update = {
             "update_id": 3,
@@ -1107,6 +1138,10 @@ class TelegramConnectorTests(unittest.TestCase):
         self.assertIn("Top free LLM models", str(captured["text"]))
         self.assertIn("1. Model One", str(captured["text"]))
         self.assertIn("2. Model Two", str(captured["text"]))
+
+    def test_resolve_top_models_api_url_rejects_non_http_scheme(self) -> None:
+        with self.assertRaisesRegex(ValueError, "http or https"):
+            telegram_connector.resolve_top_models_api_url({"bridge": {"top_models_api_url": "file:///tmp/models.json"}})
 
     def test_handle_history_command_serves_top_models_debug_without_subprocess(self) -> None:
         update = {

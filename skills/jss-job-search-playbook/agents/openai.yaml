@@ -1,0 +1,7 @@
+interface:
+  display_name: "JSS Job Search Playbook"
+  short_description: "Generate search strategy"
+  default_prompt: "Use $jss-job-search-playbook to generate a search strategy, saved-search design pack, reusable outreach message, compensation framework, and interview-prep artifacts."
+
+model: gpt-5-codex
+reasoning_effort: medium

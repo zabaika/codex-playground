@@ -541,6 +541,9 @@ def handle_agent_command(runtime: BridgeRuntime, update: dict[str, Any]) -> None
     chat_id = extract_chat_id(update)
     if chat_id is None:
         return
+    if not runtime.allowed_chat_ids:
+        send_text_message(runtime.bot_token, chat_id, "Bridge chat allowlist is not configured; command execution is disabled.")
+        return
     if runtime.allowed_chat_ids and str(chat_id) not in runtime.allowed_chat_ids:
         send_text_message(runtime.bot_token, chat_id, f"Chat {chat_id} is not allowed to run bridge commands.")
         return

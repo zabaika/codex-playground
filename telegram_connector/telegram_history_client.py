@@ -1450,19 +1450,9 @@ def iter_pending_ocr(
     if limit is not None and limit > 0:
         params.append(limit)
         limit_sql = "\n            LIMIT ?"
-    return list(
-        conn.execute(
-            f"""
-            SELECT ma.channel_id, ma.message_id, ma.ordinal, ma.local_path, ma.media_kind
-            FROM media_assets ma
-            JOIN messages m
-              ON m.channel_id = ma.channel_id AND m.message_id = ma.message_id
-            WHERE {' AND '.join(where)}
-            ORDER BY m.date_utc ASC, ma.created_at ASC{limit_sql}
-            """,
-            params,
-        )
-    )
+    where_sql = " AND ".join(where)
+    sql = "SELECT ma.channel_id, ma.message_id, ma.ordinal, ma.local_path, ma.media_kind FROM media_assets ma JOIN messages m ON m.channel_id = ma.channel_id AND m.message_id = ma.message_id WHERE __WHERE__ ORDER BY m.date_utc ASC, ma.created_at ASC__LIMIT__".replace("__WHERE__", where_sql).replace("__LIMIT__", limit_sql)  # nosec B608
+    return list(conn.execute(sql, params))
 
 
 def run_tesseract(binary: str, image_path: str, *, timeout_seconds: int = DEFAULT_TESSERACT_TIMEOUT_SECONDS) -> str:
@@ -1628,42 +1618,9 @@ def export_channel_csv(
         limit_sql = "LIMIT ?"
         params.append(limit if limit is not None else runtime.export_default_limit)
 
-    rows = conn.execute(
-        f"""
-        SELECT
-            c.channel_id,
-            c.username,
-            c.title,
-            m.message_id,
-            m.grouped_id,
-            m.date_utc,
-            m.edit_date_utc,
-            m.sender_id,
-            m.sender_username,
-            m.sender_display_name,
-            m.text,
-            m.views,
-            m.forwards,
-            m.replies,
-            m.has_media,
-            m.media_kind,
-            m.content_hash,
-            m.imported_at,
-            CASE WHEN ma.local_path IS NOT NULL THEN 1 ELSE 0 END AS has_local_media,
-            ma.ocr_status,
-            ma.ocr_text
-        FROM messages m
-        JOIN channels c ON c.channel_id = m.channel_id
-        LEFT JOIN media_assets ma
-            ON ma.channel_id = m.channel_id
-           AND ma.message_id = m.message_id
-           AND ma.ordinal = 0
-        WHERE {" AND ".join(where)}
-        {order_by}
-        {limit_sql}
-        """,
-        tuple(params),
-    ).fetchall()
+    where_sql = " AND ".join(where)
+    sql = "SELECT c.channel_id, c.username, c.title, m.message_id, m.grouped_id, m.date_utc, m.edit_date_utc, m.sender_id, m.sender_username, m.sender_display_name, m.text, m.views, m.forwards, m.replies, m.has_media, m.media_kind, m.content_hash, m.imported_at, CASE WHEN ma.local_path IS NOT NULL THEN 1 ELSE 0 END AS has_local_media, ma.ocr_status, ma.ocr_text FROM messages m JOIN channels c ON c.channel_id = m.channel_id LEFT JOIN media_assets ma ON ma.channel_id = m.channel_id AND ma.message_id = m.message_id AND ma.ordinal = 0 WHERE __WHERE__ __ORDER_BY__ __LIMIT__".replace("__WHERE__", where_sql).replace("__ORDER_BY__", order_by).replace("__LIMIT__", limit_sql)  # nosec B608
+    rows = conn.execute(sql, tuple(params)).fetchall()
 
     output = Path(output_path) if output_path else EXPORT_DIR / (
         f"{sanitize_filename(channel_row['username'] or str(channel_row['channel_id']))}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"

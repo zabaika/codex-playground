@@ -1,0 +1,4 @@
+interface:
+  display_name: "JSS Job Board Operations"
+  short_description: "Log manual job-board actions"
+  default_prompt: "Use $jss-job-board-operations to prepare manual board checklists, saved-search settings, and log traceable platform actions without browser automation."

@@ -1,0 +1,4 @@
+interface:
+  display_name: "JSS Vacancy Pipeline"
+  short_description: "Rank vacancies and prepare applications"
+  default_prompt: "Use $jss-vacancy-pipeline to import vacancies, rank them, shortlist, and prepare a review-first application payload."

@@ -1,0 +1,7 @@
+interface:
+  display_name: "JSS Career Pathing"
+  short_description: "Compare target roles"
+  default_prompt: "Use $jss-career-pathing to compare target roles, flag title-inflation risk, select a primary target role, and produce career-pathing guidance."
+
+model: gpt-5-codex
+reasoning_effort: medium

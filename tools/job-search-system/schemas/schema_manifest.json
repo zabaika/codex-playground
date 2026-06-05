@@ -1,0 +1,36 @@
+{
+  "schema_contract_version": "2026-06-01.2",
+  "compatibility_policy": "forward-compatible-additive",
+  "schemas": [
+    {
+      "name": "candidate_source_registration",
+      "version": "2026-06-01.1",
+      "path": "candidate_source_registration.schema.json",
+      "owner": "candidate-intake"
+    },
+    {
+      "name": "candidate_profile_draft",
+      "version": "2026-06-01.1",
+      "path": "candidate_profile_draft.schema.json",
+      "owner": "candidate-intake"
+    },
+    {
+      "name": "candidate_profile_confirm_request",
+      "version": "2026-06-01.1",
+      "path": "candidate_profile_confirm_request.schema.json",
+      "owner": "candidate-intake"
+    },
+    {
+      "name": "artifact_acceptance",
+      "version": "2026-06-01.2",
+      "path": "artifact_acceptance.schema.json",
+      "owner": "vacancy-pipeline"
+    },
+    {
+      "name": "external_action_approval",
+      "version": "2026-06-01.2",
+      "path": "external_action_approval.schema.json",
+      "owner": "job-board-operations"
+    }
+  ]
+}

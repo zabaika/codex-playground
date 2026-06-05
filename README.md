@@ -17,7 +17,10 @@ Workspace for local Codex-oriented projects, tools, plugins, skills, and shared 
   Shared infrastructure primitives reused by the Telegram projects: config loading, secret resolution, bridge env helpers, Bot API helpers, formatting, redaction, and OpenAI usage/stats utilities.
 
 - [skills](./skills/README.md)  
-  Local Codex skill collection for workspace-specific workflows, including Obsidian knowledge-base generation, YouTube transcript-to-notes conversion, local transcript extraction, and multi-agent decision review via `llm-council`.
+  Local Codex skill collection for workspace-specific workflows, including Obsidian knowledge-base generation, YouTube transcript-to-notes conversion, local transcript extraction, multi-agent decision review via `llm-council`, and the `jss-*` job-search skill pack.
+
+- [tools/job-search-system](./tools/job-search-system/docs/user-guide.md)
+  Local job-search workflow system with API-lite, CLI fallback, Codex skills, canonical artifact handling, and Stage 3 planning/coverage docs.
 
 - [tools/kb-index](./tools/kb-index/README.md)  
   Local retrieval and indexing tool for the Obsidian knowledge base, built around SQLite/FTS note search and launchd-backed scheduled refresh.
@@ -37,4 +40,4 @@ Workspace for local Codex-oriented projects, tools, plugins, skills, and shared 
 
 - Some top-level folders such as `scratch/` and `.codex-tmp/` are workspace support areas rather than standalone projects.
 - `Ideas/` is a workspace knowledge area rather than a standalone application or package.
-- Add new project links here when a top-level folder gains its own `README.md`.
+- Add new project links here when a top-level folder gains its own `README.md` or another canonical operator-facing entry document.

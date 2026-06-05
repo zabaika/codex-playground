@@ -131,7 +131,7 @@ class TelegramAgentBridgeTests(unittest.TestCase):
             reference = f"{service}/{account}"
             values = {
                 "telegram-agent-bot/bot_token": "bot-token",
-                "telegram-connector/allowed_users": "@zabaev",
+                "telegram-connector/allowed_users": "@example_user",
                 "telegram-agent-bot/openai_api_key": "openai-key",
             }
             return subprocess.CompletedProcess(args=args[0], returncode=0, stdout=f"{values[reference]}\n", stderr="")
@@ -158,7 +158,7 @@ class TelegramAgentBridgeTests(unittest.TestCase):
 
         self.assertEqual(runtime.bot_token, "bot-token")
         self.assertEqual(runtime.allowed_chat_ids, {"133126275"})
-        self.assertEqual(runtime.allowed_usernames, {"zabaev"})
+        self.assertEqual(runtime.allowed_usernames, {"example_user"})
         self.assertEqual(runtime.worker_secret_env, {"OPENAI_API_KEY": "openai-key"})
         self.assertEqual(runtime.default_command, "agent")
         self.assertEqual(runtime.text_chunk_size, 3900)
@@ -590,6 +590,44 @@ class TelegramAgentBridgeTests(unittest.TestCase):
             telegram_agent_bridge.send_text_message = original_send
         self.assertEqual(captured["chat_id"], 42)
         self.assertIn("not allowed", str(captured["text"]))
+
+    def test_handle_agent_command_rejects_missing_chat_allowlist(self) -> None:
+        update = {
+            "update_id": 3,
+            "message": {
+                "date": 123,
+                "text": "/agent проверь README",
+                "chat": {"id": 42, "type": "private"},
+                "from": {"id": 7, "username": "alice"},
+            },
+        }
+        runtime = telegram_agent_bridge.BridgeRuntime(
+            bot_token="bot-token",
+            worker_secret_env={"OPENAI_API_KEY": "key"},
+            allowed_chat_ids=set(),
+            allowed_user_ids={"7"},
+            allowed_usernames=set(),
+            text_chunk_size=3900,
+            agent_stats_row_limit=200,
+            default_command="agent",
+        )
+        captured: dict[str, object] = {}
+        original_send = telegram_agent_bridge.send_text_message
+        original_run = telegram_agent_bridge.subprocess.run
+
+        def fail_run(*args, **kwargs):
+            raise AssertionError("subprocess.run should not be called without a chat allowlist")
+
+        try:
+            telegram_agent_bridge.send_text_message = lambda token, chat_id, text: captured.update({"chat_id": chat_id, "text": text})
+            telegram_agent_bridge.subprocess.run = fail_run
+            telegram_agent_bridge.handle_agent_command(runtime, update)
+        finally:
+            telegram_agent_bridge.send_text_message = original_send
+            telegram_agent_bridge.subprocess.run = original_run
+
+        self.assertEqual(captured["chat_id"], 42)
+        self.assertIn("allowlist is not configured", str(captured["text"]))
 
     def test_handle_agent_command_rejects_empty_user_allowlist(self) -> None:
         update = {

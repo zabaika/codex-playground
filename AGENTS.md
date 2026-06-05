@@ -15,6 +15,7 @@ Use it as an entry guide. For repository-wide engineering policy, safety rules, 
 - [telegram_shared](./telegram_shared): shared infrastructure primitives for Telegram projects
 - [skills](./skills): local skills and related documentation
 - [plugins](./plugins): local Codex plugin sources and related documentation
+- [tools/job-search-system](./tools/job-search-system): local job-search workflow system with API-lite, CLI, skills, and canonical artifact/runtime docs
 - [tools/kb-index](./tools/kb-index): local retrieval and indexing tool for the Obsidian knowledge base
 
 Keep this block current as the repository evolves:
@@ -40,6 +41,24 @@ When working in `tools/kb-index`, prefer these sources in this order:
 - [tools/kb-index/AGENTS.md](./tools/kb-index/AGENTS.md) for project-specific runtime and deployment rules
 - [RULEBOOK.md](./RULEBOOK.md) for cross-project rules
 - tests in [tools/kb-index/tests](./tools/kb-index/tests) for executable expectations
+
+When working in `tools/job-search-system`, prefer these sources in this order:
+- [tools/job-search-system/docs/stage3-backlog.md](./tools/job-search-system/docs/stage3-backlog.md) for remaining work and the required Stage 3 implementation loop
+- [tools/job-search-system/docs/capability-coverage.md](./tools/job-search-system/docs/capability-coverage.md) for plan-vs-implementation status of each capability
+- `Job/job-search-skills/00-10` in the Obsidian knowledge base for canonical design intent, rollout, policies, UI architecture, and testing expectations
+- [tools/job-search-system/docs/user-guide.md](./tools/job-search-system/docs/user-guide.md) for operator-facing workflow and artifact layout
+- in that user guide, treat the documented operator commands such as `doctor.sh`, `start-api.sh`, `import-vacancies.sh`, `import-linkedin-text.sh`, `import-hh-ru-text.sh`, `import-vacancy-text.sh`, `daily-routine.sh`, `rename-artifacts.sh`, and `cleanup-artifacts.sh` as the canonical shell entrypoints instead of rediscovering `scripts/operator/` ad hoc
+- [RULEBOOK.md](./RULEBOOK.md) for cross-project rules
+- tests in [tools/job-search-system/tests](./tools/job-search-system/tests) for executable expectations
+
+For `tools/job-search-system` Stage 3 work, always use this loop:
+- pick the next item from `stage3-backlog.md`
+- find the matching row in `capability-coverage.md`
+- open the referenced `Job/job-search-skills/00-10` source docs
+- implement through command/query/API boundaries, never direct SQLite writes from UI, skills, or AI
+- add or update tests
+- update `capability-coverage.md`, remove or narrow the completed item in `stage3-backlog.md`, and update `Job/job-search-skills/10-job-search-implementation-journal.md` in the same change
+- treat `stage3-backlog.md` as a temporary work plan for unresolved work only, not as an archive of completed implementation
 
 When working in `common`, prefer these sources in this order:
 - [common/README.md](./common/README.md) for the intended reuse boundary and current shared modules
@@ -70,8 +89,9 @@ If README, code, and tests disagree, update them together rather than fixing onl
 - keep local config and generated runtime artifacts out of commits
 - when a project has its own `AGENTS.md`, prefer that file for operational details, commands, runtime semantics, and verification steps
 - for repository-managed local skills, treat the copy under `skills/<skill-name>/` as the editable source of truth and treat `~/.codex/skills/<skill-name>` as an installed copy refreshed from the repository
-- for repository-managed local skills, the minimum expected repository shape is `SKILL.md`, `README.md`, and `install-local.sh`
-- use a skill-local `README.md` as the operator-facing summary for purpose, source-of-truth, installation, runtime behavior, and main files
+- for standalone repository-managed local skills, the minimum expected repository shape is `SKILL.md`, `README.md`, and `install-local.sh`
+- for tightly-coupled skill packs over one local system, `SKILL.md`, `install-local.sh`, and skill-local references are acceptable when the shared owner docs clearly live in that system's documentation
+- use a skill-local `README.md` as the operator-facing summary for purpose, source-of-truth, installation, runtime behavior, and main files unless a tightly-coupled skill pack intentionally delegates that role to shared owner docs
 - keep routine skill maintenance notes in the local `README.md` by default; add a skill-local `AGENTS.md` only when the skill needs a separate future-agent maintenance contract beyond `SKILL.md`, `README.md`, and `RULEBOOK.md`
 - when a skill has a `references/` directory, document those reference files in the local `README.md` with one short explanation per file or per clearly grouped subset
 - keep reference-file links and explanations in the skill-local `README.md`, not in root catalog documents such as `skills/README.md`

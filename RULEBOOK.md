@@ -45,6 +45,7 @@ Keep documentation split by responsibility:
 ### Contract and Documentation Discipline
 
 - if behavior changes, update code, tests, and the relevant source-of-truth document in the same change
+- when a top-level project, tool, or workflow becomes a meaningful navigation anchor, update both the root `README.md` project index and the root `AGENTS.md` repo layout in the same change
 - when a workflow grows beyond a few pages of rules, split it into one thin entrypoint plus canonical reference docs; keep the entrypoint focused on sequencing and keep detailed policy in the deepest owning reference file
 - when a stateful workflow grows beyond a small prototype, define a rollout split such as `core`, `optional`, and later stages instead of treating every planned capability as equally urgent
 - for the earliest releaseable stage, define one reference end-to-end user journey and treat it as the gate for scope decisions; capabilities that do not improve that journey should not block the first release

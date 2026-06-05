@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["candidate_id", "source_kind", "source_origin"],
+  "properties": {
+    "candidate_id": {"type": "string", "minLength": 1},
+    "source_kind": {"enum": ["resume", "linkedin", "profile", "other"]},
+    "source_origin": {"enum": ["file", "text", "url", "existing_artifact"]},
+    "content_text": {"type": "string"},
+    "file_path": {"type": "string"},
+    "source_url": {"type": "string"},
+    "existing_artifact_id": {"type": "string"},
+    "external_profile_id": {"type": "string"},
+    "notes": {"type": "string"}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"source_origin": {"const": "text"}}},
+      "then": {"required": ["content_text"]}
+    },
+    {
+      "if": {"properties": {"source_origin": {"const": "file"}}},
+      "then": {"required": ["file_path"]}
+    },
+    {
+      "if": {"properties": {"source_origin": {"const": "url"}}},
+      "then": {"required": ["source_url"]}
+    },
+    {
+      "if": {"properties": {"source_origin": {"const": "existing_artifact"}}},
+      "then": {"required": ["existing_artifact_id"]}
+    }
+  ],
+  "additionalProperties": false
+}

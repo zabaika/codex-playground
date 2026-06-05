@@ -503,7 +503,8 @@ def web_search(query: str, limit: int, *, timeout_seconds: int = DEFAULT_WEB_SEA
     url = "https://html.duckduckgo.com/html/?" + parse.urlencode({"q": query})
     req = request.Request(url, headers={"User-Agent": "telegram-agent-bot/1.0"})
     try:
-        with request.urlopen(req, timeout=timeout_seconds) as resp:
+        # Fixed DuckDuckGo HTTPS endpoint built in code.
+        with request.urlopen(req, timeout=timeout_seconds) as resp:  # nosec B310
             html = resp.read().decode("utf-8", errors="replace")
     except error.HTTPError as exc:
         raise ValueError(f"HTTP {exc.code} while searching the web.") from exc
@@ -542,6 +543,20 @@ def validate_public_http_url(url: str) -> parse.ParseResult:
     return parsed_url
 
 
+class PublicOnlyRedirectHandler(request.HTTPRedirectHandler):
+    def redirect_request(
+        self,
+        req: request.Request,
+        fp: Any,
+        code: int,
+        msg: str,
+        headers: Any,
+        newurl: str,
+    ) -> request.Request | None:
+        validate_public_http_url(newurl)
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
 def fetch_url_text(
     url: str,
     *,
@@ -551,7 +566,9 @@ def fetch_url_text(
     parsed_url = validate_public_http_url(url)
     req = request.Request(url, headers={"User-Agent": "telegram-agent-bot/1.0"})
     try:
-        with request.urlopen(req, timeout=timeout_seconds) as resp:
+        opener = request.build_opener(PublicOnlyRedirectHandler)
+        with opener.open(req, timeout=timeout_seconds) as resp:
+            validate_public_http_url(resp.geturl())
             body = resp.read().decode("utf-8", errors="replace")
             content_type = resp.headers.get("Content-Type", "")
     except error.HTTPError as exc:
@@ -662,6 +679,7 @@ def api_request(
         method="POST",
     )
     try:
+        # Fixed OpenAI HTTPS endpoint built in code.
         with urlopen_func(req, timeout=timeout_seconds) as resp:
             response = json.loads(resp.read().decode("utf-8"))
     except error.HTTPError as exc:

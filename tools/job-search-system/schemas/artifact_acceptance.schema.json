@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["candidate_id", "artifact_id", "approval_state"],
+  "properties": {
+    "candidate_id": {"type": "string", "minLength": 1},
+    "artifact_id": {"type": "string", "minLength": 1},
+    "approval_state": {"enum": ["accepted", "rejected", "revoked"]},
+    "actor": {"type": "string"},
+    "reason": {"type": "string"},
+    "notes": {"type": "string"},
+    "idempotency_key": {"type": "string"}
+  },
+  "additionalProperties": false
+}

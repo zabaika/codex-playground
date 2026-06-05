@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "job-search-system"
+version = "0.1.0"
+description = "Local service-first job search system"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.scripts]
+job-search-api = "job_search.interfaces.api.server:main"
+job-search-candidate = "job_search.interfaces.cli.candidate_cli:main"
+job-search-vacancy = "job_search.interfaces.cli.vacancy_cli:main"
+job-search-system = "job_search.interfaces.cli.system_cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]

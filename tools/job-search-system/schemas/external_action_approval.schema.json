@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["candidate_id", "platform", "action_type", "approval_state"],
+  "properties": {
+    "candidate_id": {"type": "string", "minLength": 1},
+    "platform": {"type": "string", "minLength": 1},
+    "action_type": {"type": "string", "minLength": 1},
+    "approval_state": {"enum": ["approved", "rejected", "revoked"]},
+    "actor": {"type": "string"},
+    "artifact_id": {"type": "string"},
+    "canonical_vacancy_id": {"type": "string"},
+    "application_id": {"type": "string"},
+    "external_target": {"type": "string"},
+    "reason": {"type": "string"},
+    "notes": {"type": "string"},
+    "idempotency_key": {"type": "string"}
+  },
+  "additionalProperties": false
+}

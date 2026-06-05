@@ -1,0 +1,4 @@
+interface:
+  display_name: "JSS Resume Positioning"
+  short_description: "Generate and check resume artifacts"
+  default_prompt: "Use $jss-resume-positioning to generate a role-based resume artifact and run the resume quality gate."

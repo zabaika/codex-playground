@@ -1,0 +1,2 @@
+-- Candidate scoping was folded into 0004 before the prototype schema was committed.
+-- This migration name is kept so generated local databases have a stable version history.

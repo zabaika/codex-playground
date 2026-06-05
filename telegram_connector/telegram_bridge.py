@@ -231,7 +231,10 @@ def resolve_worker_process_timeout_seconds(config: dict[str, Any] | None = None)
 
 def resolve_top_models_api_url(config: dict[str, Any] | None = None) -> str:
     runtime_config = config if config is not None else load_runtime_config()
-    return get_config_value(runtime_config, "bridge", "top_models_api_url") or TOP_MODELS_DEFAULT_URL
+    url = get_config_value(runtime_config, "bridge", "top_models_api_url") or TOP_MODELS_DEFAULT_URL
+    if parse.urlparse(url).scheme not in {"http", "https"}:
+        raise ValueError("top_models_api_url must use http or https.")
+    return url
 
 
 def resolve_top_models_timeout_seconds(config: dict[str, Any] | None = None) -> int:
@@ -517,7 +520,8 @@ def send_document(token: str, chat_id: str | int, file_path: Path, caption: str 
         method="POST",
     )
     try:
-        with request.urlopen(req, timeout=65) as resp:
+        # Fixed Telegram Bot API HTTPS endpoint built in code.
+        with request.urlopen(req, timeout=65) as resp:  # nosec B310
             response = json.loads(resp.read().decode("utf-8"))
     except error.HTTPError as exc:
         raise SystemExit(f"Telegram API HTTP {exc.code} while calling sendDocument.") from exc
@@ -811,7 +815,8 @@ def fetch_top_models_payload(
     last_error: BaseException | None = None
     for attempt in range(1, retry_attempts + 1):
         try:
-            with request.urlopen(request_obj, timeout=timeout_seconds) as response:
+            # URL scheme is validated in resolve_top_models_api_url.
+            with request.urlopen(request_obj, timeout=timeout_seconds) as response:  # nosec B310
                 payload = json.loads(response.read().decode("utf-8"))
             if not isinstance(payload, dict):
                 raise SystemExit("Top-models API returned an unexpected payload.")
@@ -1008,6 +1013,9 @@ def handle_history_command(token: str, config: dict[str, Any], update: dict[str,
         return
 
     allowed_chat_ids = parse_allowed_chat_ids(config)
+    if not allowed_chat_ids:
+        send_text_message(token, chat_id, "Bridge chat allowlist is not configured; command execution is disabled.")
+        return
     if allowed_chat_ids and str(chat_id) not in allowed_chat_ids:
         send_text_message(token, chat_id, f"Chat {chat_id} is not allowed to run bridge commands.")
         return
