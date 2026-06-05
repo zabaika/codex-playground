@@ -44,13 +44,18 @@ allowed_usernames = "<comma-separated Telegram usernames or empty>"
 default_command = "<empty|agent|reset>"
 text_chunk_size = "<500..4096>"
 agent_stats_row_limit = "<20..2000>"
+worker_process_timeout_seconds = "<60..14400>"
 # worker_path = "/absolute/path/to/telegram_agent_worker.py"
 
 [agent]
 model = "<OpenAI model>"
 max_tool_rounds = "<maximum tool rounds in one run>"
+openai_timeout_seconds = "<timeout for one OpenAI Responses API request>"
 web_search_limit = "<maximum web hits returned by one search tool call>"
 fetch_char_limit = "<maximum fetched page chars kept in one tool call>"
+local_search_timeout_seconds = "<timeout for one local ripgrep search tool call>"
+web_search_timeout_seconds = "<timeout for one public web search tool call>"
+fetch_url_timeout_seconds = "<timeout for one public URL fetch tool call>"
 max_local_matches = "<maximum local search hits returned by one search_local_files call>"
 max_file_lines = "<maximum numbered lines returned by one read_local_file call>"
 max_directory_entries = "<maximum files/folders returned by one list_local_files call>"
@@ -80,8 +85,11 @@ Notes:
 - `bridge.default_command = "agent"` means plain text is treated as `/agent ...`; set it empty to require explicit commands
 - `bridge.text_chunk_size` controls Telegram reply chunking
 - `bridge.agent_stats_row_limit` limits `/agent-stats` to a recent window from `ai_usage_log`
+- `bridge.worker_process_timeout_seconds` is the wall-clock timeout for one bridge-launched agent worker subprocess
 - `agent.allowed_roots` is the allowlist for local file access
 - `agent.model` defaults to `gpt-5.4-mini` in the example config
+- `agent.openai_timeout_seconds` bounds one OpenAI Responses API request from the worker
+- `agent.local_search_timeout_seconds`, `agent.web_search_timeout_seconds`, and `agent.fetch_url_timeout_seconds` bound one corresponding tool call
 - `agent.max_local_matches`, `agent.max_file_lines`, and `agent.max_directory_entries` control how much local context one tool call may return
 - `agent.max_tool_output_chars` is the main payload guardrail for `function_call_output`; keep it conservative to avoid oversized OpenAI requests
 - `agent.prompt_cache_scope = "global"` maximizes prompt-cache reuse for one-owner bots; use `"chat"` only if you want separate cache keys per Telegram chat
@@ -149,7 +157,7 @@ bash telegram_agent_bot/scripts/restart_launch_agent.sh
 
 Service update rule:
 
-- rerun `install_launch_agent.sh` after code, config, or prompt changes
+- rerun `install_launch_agent.sh` after code changes, `telegram_shared` changes, `runtime.local.toml` changes, or prompt changes
 - use `restart_launch_agent.sh` only when the installed code and config are already up to date
 
 Daemon logs:

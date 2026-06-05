@@ -266,8 +266,12 @@ class TelegramAgentWorkerTests(unittest.TestCase):
         telegram_agent_worker.load_runtime_config = lambda: {
             "agent": {
                 "max_tool_rounds": "6",
+                "openai_timeout_seconds": "240",
                 "web_search_limit": "4",
                 "fetch_char_limit": "15000",
+                "local_search_timeout_seconds": "11",
+                "web_search_timeout_seconds": "12",
+                "fetch_url_timeout_seconds": "13",
                 "max_local_matches": "12",
                 "max_file_lines": "250",
                 "max_directory_entries": "80",
@@ -283,8 +287,12 @@ class TelegramAgentWorkerTests(unittest.TestCase):
             telegram_agent_worker.load_runtime_config = original_load_runtime_config
             telegram_agent_worker.resolve_secret_value = original_resolve_secret_value
         self.assertEqual(runtime["max_tool_rounds"], 6)
+        self.assertEqual(runtime["openai_timeout_seconds"], 240)
         self.assertEqual(runtime["web_search_limit"], 4)
         self.assertEqual(runtime["fetch_char_limit"], 15000)
+        self.assertEqual(runtime["local_search_timeout_seconds"], 11)
+        self.assertEqual(runtime["web_search_timeout_seconds"], 12)
+        self.assertEqual(runtime["fetch_url_timeout_seconds"], 13)
         self.assertEqual(runtime["max_local_matches"], 12)
         self.assertEqual(runtime["max_file_lines"], 250)
         self.assertEqual(runtime["max_directory_entries"], 80)
@@ -300,13 +308,12 @@ class TelegramAgentWorkerTests(unittest.TestCase):
                 fp=None,
             )
 
-        original_urlopen = telegram_agent_worker.request.urlopen
-        telegram_agent_worker.request.urlopen = fake_urlopen
-        try:
-            with self.assertRaises(SystemExit) as ctx:
-                telegram_agent_worker.api_request({"model": "gpt-5.4-mini"}, "key")
-        finally:
-            telegram_agent_worker.request.urlopen = original_urlopen
+        with self.assertRaises(SystemExit) as ctx:
+            telegram_agent_worker.api_request(
+                {"model": "gpt-5.4-mini"},
+                "key",
+                urlopen_func=fake_urlopen,
+            )
         self.assertEqual(str(ctx.exception), "OpenAI API HTTP 400 while running telegram agent worker")
 
     def test_api_request_includes_openai_error_message_from_body(self) -> None:
@@ -320,17 +327,42 @@ class TelegramAgentWorkerTests(unittest.TestCase):
                 fp=body,
             )
 
-        original_urlopen = telegram_agent_worker.request.urlopen
-        telegram_agent_worker.request.urlopen = fake_urlopen
-        try:
-            with self.assertRaises(SystemExit) as ctx:
-                telegram_agent_worker.api_request({"model": "gpt-5.4-mini"}, "key")
-        finally:
-            telegram_agent_worker.request.urlopen = original_urlopen
+        with self.assertRaises(SystemExit) as ctx:
+            telegram_agent_worker.api_request(
+                {"model": "gpt-5.4-mini"},
+                "key",
+                urlopen_func=fake_urlopen,
+            )
         self.assertEqual(
             str(ctx.exception),
             "OpenAI API HTTP 400 while running telegram agent worker: Input is too large.",
         )
+
+    def test_api_request_uses_configured_timeout(self) -> None:
+        captured: dict[str, object] = {}
+
+        class FakeResponse:
+            def __enter__(self) -> "FakeResponse":
+                return self
+
+            def __exit__(self, exc_type, exc, tb) -> None:
+                return None
+
+            def read(self) -> bytes:
+                return b'{"id":"resp_1","output":[]}'
+
+        def fake_urlopen(_req: object, timeout: int = 180) -> object:
+            captured["timeout"] = timeout
+            return FakeResponse()
+
+        telegram_agent_worker.api_request(
+            {"model": "gpt-5.4-mini"},
+            "key",
+            timeout_seconds=240,
+            urlopen_func=fake_urlopen,
+        )
+
+        self.assertEqual(captured["timeout"], 240)
 
     def test_validate_public_http_url_rejects_localhost(self) -> None:
         with self.assertRaises(ValueError):

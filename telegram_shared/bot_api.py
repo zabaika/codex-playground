@@ -7,8 +7,23 @@ from pathlib import Path
 from typing import Any, Callable
 from urllib import error, request
 
+from .errors import TelegramApiError
 
-def api_call(token: str, method: str, payload: dict[str, Any] | None = None) -> Any:
+
+# Telegram Bot API text messages are capped at 4096 characters.
+TELEGRAM_TEXT_MESSAGE_MAX_CHARS = 4096
+# Avoid splitting at the very beginning of a chunk; short prefixes read worse than a hard cut.
+MIN_NEWLINE_SPLIT_INDEX = 100
+
+
+def api_call(
+    token: str,
+    method: str,
+    payload: dict[str, Any] | None = None,
+    *,
+    timeout_seconds: int = 65,
+    urlopen_func: Callable[..., Any] = request.urlopen,
+) -> Any:
     url = f"https://api.telegram.org/bot{token}/{method}"
     data = None
     headers: dict[str, str] = {}
@@ -17,19 +32,19 @@ def api_call(token: str, method: str, payload: dict[str, Any] | None = None) -> 
         headers["Content-Type"] = "application/json"
     req = request.Request(url, data=data, headers=headers, method="POST" if data else "GET")
     try:
-        with request.urlopen(req, timeout=65) as resp:
+        with urlopen_func(req, timeout=timeout_seconds) as resp:
             response = json.loads(resp.read().decode("utf-8"))
     except TimeoutError as exc:
-        raise SystemExit(f"Telegram API request timed out while calling {method}.") from exc
+        raise TelegramApiError(f"Telegram API request timed out while calling {method}.") from exc
     except error.HTTPError as exc:
-        raise SystemExit(f"Telegram API HTTP {exc.code} while calling {method}.") from exc
+        raise TelegramApiError(f"Telegram API HTTP {exc.code} while calling {method}.") from exc
     except error.URLError as exc:
         reason = getattr(exc, "reason", None)
         details = f": {reason}" if reason else ""
-        raise SystemExit(f"Telegram API request failed while calling {method}{details}.") from exc
+        raise TelegramApiError(f"Telegram API request failed while calling {method}{details}.") from exc
     if not response.get("ok"):
         description = response.get("description") or "request failed"
-        raise SystemExit(f"Telegram API error while calling {method}: {description}")
+        raise TelegramApiError(f"Telegram API error while calling {method}: {description}")
     return response["result"]
 
 
@@ -38,14 +53,16 @@ def fetch_updates(
     offset: int | None,
     timeout: int,
     *,
-    api_call_func: Callable[[str, str, dict[str, Any] | None], Any],
+    api_call_func: Callable[..., Any],
 ) -> list[dict[str, Any]]:
     payload: dict[str, Any] = {"timeout": timeout, "allowed_updates": ["message", "edited_message"]}
     if offset is not None:
         payload["offset"] = offset
-    result = api_call_func(token, "getUpdates", payload)
+    # The HTTP envelope must outlive Telegram long polling, otherwise a valid
+    # long poll can be cut off locally before Telegram returns.
+    result = api_call_func(token, "getUpdates", payload, timeout_seconds=timeout + 5)
     if not isinstance(result, list):
-        raise SystemExit(f"Unexpected getUpdates payload: {result}")
+        raise TelegramApiError(f"Unexpected getUpdates payload: {result}")
     return result
 
 
@@ -99,14 +116,14 @@ def extract_user_id(update: dict[str, Any]) -> int | None:
 
 def split_text_chunks(text: str, chunk_size: int) -> list[str]:
     remaining = text.strip() or "<empty response>"
-    active_limit = min(4096, chunk_size)
+    active_limit = min(TELEGRAM_TEXT_MESSAGE_MAX_CHARS, chunk_size)
     if len(remaining) <= active_limit:
         return [remaining]
     chunks: list[str] = []
     while remaining:
-        chunk = remaining[:chunk_size]
+        chunk = remaining[:active_limit]
         split_at = chunk.rfind("\n")
-        if split_at > 100:
+        if split_at > MIN_NEWLINE_SPLIT_INDEX:
             chunk = chunk[:split_at]
         chunks.append(chunk)
         remaining = remaining[len(chunk):].lstrip()

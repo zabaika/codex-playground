@@ -35,6 +35,9 @@ class ConfigScopeTests(unittest.TestCase):
                 "exclude_globs = ['*.canvas']\n\n"
                 "[retrieval]\n"
                 "default_limit = 6\n"
+                "fts_candidate_limit = 60\n"
+                "title_candidate_limit = 55\n"
+                "links_out_candidate_limit = 25\n"
                 "min_term_coverage_ratio = 0.5\n"
                 "min_score_ratio_to_top = 0.45\n"
                 "always_keep_top_n = 3\n\n"
@@ -65,6 +68,9 @@ class ConfigScopeTests(unittest.TestCase):
             self.assertEqual(config.scope.exclude_roots, ['Templates', 'Ideas/attachments'])
             self.assertEqual(config.scope.exclude_globs, ['*.canvas'])
             self.assertEqual(config.retrieval.default_limit, 6)
+            self.assertEqual(config.retrieval.fts_candidate_limit, 60)
+            self.assertEqual(config.retrieval.title_candidate_limit, 55)
+            self.assertEqual(config.retrieval.links_out_candidate_limit, 25)
             self.assertEqual(config.retrieval.min_term_coverage_ratio, 0.5)
             self.assertEqual(config.retrieval.min_score_ratio_to_top, 0.45)
             self.assertEqual(config.retrieval.always_keep_top_n, 3)
@@ -124,6 +130,9 @@ class ConfigScopeTests(unittest.TestCase):
                 "exclude_globs = []\n\n"
                 "[retrieval]\n"
                 "default_limit = 5\n"
+                "fts_candidate_limit = 50\n"
+                "title_candidate_limit = 50\n"
+                "links_out_candidate_limit = 20\n"
                 "min_term_coverage_ratio = 0.5\n"
                 "min_score_ratio_to_top = 0.45\n"
                 "always_keep_top_n = 3\n\n"

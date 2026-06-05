@@ -199,8 +199,13 @@ tail_limit = "120"
 update_limit = "80"
 batch_size = "500"
 
+[export]
+default_limit = "90"
+
 [ocr]
 image_prompt = "OCR this"
+pending_default_limit = "77"
+tesseract_timeout_seconds = "45"
 
 [secrets]
 api_hash = "hash_x"
@@ -226,9 +231,12 @@ user_password = "pw_x"
         self.assertEqual(runtime.user_password, "pw_x")
         self.assertEqual(runtime.tesseract_binary, "/usr/local/bin/tesseract")
         self.assertEqual(runtime.vision_prompt, "OCR this")
+        self.assertEqual(runtime.ocr_pending_default_limit, 77)
+        self.assertEqual(runtime.tesseract_timeout_seconds, 45)
         self.assertEqual(runtime.sync_batch_size, 500)
         self.assertEqual(runtime.sync_total_limit, 1200)
         self.assertEqual(runtime.sync_mode_limits, {"backfill": 150, "tail": 120, "update": 80})
+        self.assertEqual(runtime.export_default_limit, 90)
         self.assertEqual(runtime.default_auth_mode, "auto")
         self.assertEqual(runtime.public_auth_mode, "bot")
         self.assertEqual(runtime.private_auth_mode, "user")
@@ -644,6 +652,7 @@ user_password = "pw_x"
         self.assertIsNone(update_args.since)
         self.assertEqual(update_args.until, "2026-03-16")
         self.assertEqual(ocr_pending_args.channel, "@vcnews")
+        self.assertIsNone(ocr_pending_args.limit)
         self.assertEqual(ocr_pending_args.since, "2026-03-15")
         self.assertEqual(ocr_pending_args.until, "2026-03-16")
 
@@ -1771,6 +1780,9 @@ backfill_limit = "100"
 tail_limit = "100"
 update_limit = "100"
 batch_size = "500"
+
+[export]
+default_limit = "100"
 
 [ocr]
 image_prompt = "OCR this"

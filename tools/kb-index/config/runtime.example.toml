@@ -39,6 +39,12 @@ exclude_globs = ['*.canvas', '*.png', '*.jpg', '*.jpeg', '*.gif', '*.pdf', '*.we
 [retrieval]
 # Default number of note candidates returned when --limit is not provided.
 default_limit = 5
+# Maximum raw FTS candidates considered before ranking and tail filtering.
+fts_candidate_limit = 50
+# Maximum title LIKE candidates considered in title-first lookup mode.
+title_candidate_limit = 50
+# Maximum outgoing-link LIKE candidates considered for related-note discovery.
+links_out_candidate_limit = 20
 # Minimum share of meaningful query terms that a note must match to stay in the shortlist.
 min_term_coverage_ratio = 0.5
 # Minimum relative score versus the top hit for tail results kept after the guaranteed top slots.

@@ -84,6 +84,14 @@ Main config areas:
 - one-shot auto-update TTL and shutdown behavior under `[auto_update]`
 
 The default number of search results is controlled by `retrieval.default_limit`.
+Candidate pool sizes and tail filtering are also runtime-configured under `[retrieval]`:
+
+- `fts_candidate_limit`
+- `title_candidate_limit`
+- `links_out_candidate_limit`
+- `min_term_coverage_ratio`
+- `min_score_ratio_to_top`
+- `always_keep_top_n`
 
 ## CLI commands
 

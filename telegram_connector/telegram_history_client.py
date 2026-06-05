@@ -24,6 +24,7 @@ from common import sqlite as common_sqlite
 from telegram_shared import secrets as shared_secrets
 from telegram_shared.config import get_config_value as shared_get_config_value
 from telegram_shared.config import load_runtime_config as shared_load_runtime_config
+from telegram_shared.errors import SecretResolutionError
 
 
 APP_DIR = Path(__file__).resolve().parent
@@ -40,6 +41,9 @@ EXPORT_DIR = DATA_DIR / "exports"
 SINGLE_MESSAGE_EXPORT_DIR = REPO_ROOT / "scratch" / "article-to-obsidian-kb" / "telegram"
 OP_REFERENCE_PREFIX = shared_secrets.OP_REFERENCE_PREFIX
 _SECRET_CACHE = shared_secrets._SECRET_CACHE
+DEFAULT_EXPORT_CSV_LIMIT = 100
+DEFAULT_OCR_PENDING_LIMIT = 100
+DEFAULT_TESSERACT_TIMEOUT_SECONDS = 60
 SQLITE_CONFIG = common_sqlite.load_sqlite_config()
 
 
@@ -203,6 +207,9 @@ class RuntimeConfig:
     public_auth_mode: str
     private_auth_mode: str
     default_channels: list[str]
+    export_default_limit: int = DEFAULT_EXPORT_CSV_LIMIT
+    ocr_pending_default_limit: int = DEFAULT_OCR_PENDING_LIMIT
+    tesseract_timeout_seconds: int = DEFAULT_TESSERACT_TIMEOUT_SECONDS
     sync_total_limit: int = 0
     sync_mode_limits: dict[str, int] = field(default_factory=dict)
 
@@ -236,6 +243,22 @@ def require_int_config_value(config: dict[str, Any], section: str, key: str, *, 
     return max(min_value, value)
 
 
+def parse_int_config_value(
+    config: dict[str, Any],
+    section: str,
+    key: str,
+    *,
+    default: int,
+    min_value: int = 0,
+) -> int:
+    raw = get_config_value(config, section, key)
+    try:
+        value = int(raw) if raw else default
+    except ValueError:
+        value = default
+    return max(min_value, value)
+
+
 def parse_default_channel_entry(raw: str) -> str:
     value = raw.strip()
     if not value:
@@ -262,11 +285,17 @@ def get_default_channels(config: dict[str, Any]) -> list[str]:
 
 
 def resolve_onepassword_secret(reference: str, label: str) -> str:
-    return shared_secrets.resolve_onepassword_secret(reference, label)
+    try:
+        return shared_secrets.resolve_onepassword_secret(reference, label)
+    except SecretResolutionError as exc:
+        raise SystemExit(str(exc)) from exc
 
 
 def resolve_secret_value(raw_value: str, label: str) -> str:
-    return shared_secrets.resolve_secret_value(raw_value, label)
+    try:
+        return shared_secrets.resolve_secret_value(raw_value, label)
+    except SecretResolutionError as exc:
+        raise SystemExit(str(exc)) from exc
 
 
 def resolve_runtime() -> RuntimeConfig:
@@ -297,8 +326,23 @@ def resolve_runtime() -> RuntimeConfig:
     )
     tesseract_binary = get_config_value(config, "paths", "tesseract_binary") or "tesseract"
     vision_prompt = get_config_value(config, "ocr", "image_prompt") or "Extract all readable text from the image."
+    tesseract_timeout_seconds = parse_int_config_value(
+        config,
+        "ocr",
+        "tesseract_timeout_seconds",
+        default=DEFAULT_TESSERACT_TIMEOUT_SECONDS,
+        min_value=1,
+    )
+    ocr_pending_default_limit = parse_int_config_value(
+        config,
+        "ocr",
+        "pending_default_limit",
+        default=DEFAULT_OCR_PENDING_LIMIT,
+        min_value=1,
+    )
     sync_batch_size = require_int_config_value(config, "sync", "batch_size", min_value=0)
     sync_total_limit = require_int_config_value(config, "sync", "sync_limit", min_value=0)
+    export_default_limit = require_int_config_value(config, "export", "default_limit", min_value=1)
     sync_mode_limits = {
         "backfill": require_int_config_value(config, "sync", "backfill_limit", min_value=1),
         "tail": require_int_config_value(config, "sync", "tail_limit", min_value=1),
@@ -319,12 +363,15 @@ def resolve_runtime() -> RuntimeConfig:
         bot_token=bot_token,
         user_password=user_password,
         tesseract_binary=tesseract_binary,
+        tesseract_timeout_seconds=tesseract_timeout_seconds,
         vision_prompt=vision_prompt,
         sync_batch_size=sync_batch_size,
         default_auth_mode=default_auth_mode,
         public_auth_mode=public_auth_mode,
         private_auth_mode=private_auth_mode,
         default_channels=default_channels,
+        export_default_limit=export_default_limit,
+        ocr_pending_default_limit=ocr_pending_default_limit,
         sync_total_limit=sync_total_limit,
         sync_mode_limits=sync_mode_limits,
     )
@@ -1291,7 +1338,13 @@ async def sync_one_channel(
         ocr_processed = 0
         if getattr(args, "ocr", False):
             binary = require_tesseract(runtime)
-            ocr_processed = process_pending_ocr(conn, binary, limit=scan_limit, channel_id=entity.id)
+            ocr_processed = process_pending_ocr(
+                conn,
+                binary,
+                limit=scan_limit,
+                channel_id=entity.id,
+                tesseract_timeout_seconds=runtime.tesseract_timeout_seconds,
+            )
         if highest_message_id is not None:
             if mark_read_target_id is None:
                 mark_read_target_id = highest_message_id
@@ -1412,11 +1465,12 @@ def iter_pending_ocr(
     )
 
 
-def run_tesseract(binary: str, image_path: str) -> str:
+def run_tesseract(binary: str, image_path: str, *, timeout_seconds: int = DEFAULT_TESSERACT_TIMEOUT_SECONDS) -> str:
     result = subprocess.run(
         [binary, image_path, "stdout"],
         capture_output=True,
         text=True,
+        timeout=timeout_seconds,
         check=False,
     )
     if result.returncode != 0:
@@ -1432,6 +1486,7 @@ def process_pending_ocr(
     channel_id: int | None = None,
     since: str | None = None,
     until: str | None = None,
+    tesseract_timeout_seconds: int = DEFAULT_TESSERACT_TIMEOUT_SECONDS,
 ) -> int:
     rows = iter_pending_ocr(conn, limit, channel_id=channel_id, since=since, until=until)
     processed = 0
@@ -1448,7 +1503,7 @@ def process_pending_ocr(
                 )
                 processed += 1
                 continue
-            text = run_tesseract(binary, row["local_path"])
+            text = run_tesseract(binary, row["local_path"], timeout_seconds=tesseract_timeout_seconds)
             conn.execute(
                 """
                 UPDATE media_assets
@@ -1569,11 +1624,9 @@ def export_channel_csv(
         params.append(parse_until_datetime(until))
     if since or until:
         order_by = "ORDER BY m.date_utc DESC, m.message_id DESC"
-    elif limit is not None:
-        limit_sql = "LIMIT ?"
-        params.append(limit)
     else:
-        limit_sql = "LIMIT 100"
+        limit_sql = "LIMIT ?"
+        params.append(limit if limit is not None else runtime.export_default_limit)
 
     rows = conn.execute(
         f"""
@@ -1705,10 +1758,11 @@ def cmd_ocr_pending(args: argparse.Namespace) -> int:
         processed = process_pending_ocr(
             conn,
             binary,
-            limit=args.limit,
+            limit=args.limit if args.limit is not None else runtime.ocr_pending_default_limit,
             channel_id=channel_id,
             since=args.since,
             until=args.until,
+            tesseract_timeout_seconds=runtime.tesseract_timeout_seconds,
         )
         results.append(
             {
@@ -1856,7 +1910,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     ocr_pending = subparsers.add_parser("ocr-pending", help="Run Tesseract for downloaded images pending OCR.")
     ocr_pending.add_argument("--channel", help="Channel username/id or comma-separated list.")
-    ocr_pending.add_argument("--limit", type=int, default=100, help="How many media assets to process.")
+    ocr_pending.add_argument("--limit", type=int, default=None, help="How many media assets to process. Defaults to [ocr].pending_default_limit.")
     ocr_pending.add_argument("--since", help="Process only assets whose message date is on or after this UTC date or datetime.")
     ocr_pending.add_argument("--until", help="Process only assets whose message date is on or before this UTC date or datetime.")
     ocr_pending.set_defaults(func=cmd_ocr_pending)

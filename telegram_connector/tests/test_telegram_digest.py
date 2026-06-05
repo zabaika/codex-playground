@@ -107,6 +107,11 @@ class TelegramDigestTests(unittest.TestCase):
                     "min_messages_for_ai": "7",
                     "separator_text": "────────",
                 },
+                "digest_ai": {
+                    "max_output_tokens": "900",
+                    "openai_timeout_seconds": "45",
+                    "openai_retry_attempts": "2",
+                },
                 "digest_prompts": {
                     "file": str(prompt_file),
                 },
@@ -125,6 +130,9 @@ class TelegramDigestTests(unittest.TestCase):
         self.assertEqual(result.sync_mode, "tail")
         self.assertEqual(result.messages_per_ai_pass, 0)
         self.assertEqual(result.min_messages_for_ai, 7)
+        self.assertEqual(result.openai_max_output_tokens, 900)
+        self.assertEqual(result.openai_timeout_seconds, 45)
+        self.assertEqual(result.openai_retry_attempts, 2)
         self.assertEqual(result.separator_text, "────────")
         self.assertTrue(result.mark_read)
         self.assertFalse(result.use_ocr)
@@ -378,9 +386,6 @@ batch_digest_template = "Batch={batch_index}"
 
     def test_run_openai_digest_retries_after_timeout(self) -> None:
         attempts = {"count": 0}
-        original_urlopen = telegram_digest.request.urlopen
-        original_sleep = telegram_digest.time.sleep
-
         class FakeResponse:
             def __enter__(self) -> "FakeResponse":
                 return self
@@ -399,46 +404,36 @@ batch_digest_template = "Batch={batch_index}"
                 raise TimeoutError("The read operation timed out")
             return FakeResponse()
 
-        try:
-            telegram_digest.request.urlopen = fake_urlopen
-            telegram_digest.time.sleep = lambda seconds: None
-            result = telegram_digest.run_openai_digest(
-                "k",
-                "gpt-5.4-mini",
-                "system",
-                "prompt",
-                prompt_cache_key="digest:test",
-            )
-        finally:
-            telegram_digest.request.urlopen = original_urlopen
-            telegram_digest.time.sleep = original_sleep
+        result = telegram_digest.run_openai_digest(
+            "k",
+            "gpt-5.4-mini",
+            "system",
+            "prompt",
+            prompt_cache_key="digest:test",
+            urlopen_func=fake_urlopen,
+            sleep_func=lambda seconds: None,
+        )
 
         self.assertEqual(attempts["count"], 2)
         self.assertEqual(result.text, "summary")
 
     def test_run_openai_digest_raises_after_exhausted_timeouts(self) -> None:
         attempts = {"count": 0}
-        original_urlopen = telegram_digest.request.urlopen
-        original_sleep = telegram_digest.time.sleep
 
         def fake_urlopen(req, timeout=120):
             attempts["count"] += 1
             raise error.URLError("timed out")
 
-        try:
-            telegram_digest.request.urlopen = fake_urlopen
-            telegram_digest.time.sleep = lambda seconds: None
-            with self.assertRaises(SystemExit) as ctx:
-                telegram_digest.run_openai_digest(
-                    "k",
-                    "gpt-5.4-mini",
-                    "system",
-                    "prompt",
-                    prompt_cache_key="digest:test",
-                )
-        finally:
-            telegram_digest.request.urlopen = original_urlopen
-            telegram_digest.time.sleep = original_sleep
+        with self.assertRaises(SystemExit) as ctx:
+            telegram_digest.run_openai_digest(
+                "k",
+                "gpt-5.4-mini",
+                "system",
+                "prompt",
+                prompt_cache_key="digest:test",
+                urlopen_func=fake_urlopen,
+                sleep_func=lambda seconds: None,
+            )
 
         self.assertEqual(attempts["count"], telegram_digest.OPENAI_DIGEST_RETRY_ATTEMPTS)
         self.assertIn("after 3 attempts", str(ctx.exception))
@@ -1112,7 +1107,7 @@ batch_digest_template = "Batch={batch_index}"
         original_run_openai_digest = telegram_digest.run_openai_digest
         calls: list[str] = []
         try:
-            def fake_run_openai_digest(api_key, model, system_instructions, prompt, *, prompt_cache_key):
+            def fake_run_openai_digest(api_key, model, system_instructions, prompt, *, prompt_cache_key, **kwargs):
                 calls.append(prompt)
                 return telegram_digest.OpenAIResult(
                     response_id="resp_1",

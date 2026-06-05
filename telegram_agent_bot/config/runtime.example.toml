@@ -13,30 +13,44 @@ allowed_user_ids = ""
 # Allowed Telegram usernames from message.from.username. Empty denies bridge commands unless user ids are configured.
 allowed_usernames = ""
 default_command = "agent"
+# Preferred Telegram text message chunk size for long replies.
+# Values are clamped to 500..4096; 4096 is Telegram's text-message limit.
 text_chunk_size = "3900"
 # Maximum number of latest ai_usage_log rows scanned by /agent-stats.
+# Values are clamped to 20..2000.
 agent_stats_row_limit = "200"
+# Wall-clock timeout in seconds for one bridge-launched agent worker subprocess.
+# Values are clamped to 60..14400.
+worker_process_timeout_seconds = "3600"
 # worker_path = "/absolute/path/to/telegram_agent_worker.py"
 
 [agent]
 # OpenAI model used by the agent worker.
 model = "gpt-5.4-mini"
-# Maximum number of tool-call rounds in one agent run.
+# Maximum number of tool-call rounds in one agent run. Values are clamped to 1..16.
 max_tool_rounds = "8"
-# Maximum number of web search hits returned by one search tool call.
+# Network timeout in seconds for one OpenAI Responses API request from the agent worker. Values are clamped to 30..600.
+openai_timeout_seconds = "180"
+# Maximum number of web search hits returned by one search tool call. Values are clamped to 1..10.
 web_search_limit = "5"
-# Maximum number of plain-text characters kept from one fetched page.
+# Maximum number of plain-text characters kept from one fetched page. Values are clamped to 1000..30000.
 fetch_char_limit = "12000"
-# Maximum number of local search hits returned by one search_local_files call.
+# Timeout in seconds for one local ripgrep search tool call. Values are clamped to 1..300.
+local_search_timeout_seconds = "30"
+# Timeout in seconds for one public web search tool call. Values are clamped to 1..300.
+web_search_timeout_seconds = "30"
+# Timeout in seconds for one public URL fetch tool call. Values are clamped to 1..300.
+fetch_url_timeout_seconds = "30"
+# Maximum number of local search hits returned by one search_local_files call. Values are clamped to 1..200.
 # Increase carefully: larger values make tool outputs heavier and can increase token cost.
 max_local_matches = "50"
-# Maximum number of numbered lines returned by one read_local_file call.
+# Maximum number of numbered lines returned by one read_local_file call. Values are clamped to 1..2000.
 # Increase carefully for large files; this affects both latency and payload size.
 max_file_lines = "400"
-# Maximum number of files/folders returned by one list_local_files call.
+# Maximum number of files/folders returned by one list_local_files call. Values are clamped to 1..1000.
 # Keep this moderate so directory listings stay readable in Telegram and in tool context.
 max_directory_entries = "200"
-# Maximum number of characters sent back to OpenAI for one tool result.
+# Maximum number of characters sent back to OpenAI for one tool result. Values are clamped to 1000..200000.
 # This is the main guardrail against HTTP 400 from oversized function_call_output payloads.
 max_tool_output_chars = "50000"
 # Prompt-cache scope for OpenAI requests: "global" reuses cache across all chats on this bot,

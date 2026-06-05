@@ -181,10 +181,36 @@ class TelegramConnectorTests(unittest.TestCase):
             150,
         )
 
+    def test_resolve_worker_process_timeout_seconds_reads_bridge_config(self) -> None:
+        self.assertEqual(
+            telegram_connector.resolve_worker_process_timeout_seconds(
+                {"bridge": {"worker_process_timeout_seconds": "7200"}}
+            ),
+            7200,
+        )
+
     def test_resolve_top_models_default_limit_reads_bridge_config(self) -> None:
         self.assertEqual(
             telegram_connector.resolve_top_models_default_limit({"bridge": {"top_models_default_limit": "7"}}),
             7,
+        )
+
+    def test_resolve_top_models_retry_attempts_reads_bridge_config(self) -> None:
+        self.assertEqual(
+            telegram_connector.resolve_top_models_retry_attempts({"bridge": {"top_models_retry_attempts": "4"}}),
+            4,
+        )
+
+    def test_resolve_export_csv_default_limit_reads_export_config(self) -> None:
+        self.assertEqual(
+            telegram_connector.resolve_export_csv_default_limit({"export": {"default_limit": "250"}}),
+            250,
+        )
+
+    def test_resolve_ocr_pending_default_limit_reads_ocr_config(self) -> None:
+        self.assertEqual(
+            telegram_connector.resolve_ocr_pending_default_limit({"ocr": {"pending_default_limit": "250"}}),
+            250,
         )
 
     def test_resolve_sync_mode_limit_reads_bridge_config(self) -> None:
@@ -326,6 +352,27 @@ class TelegramConnectorTests(unittest.TestCase):
         command = telegram_connector.build_history_command("/exportcsv 100")
         self.assertEqual(command[2:], ["export-csv", "--limit", "100", "--auth-mode", "user"])
 
+    def test_build_export_csv_command_uses_configured_default_limit(self) -> None:
+        command = telegram_connector.build_export_csv_command(
+            ["/exportcsv", "@vcnews"],
+            ["python3", "telegram_history_client.py"],
+            {"export": {"default_limit": "250"}},
+        )
+        self.assertEqual(
+            command,
+            [
+                "python3",
+                "telegram_history_client.py",
+                "export-csv",
+                "--channel",
+                "@vcnews",
+                "--limit",
+                "250",
+                "--auth-mode",
+                "user",
+            ],
+        )
+
     def test_build_history_command_rejects_unknown_command(self) -> None:
         with self.assertRaises(ValueError):
             telegram_connector.build_history_command("/boom")
@@ -333,6 +380,22 @@ class TelegramConnectorTests(unittest.TestCase):
     def test_build_history_command_rejects_unsupported_digest_argument(self) -> None:
         with self.assertRaises(ValueError):
             telegram_connector.build_history_command("/digest 10")
+
+    def test_build_history_command_rejects_unsupported_sync_argument(self) -> None:
+        with self.assertRaises(ValueError):
+            telegram_connector.build_history_command("/update @vcnews 10 surprise")
+
+    def test_build_history_command_rejects_unsupported_ocr_argument(self) -> None:
+        with self.assertRaises(ValueError):
+            telegram_connector.build_history_command("/ocr @vcnews 50 surprise")
+
+    def test_build_history_command_rejects_unsupported_export_argument(self) -> None:
+        with self.assertRaises(ValueError):
+            telegram_connector.build_history_command("/exportcsv @vcnews surprise")
+
+    def test_build_history_command_rejects_unsupported_ocrhistory_argument(self) -> None:
+        with self.assertRaises(ValueError):
+            telegram_connector.build_history_command("/ocrhistory @vcnews 50 surprise")
 
     def test_build_history_command_for_ocr_pending_with_period_and_channel(self) -> None:
         command = telegram_connector.build_history_command("/ocr @vcnews 50 since=2026-03-15 until=2026-03-16")
@@ -597,6 +660,21 @@ class TelegramConnectorTests(unittest.TestCase):
         self.assertEqual(env["PATH"], "/usr/bin")
         self.assertNotIn("SECRET_NOISE", env)
 
+    def test_api_call_converts_shared_api_error_to_system_exit(self) -> None:
+        original_shared_api_call = telegram_connector.shared_api_call
+
+        def fake_shared_api_call(*args, **kwargs):
+            raise telegram_connector.TelegramApiError("Telegram API failed")
+
+        telegram_connector.shared_api_call = fake_shared_api_call
+        try:
+            with self.assertRaises(SystemExit) as ctx:
+                telegram_connector.api_call("token", "getMe")
+        finally:
+            telegram_connector.shared_api_call = original_shared_api_call
+
+        self.assertEqual(str(ctx.exception), "Telegram API failed")
+
     def test_build_safe_command_response_any_summarizes_multi_channel_results(self) -> None:
         completed = subprocess.CompletedProcess(
             args=["python3"],
@@ -759,7 +837,7 @@ class TelegramConnectorTests(unittest.TestCase):
                 "from": {"id": 7, "username": "alice"},
             },
         }
-        config = {"bridge": {"allowed_chat_ids": "42", "allowed_user_ids": "7"}}
+        config = {"bridge": {"allowed_chat_ids": "42", "allowed_user_ids": "7", "worker_process_timeout_seconds": "7200"}}
         original_exists = telegram_connector.resolve_history_client_path
         original_run = telegram_connector.subprocess.run
         original_send = telegram_connector.send_text_chunks
@@ -769,6 +847,7 @@ class TelegramConnectorTests(unittest.TestCase):
 
         def fake_run(*args, **kwargs):
             captured["env"] = kwargs.get("env")
+            captured["timeout"] = kwargs.get("timeout")
             return subprocess.CompletedProcess(args=args[0], returncode=0, stdout='{"status":"ok"}', stderr="")
 
         telegram_connector.subprocess.run = fake_run
@@ -790,6 +869,7 @@ class TelegramConnectorTests(unittest.TestCase):
         self.assertEqual(env["TELEGRAM_API_HASH"], "hash")
         self.assertEqual(env["TELEGRAM_BOT_TOKEN"], "token")
         self.assertNotIn("UNUSED", env)
+        self.assertEqual(captured["timeout"], 7200)
 
     def test_handle_history_command_suppresses_success_echo_for_digest(self) -> None:
         update = {
@@ -966,6 +1046,7 @@ class TelegramConnectorTests(unittest.TestCase):
                 "top_models_timeout_seconds": "15",
                 "top_models_default_limit": "5",
                 "top_models_cache_ttl_seconds": "300",
+                "top_models_retry_attempts": "3",
             }
         }
         original_fetch = telegram_connector.fetch_top_models_payload
@@ -1046,6 +1127,7 @@ class TelegramConnectorTests(unittest.TestCase):
                 "top_models_timeout_seconds": "15",
                 "top_models_default_limit": "5",
                 "top_models_cache_ttl_seconds": "300",
+                "top_models_retry_attempts": "3",
             }
         }
         original_fetch = telegram_connector.fetch_top_models_payload

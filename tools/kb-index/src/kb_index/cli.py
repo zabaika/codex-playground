@@ -79,6 +79,9 @@ def cmd_status(args: argparse.Namespace) -> int:
     }
     payload['configured_retrieval'] = {
         'default_limit': retrieval.default_limit,
+        'fts_candidate_limit': retrieval.fts_candidate_limit,
+        'title_candidate_limit': retrieval.title_candidate_limit,
+        'links_out_candidate_limit': retrieval.links_out_candidate_limit,
         'min_term_coverage_ratio': retrieval.min_term_coverage_ratio,
         'min_score_ratio_to_top': retrieval.min_score_ratio_to_top,
         'always_keep_top_n': retrieval.always_keep_top_n,

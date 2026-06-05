@@ -25,6 +25,7 @@ if str(REPO_ROOT) not in sys.path:
 from telegram_shared import secrets as shared_secrets
 from telegram_shared.config import get_config_value as shared_get_config_value
 from telegram_shared.config import load_runtime_config as shared_load_runtime_config
+from telegram_shared.errors import SecretResolutionError
 from telegram_shared.openai_usage import OpenAIUsage
 from telegram_shared.openai_usage import PromptCacheInfo
 from telegram_shared.openai_usage import build_prompt_cache_info as shared_build_prompt_cache_info
@@ -52,6 +53,10 @@ DEFAULT_MAX_LOCAL_MATCHES = 50
 DEFAULT_MAX_FILE_LINES = 400
 DEFAULT_MAX_DIRECTORY_ENTRIES = 200
 DEFAULT_MAX_TOOL_OUTPUT_CHARS = 50000
+DEFAULT_OPENAI_TIMEOUT_SECONDS = 180
+DEFAULT_LOCAL_SEARCH_TIMEOUT_SECONDS = 30
+DEFAULT_WEB_SEARCH_TIMEOUT_SECONDS = 30
+DEFAULT_FETCH_URL_TIMEOUT_SECONDS = 30
 OP_REFERENCE_PREFIX = shared_secrets.OP_REFERENCE_PREFIX
 _SECRET_CACHE = shared_secrets._SECRET_CACHE
 
@@ -131,11 +136,17 @@ def get_config_value(config: dict[str, Any], section: str, key: str) -> str:
 
 
 def resolve_onepassword_secret(reference: str, label: str) -> str:
-    return shared_secrets.resolve_onepassword_secret(reference, label)
+    try:
+        return shared_secrets.resolve_onepassword_secret(reference, label)
+    except SecretResolutionError as exc:
+        raise SystemExit(str(exc)) from exc
 
 
 def resolve_secret_value(raw_value: str, label: str) -> str:
-    return shared_secrets.resolve_secret_value(raw_value, label)
+    try:
+        return shared_secrets.resolve_secret_value(raw_value, label)
+    except SecretResolutionError as exc:
+        raise SystemExit(str(exc)) from exc
 
 
 def parse_int(value: str, default: int, *, min_value: int = 1, max_value: int | None = None) -> int:
@@ -201,8 +212,32 @@ def resolve_runtime() -> dict[str, Any]:
             "Финальные ответы делай короткими, практичными и пригодными для Telegram."
         ),
         "max_tool_rounds": parse_int(get_config_value(config, "agent", "max_tool_rounds"), DEFAULT_MAX_TOOL_ROUNDS, min_value=1, max_value=16),
+        "openai_timeout_seconds": parse_int(
+            get_config_value(config, "agent", "openai_timeout_seconds"),
+            DEFAULT_OPENAI_TIMEOUT_SECONDS,
+            min_value=30,
+            max_value=600,
+        ),
         "web_search_limit": parse_int(get_config_value(config, "agent", "web_search_limit"), DEFAULT_WEB_SEARCH_LIMIT, min_value=1, max_value=10),
         "fetch_char_limit": parse_int(get_config_value(config, "agent", "fetch_char_limit"), DEFAULT_FETCH_CHAR_LIMIT, min_value=1000, max_value=30000),
+        "local_search_timeout_seconds": parse_int(
+            get_config_value(config, "agent", "local_search_timeout_seconds"),
+            DEFAULT_LOCAL_SEARCH_TIMEOUT_SECONDS,
+            min_value=1,
+            max_value=300,
+        ),
+        "web_search_timeout_seconds": parse_int(
+            get_config_value(config, "agent", "web_search_timeout_seconds"),
+            DEFAULT_WEB_SEARCH_TIMEOUT_SECONDS,
+            min_value=1,
+            max_value=300,
+        ),
+        "fetch_url_timeout_seconds": parse_int(
+            get_config_value(config, "agent", "fetch_url_timeout_seconds"),
+            DEFAULT_FETCH_URL_TIMEOUT_SECONDS,
+            min_value=1,
+            max_value=300,
+        ),
         "max_local_matches": parse_int(
             get_config_value(config, "agent", "max_local_matches"),
             DEFAULT_MAX_LOCAL_MATCHES,
@@ -398,6 +433,7 @@ def search_local_files(
     limit: int = 20,
     *,
     max_matches: int = DEFAULT_MAX_LOCAL_MATCHES,
+    timeout_seconds: int = DEFAULT_LOCAL_SEARCH_TIMEOUT_SECONDS,
 ) -> dict[str, Any]:
     target_root = resolve_user_path(root, allowed_roots)
     result_limit = min(max_matches, max(1, limit))
@@ -419,7 +455,7 @@ def search_local_files(
             cwd=str(BASE_DIR),
             capture_output=True,
             text=True,
-            timeout=30,
+            timeout=timeout_seconds,
             check=False,
         )
     except FileNotFoundError:
@@ -463,11 +499,11 @@ def extract_search_results(html: str, limit: int) -> list[dict[str, str]]:
     return results
 
 
-def web_search(query: str, limit: int) -> dict[str, Any]:
+def web_search(query: str, limit: int, *, timeout_seconds: int = DEFAULT_WEB_SEARCH_TIMEOUT_SECONDS) -> dict[str, Any]:
     url = "https://html.duckduckgo.com/html/?" + parse.urlencode({"q": query})
     req = request.Request(url, headers={"User-Agent": "telegram-agent-bot/1.0"})
     try:
-        with request.urlopen(req, timeout=30) as resp:
+        with request.urlopen(req, timeout=timeout_seconds) as resp:
             html = resp.read().decode("utf-8", errors="replace")
     except error.HTTPError as exc:
         raise ValueError(f"HTTP {exc.code} while searching the web.") from exc
@@ -506,11 +542,16 @@ def validate_public_http_url(url: str) -> parse.ParseResult:
     return parsed_url
 
 
-def fetch_url_text(url: str, *, max_chars: int) -> dict[str, Any]:
+def fetch_url_text(
+    url: str,
+    *,
+    max_chars: int,
+    timeout_seconds: int = DEFAULT_FETCH_URL_TIMEOUT_SECONDS,
+) -> dict[str, Any]:
     parsed_url = validate_public_http_url(url)
     req = request.Request(url, headers={"User-Agent": "telegram-agent-bot/1.0"})
     try:
-        with request.urlopen(req, timeout=30) as resp:
+        with request.urlopen(req, timeout=timeout_seconds) as resp:
             body = resp.read().decode("utf-8", errors="replace")
             content_type = resp.headers.get("Content-Type", "")
     except error.HTTPError as exc:
@@ -603,7 +644,13 @@ def tool_definitions(runtime: dict[str, Any]) -> list[dict[str, Any]]:
     ]
 
 
-def api_request(payload: dict[str, Any], api_key: str) -> dict[str, Any]:
+def api_request(
+    payload: dict[str, Any],
+    api_key: str,
+    *,
+    timeout_seconds: int = DEFAULT_OPENAI_TIMEOUT_SECONDS,
+    urlopen_func=request.urlopen,
+) -> dict[str, Any]:
     started_at = time.perf_counter()
     req = request.Request(
         OPENAI_RESPONSES_URL,
@@ -615,7 +662,7 @@ def api_request(payload: dict[str, Any], api_key: str) -> dict[str, Any]:
         method="POST",
     )
     try:
-        with request.urlopen(req, timeout=180) as resp:
+        with urlopen_func(req, timeout=timeout_seconds) as resp:
             response = json.loads(resp.read().decode("utf-8"))
     except error.HTTPError as exc:
         detail = ""
@@ -834,11 +881,20 @@ def execute_tool(call: dict[str, Any], runtime: dict[str, Any]) -> dict[str, Any
             root=str(arguments.get("root", ".")),
             limit=int(arguments.get("limit", 20)),
             max_matches=runtime["max_local_matches"],
+            timeout_seconds=runtime["local_search_timeout_seconds"],
         )
     if name == "web_search":
-        return web_search(str(arguments["query"]), min(runtime["web_search_limit"], int(arguments.get("limit", runtime["web_search_limit"]))))
+        return web_search(
+            str(arguments["query"]),
+            min(runtime["web_search_limit"], int(arguments.get("limit", runtime["web_search_limit"]))),
+            timeout_seconds=runtime["web_search_timeout_seconds"],
+        )
     if name == "fetch_url":
-        return fetch_url_text(str(arguments["url"]), max_chars=min(runtime["fetch_char_limit"], int(arguments.get("max_chars", runtime["fetch_char_limit"]))))
+        return fetch_url_text(
+            str(arguments["url"]),
+            max_chars=min(runtime["fetch_char_limit"], int(arguments.get("max_chars", runtime["fetch_char_limit"]))),
+            timeout_seconds=runtime["fetch_url_timeout_seconds"],
+        )
     raise ValueError(f"Unsupported tool call: {name}")
 
 
@@ -897,7 +953,11 @@ def run_agent(prompt: str, chat_id: str, username: str) -> dict[str, Any]:
             if response_id_to_continue:
                 payload["previous_response_id"] = response_id_to_continue
             try:
-                response = api_request(payload, runtime["openai_api_key"])
+                response = api_request(
+                    payload,
+                    runtime["openai_api_key"],
+                    timeout_seconds=runtime["openai_timeout_seconds"],
+                )
             except SystemExit as exc:
                 log_openai_usage(
                     log_conn,

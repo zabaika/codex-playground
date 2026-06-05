@@ -23,18 +23,27 @@ allowed_chat_ids = ""
 allowed_user_ids = ""
 # Allowed Telegram usernames from message.from.username. Empty denies bridge commands unless user ids are configured.
 allowed_usernames = ""
-# Preferred Telegram text message chunk size for long replies. Keep it below 4096.
+# Preferred Telegram text message chunk size for long replies.
+# Values are clamped to 500..4096; 4096 is Telegram's text-message limit.
 text_chunk_size = "3900"
 # Maximum number of latest ai_usage_log rows scanned by /agent-stats.
+# Values are clamped to 20..2000.
 agent_stats_row_limit = "200"
+# Wall-clock timeout in seconds for one bridge-launched worker subprocess, such as /digest, /update, /tail, /ocr, or /exportcsv.
+# Values are clamped to 60..14400.
+worker_process_timeout_seconds = "3600"
 # External ranking API used by /top-models.
 top_models_api_url = "https://shir-man.com/api/free-llm/top-models"
-# Network timeout in seconds for one /top-models attempt.
+# Network timeout in seconds for one /top-models attempt. Values are clamped to 3..60.
 top_models_timeout_seconds = "15"
 # Default number of rows returned by /top-models when limit is omitted.
+# Values are clamped to 1..20; the same range applies to an explicit /top-models limit.
 top_models_default_limit = "5"
 # In-memory cache TTL in seconds for /top-models inside the bridge process.
+# Values are clamped to 0..3600; 0 disables the cache.
 top_models_cache_ttl_seconds = "300"
+# Number of /top-models retry attempts for transient network failures. Values are clamped to 1..5.
+top_models_retry_attempts = "3"
 # history_client_path = "/absolute/path/to/telegram_history_client.py"
 
 [channels]
@@ -84,6 +93,12 @@ message_text_max_chars = "450"
 message_ocr_max_chars = "300"
 # Maximum total size of one rendered AI input block in characters for one channel, regardless of digest period.
 message_block_max_chars = "100000"
+# Maximum output tokens requested from OpenAI for each digest summarization call.
+max_output_tokens = "1200"
+# Network timeout in seconds for one OpenAI digest request attempt.
+openai_timeout_seconds = "120"
+# Number of OpenAI digest retry attempts for transient network failures.
+openai_retry_attempts = "3"
 
 [digest_limits.day]
 # Recommended defaults for a daily window when the total traffic across all channels is about 5000 messages/day.
@@ -111,6 +126,11 @@ update_limit = "100"
 # Set 0 to flush each prepared write unit immediately instead of batching in memory.
 batch_size = "500"
 
+[export]
+# Default number of latest messages exported by /exportcsv or export-csv when no --limit/since/until filter is provided.
+# Values are clamped to 1..100000.
+default_limit = "100"
+
 [digest_prompts]
 # Path to the version-controlled digest prompt bundle.
 # Relative paths are resolved from the config directory that contains runtime.local.toml.
@@ -125,6 +145,10 @@ file = "digest_prompts.toml"
 
 [ocr]
 image_prompt = "Extract all readable text from the image."
+# Default number of pending image media assets processed by /ocr or ocr-pending when --limit is omitted.
+pending_default_limit = "100"
+# Timeout in seconds for one Tesseract OCR subprocess. Values below 1 are clamped to 1.
+tesseract_timeout_seconds = "60"
 
 [secrets]
 # macOS Keychain generic-password references via `security find-generic-password`

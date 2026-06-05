@@ -18,6 +18,7 @@ DIGEST_STDERR_LOG="$PROJECT_LOG_DIR/digest.stderr.log"
 DIGEST_LAST_ATTEMPT_LOG="$PROJECT_LOG_DIR/digest.last_attempt.json"
 BRIDGE_LAUNCHER="$SERVICE_ROOT/scripts/telegram-connector-bridge-launcher"
 DIGEST_LAUNCHER="$SERVICE_ROOT/scripts/telegram-connector-digest-launcher"
+LAUNCHCTL_DOMAIN="gui/$(id -u)"
 
 resolve_python_bin() {
   local explicit="${PYTHON_BIN:-}"
@@ -261,10 +262,11 @@ cat > "$DIGEST_PLIST_PATH" <<EOF
 </plist>
 EOF
 
-launchctl unload "$BRIDGE_PLIST_PATH" >/dev/null 2>&1 || true
-launchctl unload "$DIGEST_PLIST_PATH" >/dev/null 2>&1 || true
-launchctl load "$BRIDGE_PLIST_PATH"
-launchctl load "$DIGEST_PLIST_PATH"
+launchctl bootout "$LAUNCHCTL_DOMAIN" "$BRIDGE_PLIST_PATH" >/dev/null 2>&1 || true
+launchctl bootout "$LAUNCHCTL_DOMAIN" "$DIGEST_PLIST_PATH" >/dev/null 2>&1 || true
+launchctl bootstrap "$LAUNCHCTL_DOMAIN" "$BRIDGE_PLIST_PATH"
+launchctl bootstrap "$LAUNCHCTL_DOMAIN" "$DIGEST_PLIST_PATH"
+launchctl kickstart -k "$LAUNCHCTL_DOMAIN/com.zabaika.telegram-connector-bridge"
 
 echo "Installed launch agent: $BRIDGE_PLIST_PATH"
 echo "Installed launch agent: $DIGEST_PLIST_PATH"

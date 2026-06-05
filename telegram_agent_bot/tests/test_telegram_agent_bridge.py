@@ -163,6 +163,7 @@ class TelegramAgentBridgeTests(unittest.TestCase):
         self.assertEqual(runtime.default_command, "agent")
         self.assertEqual(runtime.text_chunk_size, 3900)
         self.assertEqual(runtime.agent_stats_row_limit, 200)
+        self.assertEqual(runtime.worker_process_timeout_seconds, 3600)
 
     def test_resolve_text_chunk_size_reads_bridge_config(self) -> None:
         self.assertEqual(
@@ -174,6 +175,14 @@ class TelegramAgentBridgeTests(unittest.TestCase):
         self.assertEqual(
             telegram_agent_bridge.resolve_agent_stats_row_limit({"bridge": {"agent_stats_row_limit": "150"}}),
             150,
+        )
+
+    def test_resolve_worker_process_timeout_seconds_reads_bridge_config(self) -> None:
+        self.assertEqual(
+            telegram_agent_bridge.resolve_worker_process_timeout_seconds(
+                {"bridge": {"worker_process_timeout_seconds": "7200"}}
+            ),
+            7200,
         )
 
     def test_resolve_default_command_reads_bridge_config(self) -> None:
@@ -215,6 +224,21 @@ class TelegramAgentBridgeTests(unittest.TestCase):
         self.assertIn("OPENAI_API_KEY=<redacted>", redacted)
         self.assertIn("<path>", redacted)
         self.assertIn("<bot_token>", redacted)
+
+    def test_api_call_converts_shared_api_error_to_system_exit(self) -> None:
+        original_shared_api_call = telegram_agent_bridge.shared_api_call
+
+        def fake_shared_api_call(*args, **kwargs):
+            raise telegram_agent_bridge.TelegramApiError("Telegram API failed")
+
+        telegram_agent_bridge.shared_api_call = fake_shared_api_call
+        try:
+            with self.assertRaises(SystemExit) as ctx:
+                telegram_agent_bridge.api_call("token", "getMe")
+        finally:
+            telegram_agent_bridge.shared_api_call = original_shared_api_call
+
+        self.assertEqual(str(ctx.exception), "Telegram API failed")
 
     def test_redact_update_for_storage_recognizes_agent_command(self) -> None:
         update = {
@@ -266,6 +290,7 @@ class TelegramAgentBridgeTests(unittest.TestCase):
             text_chunk_size=3900,
             agent_stats_row_limit=200,
             default_command="agent",
+            worker_process_timeout_seconds=7200,
         )
         original_run = telegram_agent_bridge.subprocess.run
         original_send = telegram_agent_bridge.send_text_chunks
@@ -273,6 +298,7 @@ class TelegramAgentBridgeTests(unittest.TestCase):
 
         def fake_run(*args, **kwargs):
             captured["argv"] = args[0]
+            captured["timeout"] = kwargs.get("timeout")
             return subprocess.CompletedProcess(
                 args=args[0],
                 returncode=0,
@@ -295,6 +321,7 @@ class TelegramAgentBridgeTests(unittest.TestCase):
         self.assertIn("--username", argv)
         self.assertIn("alice", argv)
         self.assertEqual(captured["reply"], "done")
+        self.assertEqual(captured["timeout"], 7200)
 
     def test_cmd_listen_resolves_op_secrets_once_for_multiple_commands(self) -> None:
         original_load_runtime_config = telegram_agent_bridge.load_runtime_config

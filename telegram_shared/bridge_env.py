@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import os
+import subprocess
+from pathlib import Path
 from typing import Callable
 
 
@@ -18,6 +20,25 @@ def build_child_env(
         child_env[project_root_env_var] = project_root
     child_env.update({key: value for key, value in secret_env.items() if value})
     return child_env
+
+
+def run_worker_subprocess(
+    argv: list[str],
+    *,
+    cwd: Path,
+    env: dict[str, str],
+    timeout_seconds: int,
+    run_func: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
+) -> subprocess.CompletedProcess[str]:
+    return run_func(
+        argv,
+        cwd=str(cwd),
+        capture_output=True,
+        env=env,
+        text=True,
+        timeout=timeout_seconds,
+        check=False,
+    )
 
 
 def parse_allowed_chat_ids(

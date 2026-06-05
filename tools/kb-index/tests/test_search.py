@@ -40,6 +40,9 @@ class SearchTests(unittest.TestCase):
     def make_retrieval(self) -> RetrievalConfig:
         return RetrievalConfig(
             default_limit=5,
+            fts_candidate_limit=50,
+            title_candidate_limit=50,
+            links_out_candidate_limit=20,
             min_term_coverage_ratio=0.5,
             min_score_ratio_to_top=0.45,
             always_keep_top_n=3,

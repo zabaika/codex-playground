@@ -121,6 +121,28 @@ Keep documentation split by responsibility:
 - do not stop at `implemented`; stop only when the success criteria have been verified or a concrete blocker is surfaced
 - prefer strong, local success criteria over broad phrases like `make it work`, because weak criteria force repeated clarification and invite silent drift
 
+#### 5. External OS Services and Signing Agents
+
+**Treat service installation and external signing as system mutations.**
+
+- run installers or reinstallers that mutate macOS `launchd` state outside the sandbox with explicit approval
+- run Git commit or amend operations that require external signing agents outside the sandbox with explicit approval
+- do not fall back to unsigned commits unless the user explicitly approves that security downgrade
+- when SSH commit signing is used through 1Password, run signing with access to the 1Password SSH agent socket and verify the result before reporting success
+- do not treat sandbox failures from `launchctl` as application failures; rerun the canonical installer outside the sandbox before debugging service code
+- after code, shared runtime, copied service-root files, or runtime config changes, prefer the canonical installer over a restart-only script
+- restart-only scripts are appropriate only when the installed service root already contains the intended code and config
+- for macOS LaunchAgents, prefer a stable executable launcher wrapper as `ProgramArguments[0]`; let that wrapper invoke shell runners through `/bin/bash`
+
+#### 6. Runtime Limits and Operator-Visible Guardrails
+
+**Make behavioral limits visible to operators.**
+
+- any timeout, row limit, token/output cap, batch size, retry count, cache TTL, or worker lifetime that affects operator-visible behavior must be present in runtime config or documented as a protocol/API invariant
+- config examples must include a nearby comment explaining what the limit bounds and whether it applies per item, per request, per command, or to the whole process
+- if code clamps a config value to a range, the nearby config comment must state that range with `Values are clamped to ...`
+- avoid hidden fallback constants for business behavior; use code defaults only as compatibility fallbacks for missing older configs
+
 Examples:
 
 - `add validation` -> `write tests for invalid inputs, then make them pass`

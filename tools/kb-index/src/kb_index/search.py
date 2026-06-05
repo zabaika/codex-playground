@@ -252,6 +252,7 @@ def search_index(
     if note_type:
         note_type_join_filter = " AND notes.note_type = ?"
         fts_params.append(note_type)
+    fts_params.append(retrieval.fts_candidate_limit)
     fts_rows = conn.execute(
         """
         SELECT
@@ -268,12 +269,20 @@ def search_index(
         WHERE note_fts MATCH ?
         """ + note_type_join_filter + """
         ORDER BY bm25_score ASC
-        LIMIT 50
+        LIMIT ?
         """,
         fts_params,
     ).fetchall()
-    title_rows = fetch_title_rows(conn, query_terms, 50, note_type=note_type) if mode == 'title-first' else []
-    links_rows = [] if mode == 'title-first' else fetch_links_out_rows(conn, query_terms, 20)
+    title_rows = (
+        fetch_title_rows(conn, query_terms, retrieval.title_candidate_limit, note_type=note_type)
+        if mode == 'title-first'
+        else []
+    )
+    links_rows = [] if mode == 'title-first' else fetch_links_out_rows(
+        conn,
+        query_terms,
+        retrieval.links_out_candidate_limit,
+    )
     candidates: dict[str, dict[str, object]] = {}
     for row in title_rows:
         merge_candidate_row(candidates, row, 'title')

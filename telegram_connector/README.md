@@ -74,6 +74,7 @@ Main config groups:
 - `bridge.allowed_user_ids` and `bridge.allowed_usernames` further restrict which senders may trigger bot commands; if both are empty, bridge commands are denied; `@name` and `name` are treated the same
 - `bridge.text_chunk_size` controls how long Telegram text replies may grow before the bot splits them into multiple messages
 - `bridge.agent_stats_row_limit` limits `/agent-stats` to a recent window from `ai_usage_log`
+- `bridge.worker_process_timeout_seconds` is the wall-clock timeout for one bridge-launched worker subprocess such as `/digest`, `/update`, `/tail`, `/ocr`, or `/exportcsv`; it is separate from the scheduled digest TTL
 - `bridge.top_models_*` controls the external ranking source, timeout, cache TTL, and default result limit for `/top-models`
 
 ### Digest defaults
@@ -109,6 +110,11 @@ Main config groups:
 - for multi-channel sync, channels are processed strictly in the order you pass them, or in config order when the channel list comes from defaults
 - for non-digest sync, both `[sync].sync_limit` and command-level `--limit` apply; `--limit 0` removes only the per-channel cap
 - `tail`, `update`, and `backfill` already stream messages from Telegram incrementally through Telethon; `[sync].batch_size` affects local DB flush size, not Telegram API paging
+
+### OCR behavior
+
+- `ocr.pending_default_limit` is the default number of pending downloaded images processed by `/ocr` or `ocr-pending` when no explicit limit is passed
+- `ocr.tesseract_timeout_seconds` is the timeout for one local Tesseract subprocess; it bounds OCR work per image, not the whole `/ocr` command
 
 ### Digest output and usage logging
 

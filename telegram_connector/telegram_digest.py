@@ -12,7 +12,7 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 import time
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, Callable
 from urllib import error, request
 
 MODULE_DIR = Path(__file__).resolve().parent
@@ -37,7 +37,10 @@ PROJECT_ROOT = Path(os.environ.get("TELEGRAM_CONNECTOR_PROJECT_ROOT", "")).expan
 LAUNCHD_LOG_DIR = PROJECT_ROOT / "data" / "launchd"
 DIGEST_LAST_ATTEMPT_LOG = LAUNCHD_LOG_DIR / "digest.last_attempt.json"
 
-OPENAI_DIGEST_RETRY_ATTEMPTS = 3
+DEFAULT_OPENAI_DIGEST_MAX_OUTPUT_TOKENS = 1200
+DEFAULT_OPENAI_DIGEST_TIMEOUT_SECONDS = 120
+DEFAULT_OPENAI_DIGEST_RETRY_ATTEMPTS = 3
+OPENAI_DIGEST_RETRY_ATTEMPTS = DEFAULT_OPENAI_DIGEST_RETRY_ATTEMPTS
 DEFAULT_PROCESS_CONFIG = common_process.load_process_config()
 DEFAULT_DIGEST_SYNC_TOTAL_TIMEOUT_SECONDS = 1800
 DIGEST_PROMPT_REQUIRED_KEYS = (
@@ -84,6 +87,9 @@ class DigestConfig:
     batch_prompt_template: str
     final_prompt_template: str
     openai_api_key: str
+    openai_max_output_tokens: int = DEFAULT_OPENAI_DIGEST_MAX_OUTPUT_TOKENS
+    openai_timeout_seconds: int = DEFAULT_OPENAI_DIGEST_TIMEOUT_SECONDS
+    openai_retry_attempts: int = DEFAULT_OPENAI_DIGEST_RETRY_ATTEMPTS
 
 
 @dataclass
@@ -236,6 +242,7 @@ def load_digest_prompts(config: dict[str, Any], *, base_dir: Path | None = None)
 
 def resolve_digest_config(config: dict[str, Any]) -> DigestConfig:
     prompts = load_digest_prompts(config)
+    shared_ai_section = get_nested_section(config, "digest_ai")
     model = history_client.get_config_value(config, "processing", "model")
     if not model:
         raise SystemExit(
@@ -254,14 +261,28 @@ def resolve_digest_config(config: dict[str, Any]) -> DigestConfig:
         history_client.get_config_value(config, "digest", "termination_grace_seconds")
         or str(DEFAULT_PROCESS_CONFIG.default_termination_grace_seconds)
     )
+    raw_openai_max_output_tokens = str(
+        shared_ai_section.get("max_output_tokens", DEFAULT_OPENAI_DIGEST_MAX_OUTPUT_TOKENS)
+    ).strip()
+    raw_openai_timeout_seconds = str(
+        shared_ai_section.get("openai_timeout_seconds", DEFAULT_OPENAI_DIGEST_TIMEOUT_SECONDS)
+    ).strip()
+    raw_openai_retry_attempts = str(
+        shared_ai_section.get("openai_retry_attempts", DEFAULT_OPENAI_DIGEST_RETRY_ATTEMPTS)
+    ).strip()
     try:
         min_messages_for_ai = max(0, int(raw_min_messages_for_ai))
         run_total_timeout_seconds = max(1, int(raw_run_total_timeout_seconds))
         termination_grace_seconds = max(1, int(raw_termination_grace_seconds))
         sync_total_timeout_seconds = max(1, int(raw_sync_total_timeout_seconds))
+        openai_max_output_tokens = max(1, int(raw_openai_max_output_tokens))
+        openai_timeout_seconds = max(1, int(raw_openai_timeout_seconds))
+        openai_retry_attempts = max(1, int(raw_openai_retry_attempts))
     except ValueError as exc:
         raise SystemExit(
-            "Invalid digest.min_messages_for_ai, digest.run_total_timeout_seconds, digest.termination_grace_seconds, or digest.sync_total_timeout_seconds in runtime config."
+            "Invalid digest.min_messages_for_ai, digest.run_total_timeout_seconds, digest.termination_grace_seconds, "
+            "digest.sync_total_timeout_seconds, digest_ai.max_output_tokens, digest_ai.openai_timeout_seconds, "
+            "or digest_ai.openai_retry_attempts in runtime config."
         ) from exc
     return DigestConfig(
         time=history_client.get_config_value(config, "digest", "time") or "08:00",
@@ -292,6 +313,9 @@ def resolve_digest_config(config: dict[str, Any]) -> DigestConfig:
         batch_prompt_template=prompts["batch_digest_template"],
         final_prompt_template=prompts["final_digest_template"],
         openai_api_key=os.environ.get("OPENAI_API_KEY", "").strip() or history_client.get_config_value(config, "secrets", "openai_api_key"),
+        openai_max_output_tokens=openai_max_output_tokens,
+        openai_timeout_seconds=openai_timeout_seconds,
+        openai_retry_attempts=openai_retry_attempts,
     )
 
 
@@ -1050,13 +1074,18 @@ def run_openai_digest(
     prompt: str,
     *,
     prompt_cache_key: str,
+    max_output_tokens: int = DEFAULT_OPENAI_DIGEST_MAX_OUTPUT_TOKENS,
+    timeout_seconds: int = DEFAULT_OPENAI_DIGEST_TIMEOUT_SECONDS,
+    retry_attempts: int = DEFAULT_OPENAI_DIGEST_RETRY_ATTEMPTS,
+    urlopen_func: Callable[..., Any] = request.urlopen,
+    sleep_func: Callable[[float], None] = time.sleep,
 ) -> OpenAIResult:
     payload = {
         "model": model,
         "instructions": system_instructions,
         "input": prompt,
         "prompt_cache_key": prompt_cache_key,
-        "max_output_tokens": 1200,
+        "max_output_tokens": max_output_tokens,
     }
     req = request.Request(
         "https://api.openai.com/v1/responses",
@@ -1070,10 +1099,10 @@ def run_openai_digest(
     last_network_error: BaseException | None = None
     response: dict[str, Any] | None = None
     latency_ms = 0
-    for attempt in range(1, OPENAI_DIGEST_RETRY_ATTEMPTS + 1):
+    for attempt in range(1, retry_attempts + 1):
         started_at = time.perf_counter()
         try:
-            with request.urlopen(req, timeout=120) as resp:
+            with urlopen_func(req, timeout=timeout_seconds) as resp:
                 response = json.loads(resp.read().decode("utf-8"))
             latency_ms = int((time.perf_counter() - started_at) * 1000)
             break
@@ -1083,19 +1112,19 @@ def run_openai_digest(
             latency_ms = int((time.perf_counter() - started_at) * 1000)
             error_text = str(exc).lower()
             is_retryable = isinstance(exc, (TimeoutError, error.URLError)) or "timed out" in error_text or "connection reset" in error_text
-            if not is_retryable or attempt >= OPENAI_DIGEST_RETRY_ATTEMPTS:
+            if not is_retryable or attempt >= retry_attempts:
                 last_network_error = exc
                 break
-            time.sleep(attempt)
+            sleep_func(attempt)
             last_network_error = exc
     if response is None:
         if isinstance(last_network_error, error.URLError):
             raise SystemExit(
-                f"OpenAI API request failed while creating digest after {OPENAI_DIGEST_RETRY_ATTEMPTS} attempts."
+                f"OpenAI API request failed while creating digest after {retry_attempts} attempts."
             ) from last_network_error
         if isinstance(last_network_error, (TimeoutError, OSError)):
             raise SystemExit(
-                f"OpenAI API request timed out while creating digest after {OPENAI_DIGEST_RETRY_ATTEMPTS} attempts."
+                f"OpenAI API request timed out while creating digest after {retry_attempts} attempts."
             ) from last_network_error
         raise SystemExit("OpenAI API request failed while creating digest.")
     text = extract_response_text(response)
@@ -1384,6 +1413,9 @@ def summarize_channel_batches(
                     config.system_instructions,
                     prompt,
                     prompt_cache_key=cache_info.cache_key,
+                    max_output_tokens=config.openai_max_output_tokens,
+                    timeout_seconds=config.openai_timeout_seconds,
+                    retry_attempts=config.openai_retry_attempts,
                 )
             except Exception as exc:
                 log_openai_usage(
@@ -1457,6 +1489,9 @@ def summarize_channel_batches(
                 config.system_instructions,
                 prompt,
                 prompt_cache_key=cache_info.cache_key,
+                max_output_tokens=config.openai_max_output_tokens,
+                timeout_seconds=config.openai_timeout_seconds,
+                retry_attempts=config.openai_retry_attempts,
             )
         except Exception as exc:
             log_openai_usage(
@@ -1530,6 +1565,9 @@ def summarize_channel_batches(
             config.system_instructions,
             final_prompt,
             prompt_cache_key=final_cache_info.cache_key,
+            max_output_tokens=config.openai_max_output_tokens,
+            timeout_seconds=config.openai_timeout_seconds,
+            retry_attempts=config.openai_retry_attempts,
         )
     except Exception as exc:
         log_openai_usage(
@@ -1783,6 +1821,9 @@ def cmd_run(args: argparse.Namespace) -> int:
                         batch_prompt_template=digest_config.batch_prompt_template,
                         final_prompt_template=digest_config.final_prompt_template,
                         openai_api_key=digest_config.openai_api_key,
+                        openai_max_output_tokens=digest_config.openai_max_output_tokens,
+                        openai_timeout_seconds=digest_config.openai_timeout_seconds,
+                        openai_retry_attempts=digest_config.openai_retry_attempts,
                     ),
                     channel=channel,
                     channel_name=channel_name,

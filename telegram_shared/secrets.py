@@ -1,6 +1,8 @@
 import subprocess
 from urllib import parse
 
+from .errors import SecretResolutionError
+
 
 OP_REFERENCE_PREFIX = "op://"
 KEYCHAIN_REFERENCE_PREFIX = "keychain://"
@@ -15,7 +17,7 @@ def resolve_keychain_secret(reference: str, label: str) -> str:
     service = parse.unquote(parsed.netloc.strip())
     account = parse.unquote(parsed.path.lstrip("/").strip())
     if not service or not account:
-        raise SystemExit(
+        raise SecretResolutionError(
             f"Invalid Keychain reference for {label}. Use keychain://<service>/<account>."
         )
     try:
@@ -27,13 +29,13 @@ def resolve_keychain_secret(reference: str, label: str) -> str:
             check=False,
         )
     except FileNotFoundError as exc:
-        raise SystemExit(
+        raise SecretResolutionError(
             f"macOS 'security' CLI is required to resolve {label} from Keychain."
         ) from exc
     except subprocess.TimeoutExpired as exc:
-        raise SystemExit(f"Timed out while resolving {label} from Keychain.") from exc
+        raise SecretResolutionError(f"Timed out while resolving {label} from Keychain.") from exc
     if completed.returncode != 0:
-        raise SystemExit(
+        raise SecretResolutionError(
             f"Failed to resolve {label} from Keychain. Make sure the generic password exists and the reference is valid."
         )
     value = completed.stdout.strip()
@@ -54,13 +56,13 @@ def resolve_onepassword_secret(reference: str, label: str) -> str:
             check=False,
         )
     except FileNotFoundError as exc:
-        raise SystemExit(
+        raise SecretResolutionError(
             f"1Password CLI 'op' is required to resolve {label}. Install 1Password CLI and sign in first."
         ) from exc
     except subprocess.TimeoutExpired as exc:
-        raise SystemExit(f"Timed out while resolving {label} from 1Password.") from exc
+        raise SecretResolutionError(f"Timed out while resolving {label} from 1Password.") from exc
     if completed.returncode != 0:
-        raise SystemExit(
+        raise SecretResolutionError(
             f"Failed to resolve {label} from 1Password. Make sure 'op' is signed in and the secret reference is valid."
         )
     value = completed.stdout.strip()

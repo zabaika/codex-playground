@@ -10,6 +10,8 @@ PROJECT_LOG_DIR="$SOURCE_ROOT/data/launchd"
 STARTUP_LOG="$PROJECT_LOG_DIR/bridge.startup.log"
 STDOUT_LOG="$PROJECT_LOG_DIR/bridge.stdout.log"
 STDERR_LOG="$PROJECT_LOG_DIR/bridge.stderr.log"
+BRIDGE_LAUNCHER="$SERVICE_ROOT/scripts/telegram-agent-bot-bridge-launcher"
+LAUNCHCTL_DOMAIN="gui/$(id -u)"
 
 mkdir -p "$SERVICE_ROOT/config" "$SERVICE_ROOT/data/launchd" "$SERVICE_ROOT/scripts" "$LAUNCH_AGENTS_DIR" "$PROJECT_LOG_DIR"
 
@@ -39,6 +41,13 @@ EOF
 
 chmod +x "$SERVICE_ROOT/scripts/run_telegram_agent_bridge.sh"
 
+cat > "$BRIDGE_LAUNCHER" <<EOF
+#!/bin/sh
+exec /bin/bash "$SERVICE_ROOT/scripts/run_telegram_agent_bridge.sh"
+EOF
+
+chmod +x "$BRIDGE_LAUNCHER"
+
 cat > "$PLIST_PATH" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -49,7 +58,7 @@ cat > "$PLIST_PATH" <<EOF
 
     <key>ProgramArguments</key>
     <array>
-      <string>$SERVICE_ROOT/scripts/run_telegram_agent_bridge.sh</string>
+      <string>$BRIDGE_LAUNCHER</string>
     </array>
 
     <key>EnvironmentVariables</key>
@@ -79,8 +88,9 @@ cat > "$PLIST_PATH" <<EOF
 </plist>
 EOF
 
-launchctl unload "$PLIST_PATH" >/dev/null 2>&1 || true
-launchctl load "$PLIST_PATH"
+launchctl bootout "$LAUNCHCTL_DOMAIN" "$PLIST_PATH" >/dev/null 2>&1 || true
+launchctl bootstrap "$LAUNCHCTL_DOMAIN" "$PLIST_PATH"
+launchctl kickstart -k "$LAUNCHCTL_DOMAIN/com.zabaika.telegram-agent-bot-bridge"
 
 echo "Installed launch agent: $PLIST_PATH"
 echo "Service root: $SERVICE_ROOT"

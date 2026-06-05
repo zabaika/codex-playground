@@ -25,6 +25,9 @@ class RankingConfig:
 @dataclass(slots=True)
 class RetrievalConfig:
     default_limit: int
+    fts_candidate_limit: int
+    title_candidate_limit: int
+    links_out_candidate_limit: int
     min_term_coverage_ratio: float
     min_score_ratio_to_top: float
     always_keep_top_n: int
@@ -115,6 +118,9 @@ def load_runtime_config(config_path: Path | None = None) -> RuntimeConfig:
     retrieval_data = _require_mapping(data, 'retrieval')
     retrieval = RetrievalConfig(
         default_limit=_as_int(_require_value(retrieval_data, 'default_limit')),
+        fts_candidate_limit=_as_int(_require_value(retrieval_data, 'fts_candidate_limit')),
+        title_candidate_limit=_as_int(_require_value(retrieval_data, 'title_candidate_limit')),
+        links_out_candidate_limit=_as_int(_require_value(retrieval_data, 'links_out_candidate_limit')),
         min_term_coverage_ratio=float(_require_value(retrieval_data, 'min_term_coverage_ratio')),
         min_score_ratio_to_top=float(_require_value(retrieval_data, 'min_score_ratio_to_top')),
         always_keep_top_n=_as_int(_require_value(retrieval_data, 'always_keep_top_n')),

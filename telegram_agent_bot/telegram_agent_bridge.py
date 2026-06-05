@@ -35,21 +35,30 @@ from telegram_shared.bridge_env import is_user_allowed as shared_is_user_allowed
 from telegram_shared.bridge_env import parse_allowed_chat_ids as shared_parse_allowed_chat_ids
 from telegram_shared.bridge_env import parse_allowed_user_ids as shared_parse_allowed_user_ids
 from telegram_shared.bridge_env import parse_allowed_usernames as shared_parse_allowed_usernames
+from telegram_shared.bridge_env import run_worker_subprocess as shared_run_worker_subprocess
 from telegram_shared.command_text import normalize_bridge_command_text as shared_normalize_bridge_command_text
 from telegram_shared.config import get_config_value as shared_get_config_value
 from telegram_shared.config import load_runtime_config as shared_load_runtime_config
+from telegram_shared.config import DEFAULT_BRIDGE_WORKER_PROCESS_TIMEOUT_SECONDS
+from telegram_shared.config import resolve_agent_stats_row_limit as shared_resolve_agent_stats_row_limit
+from telegram_shared.config import resolve_bridge_text_chunk_size as shared_resolve_bridge_text_chunk_size
+from telegram_shared.config import resolve_bridge_worker_process_timeout_seconds as shared_resolve_bridge_worker_process_timeout_seconds
+from telegram_shared.errors import SecretResolutionError
+from telegram_shared.errors import TelegramApiError
 from telegram_shared.formatting import format_inline_telegram_html as shared_format_inline_telegram_html
 from telegram_shared.formatting import format_telegram_html as shared_format_telegram_html
 from telegram_shared.formatting import format_telegram_line as shared_format_telegram_line
+from telegram_shared.paths import resolve_app_paths as shared_resolve_app_paths
 from telegram_shared.redaction import redact_sensitive_text as shared_redact_sensitive_text
 
 
-APP_DIR = Path(__file__).resolve().parent
-PROJECT_ROOT = Path(os.environ.get("TELEGRAM_AGENT_BOT_PROJECT_ROOT", "")).expanduser() if os.environ.get("TELEGRAM_AGENT_BOT_PROJECT_ROOT") else APP_DIR
-BASE_DIR = PROJECT_ROOT
-CONFIG_DIR = BASE_DIR / "config"
-RUNTIME_LOCAL_FILE = CONFIG_DIR / "runtime.local.toml"
-DATA_DIR = BASE_DIR / "data"
+APP_PATHS = shared_resolve_app_paths(__file__, project_root_env_var="TELEGRAM_AGENT_BOT_PROJECT_ROOT")
+APP_DIR = APP_PATHS.app_dir
+PROJECT_ROOT = APP_PATHS.project_root
+BASE_DIR = APP_PATHS.base_dir
+CONFIG_DIR = APP_PATHS.config_dir
+RUNTIME_LOCAL_FILE = APP_PATHS.runtime_local_file
+DATA_DIR = APP_PATHS.data_dir
 OFFSET_FILE = DATA_DIR / "offset.local.json"
 INBOX_FILE = DATA_DIR / "inbox.jsonl"
 OUTBOX_FILE = DATA_DIR / "outbox.jsonl"
@@ -78,8 +87,6 @@ SAFE_SUBPROCESS_ENV_KEYS = {
     "USER",
 }
 SEND_RETRY_DELAYS = (0.5, 1.0)
-
-
 @dataclass
 class BridgeRuntime:
     bot_token: str
@@ -90,6 +97,7 @@ class BridgeRuntime:
     text_chunk_size: int
     agent_stats_row_limit: int
     default_command: str
+    worker_process_timeout_seconds: int = DEFAULT_BRIDGE_WORKER_PROCESS_TIMEOUT_SECONDS
 
 
 def load_runtime_config() -> dict[str, Any]:
@@ -101,11 +109,17 @@ def get_config_value(config: dict[str, Any], section: str, key: str) -> str:
 
 
 def resolve_onepassword_secret(reference: str, label: str) -> str:
-    return shared_secrets.resolve_onepassword_secret(reference, label)
+    try:
+        return shared_secrets.resolve_onepassword_secret(reference, label)
+    except SecretResolutionError as exc:
+        raise SystemExit(str(exc)) from exc
 
 
 def resolve_secret_value(raw_value: str, label: str) -> str:
-    return shared_secrets.resolve_secret_value(raw_value, label)
+    try:
+        return shared_secrets.resolve_secret_value(raw_value, label)
+    except SecretResolutionError as exc:
+        raise SystemExit(str(exc)) from exc
 
 
 def require_token() -> str:
@@ -151,6 +165,7 @@ def resolve_bridge_runtime(config: dict[str, Any], *, include_worker_secrets: bo
         text_chunk_size=resolve_text_chunk_size(config),
         agent_stats_row_limit=resolve_agent_stats_row_limit(config),
         default_command=resolve_default_command(config),
+        worker_process_timeout_seconds=resolve_worker_process_timeout_seconds(config),
     )
 
 
@@ -184,22 +199,17 @@ def parse_allowed_usernames(config: dict[str, Any]) -> set[str]:
 
 def resolve_text_chunk_size(config: dict[str, Any] | None = None) -> int:
     runtime_config = config if config is not None else load_runtime_config()
-    raw = get_config_value(runtime_config, "bridge", "text_chunk_size")
-    try:
-        value = int(raw) if raw else 3900
-    except ValueError:
-        value = 3900
-    return max(500, min(4096, value))
+    return shared_resolve_bridge_text_chunk_size(runtime_config)
 
 
 def resolve_agent_stats_row_limit(config: dict[str, Any] | None = None) -> int:
     runtime_config = config if config is not None else load_runtime_config()
-    raw = get_config_value(runtime_config, "bridge", "agent_stats_row_limit")
-    try:
-        value = int(raw) if raw else 200
-    except ValueError:
-        value = 200
-    return max(20, min(2000, value))
+    return shared_resolve_agent_stats_row_limit(runtime_config)
+
+
+def resolve_worker_process_timeout_seconds(config: dict[str, Any] | None = None) -> int:
+    runtime_config = config if config is not None else load_runtime_config()
+    return shared_resolve_bridge_worker_process_timeout_seconds(runtime_config)
 
 
 def resolve_default_command(config: dict[str, Any] | None = None) -> str:
@@ -236,8 +246,17 @@ def resolve_worker_path(config: dict[str, Any]) -> Path:
     return Path(raw) if raw else WORKER_FILE
 
 
-def api_call(token: str, method: str, payload: dict[str, Any] | None = None) -> Any:
-    return shared_api_call(token, method, payload)
+def api_call(
+    token: str,
+    method: str,
+    payload: dict[str, Any] | None = None,
+    *,
+    timeout_seconds: int = 65,
+) -> Any:
+    try:
+        return shared_api_call(token, method, payload, timeout_seconds=timeout_seconds)
+    except TelegramApiError as exc:
+        raise SystemExit(str(exc)) from exc
 
 
 def ensure_data_dir() -> None:
@@ -562,17 +581,15 @@ def handle_agent_command(runtime: BridgeRuntime, update: dict[str, Any]) -> None
     if len(argv) >= 3 and argv[2] == "run":
         argv += ["--username", extract_username(update)]
     try:
-        completed = subprocess.run(
+        completed = shared_run_worker_subprocess(
             argv,
-            cwd=str(BASE_DIR),
-            capture_output=True,
+            cwd=BASE_DIR,
             env=build_worker_subprocess_env(runtime.worker_secret_env),
-            text=True,
-            timeout=3600,
-            check=False,
+            timeout_seconds=runtime.worker_process_timeout_seconds,
+            run_func=subprocess.run,
         )
     except subprocess.TimeoutExpired:
-        send_text_message(runtime.bot_token, chat_id, "Command timed out after 3600 seconds.")
+        send_text_message(runtime.bot_token, chat_id, f"Command timed out after {runtime.worker_process_timeout_seconds} seconds.")
         return
     safe_response, json_output = build_safe_command_response(" ".join(argv[2:]), completed)
     if completed.returncode == 0 and isinstance(json_output, dict):
@@ -618,7 +635,10 @@ def cmd_send(args: argparse.Namespace) -> int:
 
 
 def fetch_updates(token: str, offset: int | None, timeout: int) -> list[dict[str, Any]]:
-    return shared_fetch_updates(token, offset, timeout, api_call_func=api_call)
+    try:
+        return shared_fetch_updates(token, offset, timeout, api_call_func=api_call)
+    except TelegramApiError as exc:
+        raise SystemExit(str(exc)) from exc
 
 
 def print_update(update: dict[str, Any], runtime: BridgeRuntime) -> None:

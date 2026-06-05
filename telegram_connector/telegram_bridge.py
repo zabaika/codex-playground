@@ -36,19 +36,31 @@ from telegram_shared.bridge_env import is_user_allowed as shared_is_user_allowed
 from telegram_shared.bridge_env import parse_allowed_chat_ids as shared_parse_allowed_chat_ids
 from telegram_shared.bridge_env import parse_allowed_user_ids as shared_parse_allowed_user_ids
 from telegram_shared.bridge_env import parse_allowed_usernames as shared_parse_allowed_usernames
+from telegram_shared.bridge_env import run_worker_subprocess as shared_run_worker_subprocess
 from telegram_shared.command_text import normalize_bridge_command_text as shared_normalize_bridge_command_text
 from telegram_shared.config import get_config_value as shared_get_config_value
 from telegram_shared.config import load_runtime_config as shared_load_runtime_config
+from telegram_shared.config import parse_int_range as shared_parse_int_range
+from telegram_shared.config import resolve_agent_stats_row_limit as shared_resolve_agent_stats_row_limit
+from telegram_shared.config import resolve_bridge_text_chunk_size as shared_resolve_bridge_text_chunk_size
+from telegram_shared.config import resolve_bridge_worker_process_timeout_seconds as shared_resolve_bridge_worker_process_timeout_seconds
+from telegram_shared.errors import SecretResolutionError
+from telegram_shared.errors import TelegramApiError
+from telegram_shared.paths import resolve_app_paths as shared_resolve_app_paths
 from telegram_shared.redaction import redact_sensitive_text as shared_redact_sensitive_text
 
 
-APP_DIR = Path(__file__).resolve().parent
-PROJECT_ROOT = Path(os.environ.get("TELEGRAM_CONNECTOR_PROJECT_ROOT", "")).expanduser() if os.environ.get("TELEGRAM_CONNECTOR_PROJECT_ROOT") else APP_DIR
-# Runtime state must live next to the executed module, not in the source checkout.
-BASE_DIR = APP_DIR
-CONFIG_DIR = BASE_DIR / "config"
-RUNTIME_LOCAL_FILE = CONFIG_DIR / "runtime.local.toml"
-DATA_DIR = BASE_DIR / "data"
+APP_PATHS = shared_resolve_app_paths(
+    __file__,
+    project_root_env_var="TELEGRAM_CONNECTOR_PROJECT_ROOT",
+    runtime_base="app_dir",
+)
+APP_DIR = APP_PATHS.app_dir
+PROJECT_ROOT = APP_PATHS.project_root
+BASE_DIR = APP_PATHS.base_dir
+CONFIG_DIR = APP_PATHS.config_dir
+RUNTIME_LOCAL_FILE = APP_PATHS.runtime_local_file
+DATA_DIR = APP_PATHS.data_dir
 OFFSET_FILE = DATA_DIR / "offset.local.json"
 INBOX_FILE = DATA_DIR / "inbox.jsonl"
 HISTORY_CLIENT_FILE = APP_DIR / "telegram_history_client.py"
@@ -57,6 +69,14 @@ EXPORT_DIR = DATA_DIR / "exports"
 OP_REFERENCE_PREFIX = shared_secrets.OP_REFERENCE_PREFIX
 _SECRET_CACHE = shared_secrets._SECRET_CACHE
 SUPPORTED_BRIDGE_COMMANDS = {"help", "agent-stats", "top-models", "ocr", "exportcsv", "ocrhistory", "backfill", "tail", "update", "digest"}
+AUTH_MODES = {"auto", "bot", "user"}
+DIGEST_WINDOW_TOKEN_RE = re.compile(r"(today|yesterday|week|month|-?\d+d|\d{4}-\d{2}-\d{2})")
+DEFAULT_EXPORT_CSV_LIMIT = 100
+MIN_EXPORT_CSV_LIMIT = 1
+MAX_EXPORT_CSV_LIMIT = 100000
+DEFAULT_OCR_PENDING_LIMIT = 100
+MIN_OCR_PENDING_LIMIT = 1
+MAX_OCR_PENDING_LIMIT = 100000
 HISTORY_CLIENT_SECRET_ENV_MAP = {
     "TELEGRAM_API_ID": ("telethon", "api_id", "Telegram API ID"),
     "TELEGRAM_API_HASH": ("secrets", "api_hash", "Telegram API hash"),
@@ -83,9 +103,17 @@ SAFE_SUBPROCESS_ENV_KEYS = {
 }
 TOP_MODELS_DEFAULT_URL = "https://shir-man.com/api/free-llm/top-models"
 TOP_MODELS_DEFAULT_TIMEOUT_SECONDS = 15
+TOP_MODELS_MIN_TIMEOUT_SECONDS = 3
+TOP_MODELS_MAX_TIMEOUT_SECONDS = 60
 TOP_MODELS_DEFAULT_LIMIT = 5
+TOP_MODELS_MIN_LIMIT = 1
+TOP_MODELS_MAX_LIMIT = 20
 TOP_MODELS_DEFAULT_CACHE_TTL_SECONDS = 300
-TOP_MODELS_RETRY_ATTEMPTS = 3
+TOP_MODELS_MIN_CACHE_TTL_SECONDS = 0
+TOP_MODELS_MAX_CACHE_TTL_SECONDS = 3600
+TOP_MODELS_DEFAULT_RETRY_ATTEMPTS = 3
+TOP_MODELS_MIN_RETRY_ATTEMPTS = 1
+TOP_MODELS_MAX_RETRY_ATTEMPTS = 5
 TOP_MODELS_USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -106,11 +134,17 @@ def get_config_value(config: dict[str, Any], section: str, key: str) -> str:
 
 
 def resolve_onepassword_secret(reference: str, label: str) -> str:
-    return shared_secrets.resolve_onepassword_secret(reference, label)
+    try:
+        return shared_secrets.resolve_onepassword_secret(reference, label)
+    except SecretResolutionError as exc:
+        raise SystemExit(str(exc)) from exc
 
 
 def resolve_secret_value(raw_value: str, label: str) -> str:
-    return shared_secrets.resolve_secret_value(raw_value, label)
+    try:
+        return shared_secrets.resolve_secret_value(raw_value, label)
+    except SecretResolutionError as exc:
+        raise SystemExit(str(exc)) from exc
 
 
 def require_token() -> str:
@@ -182,22 +216,17 @@ def resolve_sync_mode_limit(config: dict[str, Any], mode: str) -> str:
 
 def resolve_text_chunk_size(config: dict[str, Any] | None = None) -> int:
     runtime_config = config if config is not None else load_runtime_config()
-    raw = get_config_value(runtime_config, "bridge", "text_chunk_size")
-    try:
-        value = int(raw) if raw else 3900
-    except ValueError:
-        value = 3900
-    return max(500, min(4096, value))
+    return shared_resolve_bridge_text_chunk_size(runtime_config)
 
 
 def resolve_agent_stats_row_limit(config: dict[str, Any] | None = None) -> int:
     runtime_config = config if config is not None else load_runtime_config()
-    raw = get_config_value(runtime_config, "bridge", "agent_stats_row_limit")
-    try:
-        value = int(raw) if raw else 200
-    except ValueError:
-        value = 200
-    return max(20, min(2000, value))
+    return shared_resolve_agent_stats_row_limit(runtime_config)
+
+
+def resolve_worker_process_timeout_seconds(config: dict[str, Any] | None = None) -> int:
+    runtime_config = config if config is not None else load_runtime_config()
+    return shared_resolve_bridge_worker_process_timeout_seconds(runtime_config)
 
 
 def resolve_top_models_api_url(config: dict[str, Any] | None = None) -> str:
@@ -208,31 +237,67 @@ def resolve_top_models_api_url(config: dict[str, Any] | None = None) -> str:
 def resolve_top_models_timeout_seconds(config: dict[str, Any] | None = None) -> int:
     runtime_config = config if config is not None else load_runtime_config()
     raw = get_config_value(runtime_config, "bridge", "top_models_timeout_seconds")
-    try:
-        value = int(raw) if raw else TOP_MODELS_DEFAULT_TIMEOUT_SECONDS
-    except ValueError:
-        value = TOP_MODELS_DEFAULT_TIMEOUT_SECONDS
-    return max(3, min(60, value))
+    return shared_parse_int_range(
+        raw,
+        default=TOP_MODELS_DEFAULT_TIMEOUT_SECONDS,
+        min_value=TOP_MODELS_MIN_TIMEOUT_SECONDS,
+        max_value=TOP_MODELS_MAX_TIMEOUT_SECONDS,
+    )
 
 
 def resolve_top_models_default_limit(config: dict[str, Any] | None = None) -> int:
     runtime_config = config if config is not None else load_runtime_config()
     raw = get_config_value(runtime_config, "bridge", "top_models_default_limit")
-    try:
-        value = int(raw) if raw else TOP_MODELS_DEFAULT_LIMIT
-    except ValueError:
-        value = TOP_MODELS_DEFAULT_LIMIT
-    return max(1, min(20, value))
+    return shared_parse_int_range(
+        raw,
+        default=TOP_MODELS_DEFAULT_LIMIT,
+        min_value=TOP_MODELS_MIN_LIMIT,
+        max_value=TOP_MODELS_MAX_LIMIT,
+    )
 
 
 def resolve_top_models_cache_ttl_seconds(config: dict[str, Any] | None = None) -> int:
     runtime_config = config if config is not None else load_runtime_config()
     raw = get_config_value(runtime_config, "bridge", "top_models_cache_ttl_seconds")
-    try:
-        value = int(raw) if raw else TOP_MODELS_DEFAULT_CACHE_TTL_SECONDS
-    except ValueError:
-        value = TOP_MODELS_DEFAULT_CACHE_TTL_SECONDS
-    return max(0, min(3600, value))
+    return shared_parse_int_range(
+        raw,
+        default=TOP_MODELS_DEFAULT_CACHE_TTL_SECONDS,
+        min_value=TOP_MODELS_MIN_CACHE_TTL_SECONDS,
+        max_value=TOP_MODELS_MAX_CACHE_TTL_SECONDS,
+    )
+
+
+def resolve_top_models_retry_attempts(config: dict[str, Any] | None = None) -> int:
+    runtime_config = config if config is not None else load_runtime_config()
+    raw = get_config_value(runtime_config, "bridge", "top_models_retry_attempts")
+    return shared_parse_int_range(
+        raw,
+        default=TOP_MODELS_DEFAULT_RETRY_ATTEMPTS,
+        min_value=TOP_MODELS_MIN_RETRY_ATTEMPTS,
+        max_value=TOP_MODELS_MAX_RETRY_ATTEMPTS,
+    )
+
+
+def resolve_export_csv_default_limit(config: dict[str, Any] | None = None) -> int:
+    runtime_config = config if config is not None else load_runtime_config()
+    raw = get_config_value(runtime_config, "export", "default_limit")
+    return shared_parse_int_range(
+        raw,
+        default=DEFAULT_EXPORT_CSV_LIMIT,
+        min_value=MIN_EXPORT_CSV_LIMIT,
+        max_value=MAX_EXPORT_CSV_LIMIT,
+    )
+
+
+def resolve_ocr_pending_default_limit(config: dict[str, Any] | None = None) -> int:
+    runtime_config = config if config is not None else load_runtime_config()
+    raw = get_config_value(runtime_config, "ocr", "pending_default_limit")
+    return shared_parse_int_range(
+        raw,
+        default=DEFAULT_OCR_PENDING_LIMIT,
+        min_value=MIN_OCR_PENDING_LIMIT,
+        max_value=MAX_OCR_PENDING_LIMIT,
+    )
 
 
 def is_channel_token(value: str) -> bool:
@@ -311,8 +376,17 @@ def append_option(argv: list[str], name: str, value: str) -> None:
         argv.extend([name, value])
 
 
-def api_call(token: str, method: str, payload: dict[str, Any] | None = None) -> Any:
-    return shared_api_call(token, method, payload)
+def api_call(
+    token: str,
+    method: str,
+    payload: dict[str, Any] | None = None,
+    *,
+    timeout_seconds: int = 65,
+) -> Any:
+    try:
+        return shared_api_call(token, method, payload, timeout_seconds=timeout_seconds)
+    except TelegramApiError as exc:
+        raise SystemExit(str(exc)) from exc
 
 
 def ensure_data_dir() -> None:
@@ -595,7 +669,7 @@ def parse_top_models_request(text: str, *, default_limit: int) -> tuple[int, boo
     for part in parts[1:]:
         lowered = part.lower()
         if part.isdigit():
-            limit = max(1, min(20, int(part)))
+            limit = max(TOP_MODELS_MIN_LIMIT, min(TOP_MODELS_MAX_LIMIT, int(part)))
             continue
         if lowered == "debug":
             debug = True
@@ -708,7 +782,13 @@ def format_top_models_message(payload: dict[str, Any], *, limit: int, debug: boo
     return "\n".join(lines)
 
 
-def fetch_top_models_payload(*, url: str, timeout_seconds: int, cache_ttl_seconds: int) -> dict[str, Any]:
+def fetch_top_models_payload(
+    *,
+    url: str,
+    timeout_seconds: int,
+    cache_ttl_seconds: int,
+    retry_attempts: int,
+) -> dict[str, Any]:
     cached_payload = _TOP_MODELS_CACHE.get("payload")
     fetched_at_monotonic = _TOP_MODELS_CACHE.get("fetched_at_monotonic")
     now_monotonic = time.monotonic()
@@ -729,7 +809,7 @@ def fetch_top_models_payload(*, url: str, timeout_seconds: int, cache_ttl_second
         method="GET",
     )
     last_error: BaseException | None = None
-    for attempt in range(1, TOP_MODELS_RETRY_ATTEMPTS + 1):
+    for attempt in range(1, retry_attempts + 1):
         try:
             with request.urlopen(request_obj, timeout=timeout_seconds) as response:
                 payload = json.loads(response.read().decode("utf-8"))
@@ -742,7 +822,7 @@ def fetch_top_models_payload(*, url: str, timeout_seconds: int, cache_ttl_second
             raise SystemExit(f"Top-models API HTTP {exc.code}.") from exc
         except (TimeoutError, error.URLError, OSError) as exc:
             last_error = exc
-            if attempt >= TOP_MODELS_RETRY_ATTEMPTS:
+            if attempt >= retry_attempts:
                 break
             time.sleep(attempt)
     raise SystemExit(f"Top-models API request failed: {str(last_error) or last_error.__class__.__name__}")
@@ -766,6 +846,137 @@ def format_digest_usage_summary(summary: dict[str, Any]) -> str:
     return shared_format_ai_usage_summary(summary, title="Digest stats")
 
 
+def append_period_option(argv: list[str], part: str) -> bool:
+    lowered = part.lower()
+    if lowered.startswith("since="):
+        append_option(argv, "--since", part.split("=", 1)[1])
+        return True
+    if lowered.startswith("until="):
+        append_option(argv, "--until", part.split("=", 1)[1])
+        return True
+    return False
+
+
+def consume_leading_limit(parts: list[str], default: str) -> tuple[str, list[str]]:
+    if parts and parts[0].isdigit():
+        return parts[0], parts[1:]
+    return default, parts
+
+
+def build_digest_command(parts: list[str], digest_base: list[str]) -> list[str]:
+    argv = digest_base + ["run"]
+    auth_mode = "user"
+    single_window_token = None
+    extra_parts = parts[1:]
+    channel_arg, extra_parts = consume_channel_argument(extra_parts)
+    if channel_arg:
+        argv += ["--channel", channel_arg]
+    for part in extra_parts:
+        lowered = part.lower()
+        if append_period_option(argv, part):
+            continue
+        if lowered in AUTH_MODES:
+            auth_mode = lowered
+        elif DIGEST_WINDOW_TOKEN_RE.fullmatch(lowered):
+            if single_window_token is not None:
+                raise ValueError(f"Unsupported digest argument: {part}")
+            single_window_token = part
+        else:
+            raise ValueError(f"Unsupported digest argument: {part}")
+    if single_window_token is not None:
+        append_option(argv, "--since", single_window_token)
+        append_option(argv, "--until", single_window_token)
+    return argv + ["--auth-mode", auth_mode]
+
+
+def build_ocr_pending_command(parts: list[str], base: list[str], config: dict[str, Any]) -> list[str]:
+    argv = base + ["ocr-pending"]
+    extra_parts = parts[1:]
+    channel_arg, extra_parts = consume_channel_argument(extra_parts)
+    if channel_arg:
+        argv += ["--channel", channel_arg]
+    limit, extra_parts = consume_leading_limit(extra_parts, str(resolve_ocr_pending_default_limit(config)))
+    argv += ["--limit", limit]
+    for part in extra_parts:
+        if append_period_option(argv, part):
+            continue
+        raise ValueError(f"Unsupported ocr argument: {part}")
+    return argv
+
+
+def build_export_csv_command(parts: list[str], base: list[str], config: dict[str, Any]) -> list[str]:
+    argv = base + ["export-csv"]
+    auth_mode = "user"
+    has_filter = False
+    extra_parts = parts[1:]
+    channel_arg, extra_parts = consume_channel_argument(extra_parts)
+    if channel_arg:
+        argv += ["--channel", channel_arg]
+    for part in extra_parts:
+        lowered = part.lower()
+        if part.isdigit():
+            argv += ["--limit", part]
+            has_filter = True
+        elif append_period_option(argv, part):
+            has_filter = True
+        elif lowered in AUTH_MODES:
+            auth_mode = lowered
+        else:
+            raise ValueError(f"Unsupported exportcsv argument: {part}")
+    if not has_filter:
+        argv += ["--limit", str(resolve_export_csv_default_limit(config))]
+    return argv + ["--auth-mode", auth_mode]
+
+
+def build_ocr_history_command(parts: list[str], base: list[str], config: dict[str, Any]) -> list[str]:
+    argv = base + ["sync", "--mode", "tail"]
+    extra_parts = parts[1:]
+    channel_arg, extra_parts = consume_channel_argument(extra_parts)
+    if channel_arg:
+        argv += ["--channel", channel_arg]
+    limit, extra_parts = consume_leading_limit(extra_parts, resolve_sync_mode_limit(config, "tail"))
+    argv += ["--limit", limit, "--download-media", "--ocr"]
+    auth_mode = "user"
+    for part in extra_parts:
+        lowered = part.lower()
+        if append_period_option(argv, part):
+            continue
+        if lowered in AUTH_MODES:
+            auth_mode = lowered
+            continue
+        raise ValueError(f"Unsupported ocrhistory argument: {part}")
+    return argv + ["--auth-mode", auth_mode]
+
+
+def build_sync_command(command: str, parts: list[str], base: list[str], config: dict[str, Any]) -> list[str]:
+    subcommand = "backfill" if command == "/backfill" else "update" if command == "/update" else "tail"
+    argv = base + ["sync", "--mode", subcommand]
+    extra_parts = parts[1:]
+    channel_arg, extra_parts = consume_channel_argument(extra_parts)
+    if channel_arg:
+        argv += ["--channel", channel_arg]
+    limit, extra_parts = consume_leading_limit(extra_parts, resolve_sync_mode_limit(config, subcommand))
+    argv += ["--limit", limit]
+    auth_mode = "user"
+    for part in extra_parts:
+        lowered = part.lower()
+        if append_period_option(argv, part):
+            continue
+        if lowered == "media":
+            argv.append("--download-media")
+        elif lowered == "ocr":
+            if "--download-media" not in argv:
+                argv.append("--download-media")
+            argv.append("--ocr")
+        elif lowered == "read":
+            argv.append("--mark-read")
+        elif lowered in AUTH_MODES:
+            auth_mode = lowered
+        else:
+            raise ValueError(f"Unsupported {command.lstrip('/')} argument: {part}")
+    return argv + ["--auth-mode", auth_mode]
+
+
 def build_history_command(text: str) -> list[str] | None:
     parts = shlex.split(text)
     if not parts:
@@ -779,127 +990,15 @@ def build_history_command(text: str) -> list[str] | None:
     if command == "/help":
         return []
     if command == "/digest":
-        argv = digest_base + ["run"]
-        auth_mode = "user"
-        single_window_token = None
-        extra_parts = parts[1:]
-        channel_arg, extra_parts = consume_channel_argument(extra_parts)
-        if channel_arg:
-            argv += ["--channel", channel_arg]
-        for part in extra_parts:
-            lowered = part.lower()
-            if lowered.startswith("since="):
-                append_option(argv, "--since", part.split("=", 1)[1])
-            elif lowered.startswith("until="):
-                append_option(argv, "--until", part.split("=", 1)[1])
-            elif lowered in {"auto", "bot", "user"}:
-                auth_mode = lowered
-            elif re.fullmatch(r"(today|yesterday|week|month|-?\d+d|\d{4}-\d{2}-\d{2})", lowered):
-                if single_window_token is not None:
-                    raise ValueError(f"Unsupported digest argument: {part}")
-                single_window_token = part
-            else:
-                raise ValueError(f"Unsupported digest argument: {part}")
-        if single_window_token is not None:
-            append_option(argv, "--since", single_window_token)
-            append_option(argv, "--until", single_window_token)
-        return argv + ["--auth-mode", auth_mode]
+        return build_digest_command(parts, digest_base)
     if command == "/ocr":
-        limit = "100"
-        argv = base + ["ocr-pending"]
-        extra_parts = parts[1:]
-        channel_arg, extra_parts = consume_channel_argument(extra_parts)
-        if channel_arg:
-            argv += ["--channel", channel_arg]
-        if extra_parts and extra_parts[0].isdigit():
-            limit = extra_parts[0]
-        argv += ["--limit", limit]
-        for part in extra_parts:
-            lowered = part.lower()
-            if lowered.startswith("since="):
-                append_option(argv, "--since", part.split("=", 1)[1])
-            elif lowered.startswith("until="):
-                append_option(argv, "--until", part.split("=", 1)[1])
-        return argv
+        return build_ocr_pending_command(parts, base, config)
     if command == "/exportcsv":
-        argv = base + ["export-csv"]
-        auth_mode = "user"
-        has_filter = False
-        extra_parts = parts[1:]
-        channel_arg, extra_parts = consume_channel_argument(extra_parts)
-        if channel_arg:
-            argv += ["--channel", channel_arg]
-        for part in extra_parts:
-            lowered = part.lower()
-            if part.isdigit():
-                argv += ["--limit", part]
-                has_filter = True
-            elif lowered.startswith("since="):
-                append_option(argv, "--since", part.split("=", 1)[1])
-                has_filter = True
-            elif lowered.startswith("until="):
-                append_option(argv, "--until", part.split("=", 1)[1])
-                has_filter = True
-            elif lowered in {"auto", "bot", "user"}:
-                auth_mode = lowered
-        if not has_filter:
-            argv += ["--limit", "100"]
-        return argv + ["--auth-mode", auth_mode]
+        return build_export_csv_command(parts, base, config)
     if command == "/ocrhistory":
-        argv = base + ["sync", "--mode", "tail"]
-        limit = resolve_sync_mode_limit(config, "tail")
-        auth_mode = "user"
-        extra_parts = parts[1:]
-        channel_arg, extra_parts = consume_channel_argument(extra_parts)
-        if channel_arg:
-            argv += ["--channel", channel_arg]
-        if extra_parts and extra_parts[0].isdigit():
-            limit = extra_parts[0]
-        argv += ["--limit", limit, "--download-media", "--ocr"]
-        for part in extra_parts:
-            lowered = part.lower()
-            if lowered.startswith("since="):
-                append_option(argv, "--since", part.split("=", 1)[1])
-            elif lowered.startswith("until="):
-                append_option(argv, "--until", part.split("=", 1)[1])
-            if lowered in {"auto", "bot", "user"}:
-                auth_mode = lowered
-        return argv + ["--auth-mode", auth_mode]
+        return build_ocr_history_command(parts, base, config)
     if command in {"/backfill", "/tail", "/update"}:
-        if command == "/backfill":
-            subcommand = "backfill"
-        elif command == "/update":
-            subcommand = "update"
-        else:
-            subcommand = "tail"
-        argv = base + ["sync", "--mode", subcommand]
-        limit = resolve_sync_mode_limit(config, subcommand)
-        auth_mode = "user"
-        extra_parts = parts[1:]
-        channel_arg, extra_parts = consume_channel_argument(extra_parts)
-        if channel_arg:
-            argv += ["--channel", channel_arg]
-        if extra_parts and extra_parts[0].isdigit():
-            limit = extra_parts[0]
-        argv += ["--limit", limit]
-        for part in extra_parts:
-            lowered = part.lower()
-            if lowered.startswith("since="):
-                append_option(argv, "--since", part.split("=", 1)[1])
-            if lowered.startswith("until="):
-                append_option(argv, "--until", part.split("=", 1)[1])
-            if lowered == "media":
-                argv.append("--download-media")
-            if lowered == "ocr":
-                if "--download-media" not in argv:
-                    argv.append("--download-media")
-                argv.append("--ocr")
-            if lowered == "read":
-                argv.append("--mark-read")
-            if lowered in {"auto", "bot", "user"}:
-                auth_mode = lowered
-        argv += ["--auth-mode", auth_mode]
-        return argv
+        return build_sync_command(command, parts, base, config)
     raise ValueError(f"Unsupported command: {parts[0]}")
 
 
@@ -945,6 +1044,7 @@ def handle_history_command(token: str, config: dict[str, Any], update: dict[str,
                 url=resolve_top_models_api_url(config),
                 timeout_seconds=resolve_top_models_timeout_seconds(config),
                 cache_ttl_seconds=resolve_top_models_cache_ttl_seconds(config),
+                retry_attempts=resolve_top_models_retry_attempts(config),
             )
             formatted = format_top_models_message(payload, limit=limit, debug=debug)
         except SystemExit as exc:
@@ -968,24 +1068,23 @@ def handle_history_command(token: str, config: dict[str, Any], update: dict[str,
         send_text_message(token, chat_id, f"Bridge command target not found: {script_path.name}")
         return
 
+    worker_timeout_seconds = resolve_worker_process_timeout_seconds(config)
     try:
-        completed = subprocess.run(
+        completed = shared_run_worker_subprocess(
             argv,
-            cwd=str(BASE_DIR),
-            capture_output=True,
+            cwd=BASE_DIR,
             env=build_history_client_subprocess_env(secret_env or {}),
-            text=True,
-            timeout=3600,
-            check=False,
+            timeout_seconds=worker_timeout_seconds,
+            run_func=subprocess.run,
         )
     except subprocess.TimeoutExpired:
-        send_text_message(token, chat_id, "Command timed out after 3600 seconds.")
+        send_text_message(token, chat_id, f"Command timed out after {worker_timeout_seconds} seconds.")
         return
 
     safe_response, json_output = build_safe_command_response_any(" ".join(argv[2:]), completed)
     is_digest_command = text.split(maxsplit=1)[0] == "/digest"
     if not (is_digest_command and completed.returncode == 0):
-        send_text_chunks(token, chat_id, safe_response)
+        send_text_chunks(token, chat_id, safe_response, chunk_size=resolve_text_chunk_size(config))
     if completed.returncode == 0:
         outputs: list[str] = []
         if isinstance(json_output, dict) and json_output.get("output_file"):
@@ -1030,7 +1129,10 @@ def cmd_send(args: argparse.Namespace) -> int:
 
 
 def fetch_updates(token: str, offset: int | None, timeout: int) -> list[dict[str, Any]]:
-    return shared_fetch_updates(token, offset, timeout, api_call_func=api_call)
+    try:
+        return shared_fetch_updates(token, offset, timeout, api_call_func=api_call)
+    except TelegramApiError as exc:
+        raise SystemExit(str(exc)) from exc
 
 
 def print_update(update: dict[str, Any]) -> None:
