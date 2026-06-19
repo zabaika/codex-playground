@@ -192,12 +192,10 @@ Frontmatter is part of the note schema, not optional decoration.
 - If a term does not name a concrete role, artifact, step, criterion, mechanism, or constraint, rewrite it into one that does.
 - Avoid vague metaphorical or fashionable stand-ins when a direct formulation names the real role, action, decision, mechanism, or constraint more clearly.
 - When a rule can be interpreted in more than one plausible way, spell out the intended insertion point, ordering, and stopping condition instead of relying on implication.
-- Preserve concrete mechanisms when the source states them explicitly, especially team scope, owned systems, partner teams, named metrics, prioritization logic, AI/platform details, and major constraints.
-- Preserve concrete examples, mini-cases, numbers, and before/after transitions when they materially improve understanding of the idea instead of merely decorating it.
+- Apply the source-supported practicality gate below for concrete mechanisms, examples, practical anchors, checklist materialization, and source-bounded stopping behavior.
 - When a note cites multiple related percentages, rates, or metric values, make the basis explicit if it differs between them.
 - Name the cadence, denominator, comparison group, or before/after baseline directly instead of leaving the reader to infer what each number is measuring.
 - Do not place two nearby percentages in one sentence if the note does not say whether they mean weekly vs daily usage, share of engineers vs share of all users, or current value vs change over time.
-- If an example is the shortest path to making a recommendation, claim, or anti-pattern understandable, keep a compact version of that example in the note.
 - When the source came through a source-analysis reference, treat that extraction as a working scaffold only and rewrite the final note into a native Obsidian structure instead of preserving the extractor headings literally.
 - For every note type, make sections and bullets additive: do not repeat the same recommendation, example, claim, mechanism, or definition under multiple headings unless the source truly requires cross-reference.
 - Every next block or bullet must add new knowledge instead of duplicating, inverting, or paraphrasing the previous one.
@@ -255,26 +253,7 @@ Frontmatter is part of the note schema, not optional decoration.
 - Before creating a new concept file, run a canonical concept check against the existing vault and reuse the canonical note when the meaning already exists.
 - When indexed retrieval is configured, run that canonical concept check through the shared `kb-index` shortlist first and read only the strongest returned notes before deciding that the concept is new.
 - Do not let a nicer title, a translation, or a local wording variant justify a duplicate concept node when the durable idea is already present.
-- In `general` notes, fold examples and cases into the relevant recommendation inside `headings.practice` instead of giving them a standalone section.
-- In `general` notes, do not strip useful examples out of `headings.key_theses` or `headings.practice` if that would leave only abstract restatements.
-- In `general` notes, do not let `headings.practice` restate the same source case that already sits in `headings.key_theses`; if the case is needed in both places, keep the concrete example in the stronger section and rewrite the other bullet so it adds a new action or a different implication.
-- In `general` notes, after restoring examples, explicitly compare `headings.key_theses` and `headings.practice` for near-duplicate bullets or repeated mini-cases.
-- For any non-`concept` note that has `headings.practice` or another clearly applied section, do not add checklists by default.
-- Add a checklist only when the source contains operational decision structure that would lose value if flattened into prose.
-- A checklist is warranted when at least one of these is true:
-  - the source gives 3 or more concrete decision criteria
-  - the source compares practical alternatives such as `A vs B`, `buy vs build`, `RAG vs fine-tuning`, or `local vs cloud`
-  - the source describes an ordered sequence of actions
-  - the source gives applied gates or constraints such as latency, cost, privacy, capacity, reliability, review burden, or support requirements
-- When a checklist is added to `headings.practice` or an analogous applied section:
-  - place it inside that section or immediately below it
-  - use a short heading like `### Чеклист ...`
-  - size the checklist by the amount of real decision structure in the source
-  - make each item one complete and important action, criterion, or diagnostic question
-  - preserve decision logic and specificity instead of replacing concrete trade-offs with generic advice
-  - avoid duplication between the checklist and the surrounding applied prose; keep framing, edge cases, and advice that do not fit checklist form, but do not restate the same actions or criteria in both places
-  - split into multiple short checklists if one list starts mixing different decision surfaces
-- Do not add a checklist when it would only restate the same applied advice already present in prose, or when the source offers general principles without a clear decision surface.
+- Apply the source-supported practicality gate below for `general` note examples, practice sections, and checklist decisions.
 - Treat schema-defined dated log sections such as `headings.additional_insights`, `headings.evidence`, and `headings.observed_practices` as chronological append-only logs by default.
 - Keep dated bullets in ascending chronological order unless the user explicitly asks for latest-first ordering.
 - Insert a new dated bullet after the last existing dated bullet in that section and before the next heading or end-of-file.
@@ -301,16 +280,7 @@ Frontmatter is part of the note schema, not optional decoration.
 - Do not replace source-first phrasing with empty discourse placeholders such as `здесь`, `тут`, `в этом`, or similar stand-ins when they no longer point to a real object; rewrite the sentence so the real subject is named directly.
 - Keep provenance in frontmatter and use source mentions in the body only when the source itself is a useful case, scenario, or comparison rather than a process footnote.
 - Do not apply that source-scaffolding cleanup to schema-defined dated log sections such as `headings.evidence`, `headings.additional_insights`, and `headings.observed_practices`; in those sections, references to `статья`, `подкаст`, `выпуск`, or similar source-type labels are useful provenance and should normally stay.
-- Before finalizing a source-derived note, check whether the draft has flattened the source into generic statements.
-- For each major point in `headings.key_theses`, `headings.practice`, `headings.pitfalls`, or a similar section, try to preserve at least one concrete anchor from the source when it is available:
-  - an example scenario
-  - a number or rough quantitative benchmark
-  - a step sequence or pipeline
-  - a decision rule such as `when A vs when B`
-  - a boundary, caveat, or failure mode
-- Prefer concrete anchors that change how the reader would act, decide, estimate, or scope the problem.
-- Do not add decorative detail that does not improve practical understanding.
-- In `headings.pitfalls`, avoid reducing the section to bare one-line mistake labels when the source gives a mechanism, consequence, or concrete failure pattern that explains why the mistake matters.
+- Before finalizing a source-derived note, apply the source-supported practicality gate below and check whether the draft has flattened the source into generic statements.
 - Keep `headings.key_theses`, `headings.practice`, and `headings.pitfalls` functionally distinct.
 - `headings.key_theses` should carry the main ideas, distinctions, and decision logic.
 - `headings.practice` should turn those ideas into actions, heuristics, checklists, or examples.
@@ -325,6 +295,105 @@ Frontmatter is part of the note schema, not optional decoration.
 - Do not rewrite several concrete observations into one abstract sentence if that would hide how the system actually operates.
 - For source-derived notes, prefer short sections with 2-4 bullets when the source provides multiple concrete points for the same topic.
 - Prefer Russian lesson headings and Russian section bullets unless the English wording is the canonical name of a framework, metric, tool, or code-level term.
+
+## Source-Supported Practicality Gate
+
+Run this pass before final body-normalization for source-derived notes and before final compliance for applied concept notes.
+
+This gate has two obligations in order:
+
+1. First, aggressively extract and preserve every practical signal that the source actually provides.
+2. Only after that, relax the output shape when the source does not contain enough supported practical material.
+
+Do not classify a source as `low` practical-signal until the whole source has been checked for:
+- concrete actions
+- concrete mechanisms such as team scope, ownership, partner functions, named metrics, prioritization logic, platform details, or major constraints
+- workflows or sequences
+- examples or mini-cases
+- numbers, thresholds, or rates
+- tools, methods, or named practices
+- constraints, trade-offs, and failure modes
+- decision criteria
+- before/after transitions
+- diagnostic signs
+- implementation details
+
+Classify the source practical-signal level after that extraction check:
+- `high`: the source contains multiple concrete actions, workflows, examples, numbers, cases, tools, constraints, or decision rules.
+- `medium`: the source contains some actionable heuristics, examples, or criteria, but not enough for full checklists or step-by-step material.
+- `low`: the source remains mostly conceptual, theoretical, reflective, or explanatory after the extraction check.
+
+For `high` practical-signal sources:
+- The strict practical-materialization expectation applies.
+- Preserve the strongest concrete anchors.
+- For each major point in `headings.key_theses`, `headings.practice`, `headings.pitfalls`, or a similar stable section, attach at least one source-supported concrete anchor when one exists.
+- Prefer actionable sections, diagnostics, examples, and checklists when they reflect real source structure.
+- A practical note should answer what to do, when to do it, and how to recognize the situation.
+- Do not downgrade a high-signal source to a conceptual note just because extraction requires more work.
+
+For `medium` practical-signal sources:
+- Preserve all non-redundant practical anchors that materially improve actionability.
+- If an example is the shortest path to making a recommendation, claim, or anti-pattern understandable, keep a compact version of that example in the note.
+- Add lightweight practical material such as criteria, heuristics, compact examples, or short diagnostic lists.
+- Do not force a full checklist if the source does not provide a real decision structure.
+- If a recommendation is inferred rather than directly stated, keep it conservative and source-bounded.
+
+For `low` practical-signal sources:
+- Relax only after the extraction check finds insufficient practical material.
+- Do not invent checklists, examples, or step-by-step instructions.
+- Keep the note conceptual, but make the concept boundary, distinction, importance, and connections clear.
+
+For every practical-signal level:
+- Preserve concrete anchors that change how the reader would act, decide, estimate, diagnose, or scope the problem.
+- Do not add decorative detail that does not improve practical understanding.
+
+For `general` notes:
+- Fold source-supported examples and cases into the relevant recommendation inside `headings.practice` instead of giving them a standalone dump section.
+- Do not strip useful examples out of `headings.key_theses` or `headings.practice` if that would leave only abstract restatements.
+- Do not let `headings.practice` restate the same source case that already sits in `headings.key_theses`; if the case is needed in both places, keep the concrete example in the stronger section and rewrite the other bullet so it adds a new action or a different implication.
+- After restoring examples, explicitly compare `headings.key_theses` and `headings.practice` for near-duplicate bullets or repeated mini-cases.
+
+For `operating-model` notes:
+- Practicality means preserving how the system works: org boundaries, ownership, workflows, tools, metrics, constraints, handoffs, rollout mechanics, and trade-offs.
+- Do not convert operating detail into generic recommendations.
+- Add checklists only when the source itself provides decision criteria, implementation steps, or rollout mechanics.
+- If the source explains a system but not a playbook, keep it as operating-model description rather than forcing `headings.practice`.
+
+For `lessons` notes:
+- Each lesson must include a mechanism, trade-off, implication, or concrete source anchor.
+- A lesson may remain principle-oriented when the source itself is principle-oriented.
+- Do not force implementation checklists unless the source contains repeatable steps or decision criteria.
+- If a lesson is abstract, strengthen it with why it matters, where it applies, or where it fails, not with invented action steps.
+
+For concept notes:
+- Classify the concept as `applied` or `explanatory`.
+- `applied` concepts name a method, planning move, diagnostic pattern, metric, workflow technique, or failure mode. They should usually include criteria, diagnostics, contrast, or good/bad examples when supported by the source.
+- `explanatory` concepts mainly name an idea, distinction, theory, or mental model. They may remain compact if the source does not provide practical use cases.
+- Do not expand an explanatory concept just to satisfy the practicality gate.
+- Before creating a concept, ask whether it remains useful as a standalone knowledge object if the source-derived note disappeared. If not, keep it inside the source note.
+
+For checklist materialization:
+- For any non-`concept` note that has `headings.practice` or another clearly applied section, do not add checklists by default.
+- Add a checklist only when the source contains operational decision structure that would lose value if flattened into prose.
+- A checklist is warranted when at least one of these is true:
+  - the source gives 3 or more concrete decision criteria
+  - the source compares practical alternatives such as `A vs B`, `buy vs build`, `RAG vs fine-tuning`, or `local vs cloud`
+  - the source describes an ordered sequence of actions
+  - the source gives applied gates or constraints such as latency, cost, privacy, capacity, reliability, review burden, or support requirements
+- When a checklist is added to `headings.practice` or an analogous applied section:
+  - place it inside that section or immediately below it
+  - use a short heading like `### Чеклист ...`
+  - size the checklist by the amount of real decision structure in the source
+  - make each item one complete and important action, criterion, or diagnostic question
+  - preserve decision logic and specificity instead of replacing concrete trade-offs with generic advice
+  - avoid duplication between the checklist and the surrounding applied prose; keep framing, edge cases, and advice that do not fit checklist form, but do not restate the same actions or criteria in both places
+  - split into multiple short checklists if one list starts mixing different decision surfaces
+- Do not add a checklist when it would only restate the same applied advice already present in prose, or when the source offers general principles without a clear decision surface.
+
+If the gate cannot produce more practical material without unsupported invention:
+- stop rewriting for that missing material
+- keep the note honest and source-bounded
+- do not run another rewrite loop for the same gap
 
 ## Spacing Rules
 

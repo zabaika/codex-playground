@@ -112,6 +112,21 @@ Keep documentation split by responsibility:
 - if you notice unrelated dead code or debt, mention it separately; do not remove it unasked
 - remove imports, variables, functions, or files only when your own change made them unused
 - do not treat pre-existing dead code as part of your cleanup budget unless the user explicitly asked for it
+- when applying manual file edits, follow Patch Hygiene: keep patches small, refresh context for dirty files, and verify the diff before stacking more edits
+
+#### 3a. Patch Hygiene
+
+**Small patches, fresh context, immediate verification.**
+
+- prefer one `apply_patch` call per file unless a single atomic change genuinely requires multiple files
+- do not patch multiple dirty or staged files in one `apply_patch` block
+- before editing a dirty, staged, or recently generated file, reread the exact target fragment that will be changed
+- keep patch context minimal but unique: use the nearest stable surrounding lines, not an entire section or large block
+- when a change needs several hunks in the same file, split them if each hunk can be verified independently
+- after a patch to a sensitive, dirty, staged, generated, or contract-bearing file, inspect that file's local diff before stacking more edits on top
+- if a patch fails to apply, do not retry the same broad patch; narrow it to one file and one hunk, refresh the surrounding context, then retry
+- use mechanical rewrite tools only for intentionally broad, repetitive edits; before doing so, count matches, run the rewrite once, and inspect the resulting diff
+- this section governs manual patch edits; whole-file artifact promotion from staging or scratch may use the workflow's canonical one-write promotion path followed by read-back and contract verification
 
 #### 4. Goal-Driven Execution
 

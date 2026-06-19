@@ -212,7 +212,7 @@ python3 scripts/detect_source_route.py --source-file "[SOURCE_FILE]"
 
 ```bash
 python3 skills/article-to-obsidian-kb/scripts/audit_schema_heading_literals.py
-python3 -m unittest discover -s skills/article-to-obsidian-kb/tests -q
+PYTHONPATH=skills/article-to-obsidian-kb/scripts python3 -m unittest discover -s skills/article-to-obsidian-kb/tests -q
 ```
 
    - Do not skip this test run just because the change is "only documentation" if that documentation changes the executable note contract.
@@ -313,9 +313,6 @@ python3 -m unittest discover -s skills/article-to-obsidian-kb/tests -q
 - Keep the sections semantically distinct instead of repeating the same points under new headings.
 - Every next block must add net-new knowledge instead of duplicating, inverting, or paraphrasing the previous blocks.
 - If two sections would carry the same material, keep the stronger section and delete the weaker one.
-- If the source includes concrete examples, scenarios, or mini-cases that materially clarify an idea, recommendation, anti-pattern, or metric, keep at least one such example attached to the relevant point instead of flattening the note into abstract statements only.
-- Do not drop a concrete example when removing it would make the point harder to understand, easier to misread, or less actionable.
-- Prefer embedding a compact example directly under the relevant thesis or recommendation instead of collecting examples in a detached dump section.
 - Use this split when several blocks are present:
   - the first paragraph explains the source and its main problem instead of using a separate `## Суть` heading
   - `headings.key_theses` captures the core ideas and claims, not action steps, but may keep a compact source example when that example is the shortest path to understanding the claim
@@ -323,7 +320,6 @@ python3 -m unittest discover -s skills/article-to-obsidian-kb/tests -q
   - `headings.tools_frameworks` appears only when at least two named tools, methods, or frameworks are independently useful and the block adds clear new information beyond `headings.practice`
   - `headings.pitfalls` appears only when the source discusses at least three distinct mistakes or false approaches with their own consequences, not just the inverse wording of `headings.practice`
   - `headings.apply_immediately` captures a short prioritized starter subset and should be omitted if it would just restate `headings.practice`
-  - for any non-`concept` note with `headings.practice` or another clearly applied section, apply the checklist materialization rule from [references/vault-conventions.md](references/vault-conventions.md): materialize checklists only when they preserve real decision structure, and keep them non-duplicative with the surrounding applied prose
 - Title the note with the main topic and context, using the same inverted-pyramid rule as other source-derived notes.
 - Preserve surviving `source` provenance when converting, renaming, or restructuring any existing note into `general`; keep old source links even when the body and title are substantially rewritten.
 
@@ -387,10 +383,13 @@ python3 -m unittest discover -s skills/article-to-obsidian-kb/tests -q
   - re-check whether the main lessons or applied sections have been flattened into generic claims during summarization
   - if the draft has `headings.key_lessons` or a lessons-style block, make sure those lessons are not headline-only bullets; each lesson should keep a short second-step explanation of mechanism, implication, trade-off, or operational meaning
   - if the draft keeps multiple related percentages, rates, or metric values, make the basis of each number explicit whenever cadence, denominator, comparison group, or baseline differs
-  - when the source contains concrete anchors such as examples, numbers, pipelines, decision rules, explicit limitations, or concrete failure mechanisms, preserve them in `headings.key_theses`, `headings.practice`, `headings.pitfalls`, or a similar section if they materially improve actionability
   - apply the first-mention abbreviation rule from [references/vault-conventions.md](references/vault-conventions.md) during early synthesis when the draft introduces a new compressed label
   - if the draft already has more than `5` body sections, challenge whether every section is earned and distinct before keeping that structure
   - treat this as an early synthesis guardrail, not only as a late cleanup step
+- Before final body-normalization for source-derived notes, and before final compliance for applied concept notes, run the source-supported practicality gate from [references/vault-conventions.md](references/vault-conventions.md).
+  - If source-supported practical signal was flattened or dropped, rewrite before continuing.
+  - If the source lacks enough practical signal, keep the note source-bounded instead of inventing checklists, examples, or implementation steps.
+  - If a late edit changes stable body sections, rerun this gate before the final regression sweep.
 - Before saving any source-derived note, run the final body-normalization sequence in this order:
   1. apply the de-meta pass from [references/vault-conventions.md](references/vault-conventions.md)
   2. apply the inline-wikilink audit from [references/vault-conventions.md](references/vault-conventions.md)
@@ -408,14 +407,12 @@ python3 -m unittest discover -s skills/article-to-obsidian-kb/tests -q
   - if the note was manually rewritten, merged, or changed late in the run, re-run the full contract after that late edit
   - if you updated an existing note, run this pass against the whole merged note rather than only the latest fragment
   - re-check the prose for metaphorical or fashionable jargon and prefer literal operational wording; when a term does not name a concrete role, artifact, step, criterion, mechanism, or constraint, rewrite it into one that does
-  - if the note is non-`concept` and has `headings.practice` or another clearly applied section, re-check the checklist rule from [references/vault-conventions.md](references/vault-conventions.md): checklists should preserve real decision structure, and surrounding applied prose should not duplicate the same actions or criteria
+  - re-run the source-supported practicality gate from [references/vault-conventions.md](references/vault-conventions.md) against the final saved body
   - for any non-`concept` note, re-run the section-role pass against the final structure and remove any block that now mostly repeats another section after late rewrites
   - compare `headings.key_theses`, `headings.practice`, and `headings.pitfalls` for cross-section duplication; if an anti-pattern only mirrors an earlier recommendation, rewrite it into a concrete failure mode or remove it
-  - re-check whether the main lessons or applied sections have been flattened into generic claims; when the source contains concrete anchors such as examples, numbers, pipelines, decision rules, explicit limitations, or concrete failure mechanisms, preserve them in the note if they materially improve actionability
   - if the final note has `headings.key_lessons` or a lessons-style numbered block, re-check that the lessons are not reduced to one-line headlines; expand any lesson that lacks a short explanatory second sentence
   - if the final note still has both `headings.practice` and `headings.key_lessons`, make sure the latter adds net-new synthesis rather than restating applied advice
   - if the final note contains multiple related percentages, rates, or metric values, re-check that the cadence, denominator, comparison group, or baseline is explicit wherever those numbers could otherwise be confused
-  - a strong practical note should usually contain at least some source-native specificity, not only abstract restatements
   - re-check role and artifact terminology where the source contains neighboring English terms such as product, product manager, design, or platform; keep the Russian wording semantically separated instead of collapsing distinct roles into one overloaded noun
   - do not mark a note complete until it passes this full-note contract in its final saved form
 - Run one final regression-sweep pass immediately after the note-compliance pass:
