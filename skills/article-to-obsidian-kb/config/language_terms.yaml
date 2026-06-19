@@ -16,9 +16,11 @@
     "phrases": [
       "code review",
       "performance review",
+      "Call for Papers",
       "Prompt Hardening",
       "AI-native",
-      "product engineering"
+      "product engineering",
+      "AI adoption"
     ]
   },
   "role_labels": {
@@ -43,7 +45,7 @@
   },
   "discouraged_prose_terms": {
     "single": {
-      "adoption": "освоение или реальное внедрение в работу",
+      "adoption": "внедрение",
       "audit": "аудит",
       "autocomplete": "автодополнение",
       "brownfield": "зрелый легаси-контур",
@@ -56,6 +58,7 @@
       "identity": "контур идентификации",
       "incident": "инцидент",
       "intent": "намерение",
+      "keynote": "ключевой доклад",
       "leverage": "усиление или полезный рычаг",
       "licenses": "лицензии",
       "nonsense": "бессмысленный результат",

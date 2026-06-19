@@ -6,11 +6,17 @@
 - English is allowed only where it improves precision, searchability, or matches an industry-standard name.
 - Decide whether to keep an English term by semantic class, not by visual appearance alone.
 
+## Graph Identity Before Language Cleanup
+
+- Run inline-wikilink audit before translating or allow-listing English terms.
+- If an English or mixed-language term matches an existing note title or an accepted alias for an existing note, prefer a wikilink over adding the term to `config/language_terms.yaml`.
+- Add a term to the language registry only when it should remain valid plain prose outside any specific note link.
+- Do not add broad single-word allow-list entries when the intended canonical usage is a narrower phrase or a wikilink.
+- If a term is already inside a wikilink target or wikilink alias, treat it as graph identity and do not translate it during language cleanup.
+
 ## English Term Classes
 
-- Resolve canonical identifiers before language cleanup.
-- Treat `wikilinks`, canonical note titles, and other graph identifiers as fixed labels first, and only then evaluate the remaining prose for translation.
-- Do not translate an English phrase just because it contains Latin characters if it is already acting as a canonical identifier inside the note graph.
+- Apply graph identity before language cleanup using the dedicated rule above.
 - Keep in English by default:
   - canonical engineering process names
   - canonical method or framework names

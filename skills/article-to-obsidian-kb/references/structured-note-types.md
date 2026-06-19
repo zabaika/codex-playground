@@ -50,10 +50,10 @@ Treat the following section order as the canonical human-readable structure for 
 1. frontmatter
 2. `Разбор решения`
 3. optional degraded-run status block
-4. `## Формулировка вопроса для совета`
-5. `## Вердикт совета`
-6. `## Позиции советников`
-7. `## Взаимная проверка`
+4. `headings.council_question`
+5. `headings.council_verdict`
+6. `headings.council_advisor_positions`
+7. `headings.council_peer_review`
 8. optional related-notes block
 
 More specific rules:
@@ -61,17 +61,17 @@ More specific rules:
 - `Разбор решения` must preserve the original user question as a fenced `text` block, not as an inline paragraph.
 - Show the degraded-run status block only when `run_status.status = degraded`.
 - Keep the verdict section split into these stable subsections:
-  - `### Где совет согласен`
-  - `### Где мнения расходятся`
-  - `### Какие слепые зоны нашел совет`
-  - `### Рекомендация`
-  - `### Что сделать первым`
-- Render advisor entries under `## Позиции советников` in a stable per-advisor pattern:
+  - `headings.council_agree`
+  - `headings.council_clashes`
+  - `headings.council_blind_spots`
+  - `headings.council_recommendation`
+  - `headings.council_first_step`
+- Render advisor entries under `headings.council_advisor_positions` in a stable per-advisor pattern:
   - `### <Advisor Name>`
   - `- **Позиция:** ...`
   - `- **Ключевой вывод:** ...`
   - full advisor response body
-- Render peer review under `## Взаимная проверка` as one block per reviewer in stable order.
+- Render peer review under `headings.council_peer_review` as one block per reviewer in stable order.
 - Do not add an extra H1 heading in the note body when the title already exists in frontmatter.
 - Use the payload JSON path as the canonical `source` for this note.
 

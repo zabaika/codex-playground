@@ -348,9 +348,25 @@ Frontmatter is part of the note schema, not optional decoration.
 - Do not mechanically repeat the same note in `headings.related_notes` when it was already linked in the body.
 - Use the closing section for net-new navigation links, not as a duplicate dump of all inline references.
 
+### Inline Wikilink Audit
+
+- Run this pass after the de-meta pass and before closing-section deduplication.
+- Source-derived notes must link important existing notes at the point where the idea is used in the stable body.
+- The audit set includes:
+  - concepts created in the current run
+  - existing concepts updated in the current run
+  - high-confidence existing concepts or source-derived notes that are explicitly used in the body
+  - existing metric, framework, method, or operating-model notes whose titles are mentioned in the body
+- If an audit-set term appears in stable body sections, convert the first substantive mention into an inline wikilink.
+- Use Obsidian aliases when the visible wording should stay lowercase, inflected, abbreviated, or otherwise different from the note title.
+- Do not use inline code to preserve a concept title when a wikilink is the correct graph edge.
+- Links in schema-defined dated provenance sections such as `headings.evidence`, `headings.additional_insights`, and `headings.observed_practices` do not satisfy the body-link requirement.
+- After adding inline links, re-run closing-section deduplication and remove links from `headings.related_notes` when they are now already linked in the body.
+
 ## Required Closing Section
 
 - End the note with `headings.related_notes` only when at least one net-new navigation link remains after final deduplication.
+- Closing links are secondary navigation. They must not be used as a substitute for inline links where a concept is actually used in the body.
 - Remove the closing heading entirely when deduplication leaves it empty.
 - Add 3-10 wikilinks when that many net-new relevant notes exist.
 - Prefer links to touched concept notes, source-derived notes, and the closest existing concepts in the vault.

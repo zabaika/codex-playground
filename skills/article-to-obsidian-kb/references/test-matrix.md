@@ -25,10 +25,12 @@ Those remain judgment tasks for the skill itself and for human review.
 | Frontmatter required fields | `vault-conventions.md` | `frontmatter.missing-*`, `frontmatter.invalid-type` | `after-first-pass-regression.md` | `clean-general-note.md` |
 | Tag format and count | `vault-conventions.md` | `frontmatter.invalid-tag*`, `frontmatter.invalid-tag-count` | add when needed | `clean-general-note.md` |
 | Required headings and forbidden headings | `vault-conventions.md` | `structure.missing-heading:*`, `structure.forbidden-heading:*`, `structure.duplicate-heading:*` | `after-first-pass-regression.md` | `clean-general-note.md` |
+| Schema-owned heading literals | `RULEBOOK.md`, `config/note_schema.yaml` | `audit_schema_heading_literals.py`: `schema-heading-literal:*` | generated in `test_audit_schema_heading_literals.py` | generated in `test_audit_schema_heading_literals.py` |
 | Intro before first heading | `vault-conventions.md` | `structure.missing-intro-before-first-heading` | add when needed | `clean-general-note.md` |
 | Spacing rules | `vault-conventions.md` | `spacing.*` | `after-first-pass-regression.md` | `clean-general-note.md` |
 | Forbidden anglicisms and latin residue | `language-normalization.md`, `vault-conventions.md` | `language.forbidden-term:*`, `language.translate-term:*`, `language.translate-phrase:*`, `language.review-term:*`, `language.unexpected-latin:*` | `after-first-pass-regression.md` | `clean-general-note.md` |
 | Required wikilinks | `vault-conventions.md` | `links.unlinked-phrase:*` | `after-first-pass-regression.md` | `clean-general-note.md` |
+| Inline wikilink audit set | `vault-conventions.md`, `language-normalization.md` | `audit_plain_wikilink_mentions.py`: `plain-wikilink-missing:*`, `backticked-concept:*` | generated in `test_audit_plain_wikilink_mentions.py` | generated in `test_audit_plain_wikilink_mentions.py` |
 | Required examples retained | `vault-conventions.md` | `examples.missing:*` | `after-first-pass-regression.md` | `clean-general-note.md` |
 | Bold-leading scanability | `vault-conventions.md` | `emphasis.missing-leading-bold:*` | `after-first-pass-regression.md` | `clean-general-note.md` |
 | Partial source-scaffolding residue coverage | `vault-conventions.md` | `prose.source-scaffolding:*` | `source-scaffolding-regression.md` | `clean-general-note.md` |

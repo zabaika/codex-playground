@@ -187,6 +187,7 @@ python3 scripts/detect_source_route.py --source-file "[SOURCE_FILE]"
    - If the index refresh fails, do not roll back already-saved notes. Report the failure briefly in the final response and let the scheduled auto-update recover later.
 14. When you add or tighten a mechanically checkable note-contract rule in this skill, update the local contract harness in the same change.
    - This applies to rules about frontmatter, tags, headings, spacing, closing sections, wikilinks, language cleanup, emphasis, or preservation of explicitly required examples.
+   - When code, tests, templates, or reference docs compare, emit, exclude, or validate canonical note headings, resolve those headings through `config/note_schema.yaml` via `scripts/note_schema.py` instead of hardcoding rendered heading strings.
    - Update at least one of:
      - the checker under `scripts/`
      - a broken regression fixture
@@ -205,10 +206,12 @@ python3 scripts/detect_source_route.py --source-file "[SOURCE_FILE]"
      - `templates/council-verdict.md.tmpl`
      - files under `tests/`
      - `scripts/check_note_contract.py`
+     - `scripts/audit_schema_heading_literals.py`
      - `scripts/write_structured_note.py`
    - The current required command is:
 
 ```bash
+python3 skills/article-to-obsidian-kb/scripts/audit_schema_heading_literals.py
 python3 -m unittest discover -s skills/article-to-obsidian-kb/tests -q
 ```
 
@@ -388,16 +391,23 @@ python3 -m unittest discover -s skills/article-to-obsidian-kb/tests -q
   - apply the first-mention abbreviation rule from [references/vault-conventions.md](references/vault-conventions.md) during early synthesis when the draft introduces a new compressed label
   - if the draft already has more than `5` body sections, challenge whether every section is earned and distinct before keeping that structure
   - treat this as an early synthesis guardrail, not only as a late cleanup step
-- Before finalizing any source-derived note, run the mandatory de-meta pass from [references/vault-conventions.md](references/vault-conventions.md).
-- Apply that pass to the intro and stable body sections so the saved note remains topic-first rather than source-reporting by default.
+- Before saving any source-derived note, run the final body-normalization sequence in this order:
+  1. apply the de-meta pass from [references/vault-conventions.md](references/vault-conventions.md)
+  2. apply the inline-wikilink audit from [references/vault-conventions.md](references/vault-conventions.md)
+  3. apply closing-section deduplication from [references/vault-conventions.md](references/vault-conventions.md)
+  4. apply language normalization from [references/language-normalization.md](references/language-normalization.md)
+- Treat the body-normalization sequence as an ordered gate, not as independent optional checks.
+- If any later edit changes stable body sections after one of those steps has run, re-run the sequence from the earliest affected step before final compliance.
+- When an inline-wikilink audit set exists, run:
+  `python3 scripts/audit_plain_wikilink_mentions.py --note "[NOTE]" --terms-file "[AUDIT_TERMS_JSON]"`
+  Treat failures as fix-before-save issues.
 - Run one final note-compliance pass before saving any touched note:
-  - apply the full final-note contract from [references/vault-conventions.md](references/vault-conventions.md) to the final saved artifact
+  - apply the full final-note contract from [references/vault-conventions.md](references/vault-conventions.md) to the final saved artifact, including the body-normalization sequence above
+  - apply language cleanup from [references/language-normalization.md](references/language-normalization.md) only after the inline-wikilink audit has resolved graph-backed terms
   - this pass is mandatory for every major rule family in that canonical contract, not just for the family you touched most recently
   - if the note was manually rewritten, merged, or changed late in the run, re-run the full contract after that late edit
   - if you updated an existing note, run this pass against the whole merged note rather than only the latest fragment
-  - re-check the main note body for source-scaffolding under the rule set from [references/vault-conventions.md](references/vault-conventions.md); keep schema-defined dated provenance sections such as `headings.evidence`, `headings.additional_insights`, and `headings.observed_practices` exempt from that cleanup
   - re-check the prose for metaphorical or fashionable jargon and prefer literal operational wording; when a term does not name a concrete role, artifact, step, criterion, mechanism, or constraint, rewrite it into one that does
-  - re-check source-derived notes for residual source-reporting prose in the intro and stable body sections, using the canonical de-meta rule from [references/vault-conventions.md](references/vault-conventions.md)
   - if the note is non-`concept` and has `headings.practice` or another clearly applied section, re-check the checklist rule from [references/vault-conventions.md](references/vault-conventions.md): checklists should preserve real decision structure, and surrounding applied prose should not duplicate the same actions or criteria
   - for any non-`concept` note, re-run the section-role pass against the final structure and remove any block that now mostly repeats another section after late rewrites
   - compare `headings.key_theses`, `headings.practice`, and `headings.pitfalls` for cross-section duplication; if an anti-pattern only mirrors an earlier recommendation, rewrite it into a concrete failure mode or remove it
@@ -407,12 +417,10 @@ python3 -m unittest discover -s skills/article-to-obsidian-kb/tests -q
   - if the final note contains multiple related percentages, rates, or metric values, re-check that the cadence, denominator, comparison group, or baseline is explicit wherever those numbers could otherwise be confused
   - a strong practical note should usually contain at least some source-native specificity, not only abstract restatements
   - re-check role and artifact terminology where the source contains neighboring English terms such as product, product manager, design, or platform; keep the Russian wording semantically separated instead of collapsing distinct roles into one overloaded noun
-  - re-check English terminology by semantic class under [references/language-normalization.md](references/language-normalization.md): keep canonical engineering terms, stable role labels, named entities, and canonical `wikilink` titles in English, but translate non-canonical organizational shorthand, evaluative prose labels, and descriptive operational phrases that merely label a mechanism, budget, pricing rule, control layer, workflow mode, governance rule, or evaluation pattern
-  - apply canonical-identifier precedence before anglicism cleanup: existing `wikilinks`, canonical note titles, and other graph identifiers win first; only the remaining prose should be normalized
-  - do not let inline code preserve non-canonical English prose; backticks are acceptable for canonical commands, identifiers, product names, and stable method names, but not for descriptive labels that should be translated
   - do not mark a note complete until it passes this full-note contract in its final saved form
 - Run one final regression-sweep pass immediately after the note-compliance pass:
   - re-run the same full final-note contract a second time with identical coverage after all fixes are done
+  - explicitly verify that the final saved artifact passed the body-normalization sequence in order after the last stable-body edit
   - if the note already existed before the current run, apply the second pass to the whole saved note again
   - do not mark a note complete until it survives both whole-note passes
 - Run one final update-contract pass for every touched existing note:
