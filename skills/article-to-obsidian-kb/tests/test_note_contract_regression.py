@@ -571,6 +571,48 @@ date: 2026
         self.assertNotIn("language.unexpected-latin:of", codes)
         self.assertNotIn("language.unexpected-latin:practice", codes)
 
+    def test_allows_representative_canonical_terms_and_named_entities(self) -> None:
+        content = f"""---
+title: Тест устоявшиеся термины
+source:
+  - https://example.com
+type: general
+tags:
+  - ai-tools
+date: 2026
+---
+Короткое вступление.
+{KEY_THESES_HEADING}
+- **Тезис.** Команда держит DevOps, backlog и TikTok как нормальные рабочие термины.
+{PRACTICE_HEADING}
+- **Практика.** Не переводите DevOps, backlog и TikTok, когда они используются как устоявшийся термин или название платформы.
+{PITFALLS_HEADING}
+- **Ошибка.** Нельзя превращать название платформы TikTok в описательное название.
+{RELATED_NOTES_HEADING}
+[[AI-инструменты]]
+"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            fixture = Path(tmpdir) / "Тест устоявшиеся термины.md"
+            fixture.write_text(content, encoding="utf-8")
+            violations = collect_violations(
+                fixture,
+                expect="source",
+                required_headings=[
+                    KEY_THESES_HEADING,
+                    PRACTICE_HEADING,
+                    PITFALLS_HEADING,
+                ],
+                enforce_leading_bold_under=[
+                    KEY_THESES_HEADING,
+                    PRACTICE_HEADING,
+                    PITFALLS_HEADING,
+                ],
+            )
+        codes = {violation.code for violation in violations}
+        self.assertNotIn("language.review-term:DevOps", codes)
+        self.assertNotIn("language.unexpected-latin:backlog", codes)
+        self.assertNotIn("language.review-term:TikTok", codes)
+
     def test_discouraged_terms_inside_inline_code_are_still_checked(self) -> None:
         content = f"""---
 title: Тест inline code prose
@@ -614,6 +656,46 @@ date: 2026
         self.assertIn("language.translate-term:prompt", codes)
         self.assertIn("language.translate-term:evaluation", codes)
 
+    def test_technical_inline_code_literals_do_not_need_language_registry_entries(self) -> None:
+        content = f"""---
+title: Тест inline code literals
+source:
+  - https://example.com
+type: general
+tags:
+  - security
+date: 2026
+---
+Короткое вступление.
+{KEY_THESES_HEADING}
+- **Тезис.** Команды `git init`, `pip install`, `npm audit`, `npx -y`, `curl | bash` и `python3 -m unittest` должны читаться как технические литералы.
+{PRACTICE_HEADING}
+- **Практика.** Утилиты `pre-commit`, `pre-push`, `detect-secrets`, `pip-audit`, `OSV-Scanner` и `ai-repo-safety` тоже не требуют отдельной записи в языковом словаре.
+{PITFALLS_HEADING}
+- **Ошибка.** Файлы `.mcp.json`, `.env.example`, переменная `${{ENV_VAR}}` и ключ `OPENAI_API_KEY` не должны превращаться в термины прозы.
+{RELATED_NOTES_HEADING}
+[[Dependencies as untrusted code]]
+"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            fixture = Path(tmpdir) / "Тест inline code literals.md"
+            fixture.write_text(content, encoding="utf-8")
+            violations = collect_violations(
+                fixture,
+                expect="source",
+                required_headings=[
+                    KEY_THESES_HEADING,
+                    PRACTICE_HEADING,
+                    PITFALLS_HEADING,
+                ],
+                enforce_leading_bold_under=[
+                    KEY_THESES_HEADING,
+                    PRACTICE_HEADING,
+                    PITFALLS_HEADING,
+                ],
+            )
+        codes = {violation.code for violation in violations}
+        self.assertFalse(any(code.startswith("language.") for code in codes), codes)
+
     def test_uncatalogued_descriptive_inline_phrases_are_reported(self) -> None:
         content = f"""---
 title: Тест inline code phrase heuristics
@@ -626,7 +708,7 @@ date: 2026
 ---
 Короткое вступление.
 {KEY_THESES_HEADING}
-- **Тезис.** Команда обсуждает `model routing`, `token budgets`, `usage-contingent pricing` и `inference costs`.
+- **Тезис.** Команда обсуждает `model routing`, `token budgets`, `usage-contingent pricing`, `inference costs` и `safe repository shape`.
 {PRACTICE_HEADING}
 - **Практика.** Такие описательные операционные фразы не должны сохраняться на английском только потому, что они стоят в inline code.
 {PITFALLS_HEADING}
@@ -656,6 +738,7 @@ date: 2026
         self.assertIn("language.translate-phrase:token budgets", codes)
         self.assertIn("language.translate-phrase:usage-contingent pricing", codes)
         self.assertIn("language.translate-phrase:inference costs", codes)
+        self.assertIn("language.translate-phrase:safe repository shape", codes)
 
     def test_canonical_wikilink_and_note_title_win_before_language_pass(self) -> None:
         content = f"""---

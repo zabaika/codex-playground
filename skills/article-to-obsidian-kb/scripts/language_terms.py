@@ -98,3 +98,11 @@ def discouraged_translations() -> dict[str, str]:
     translations = mapped_single_terms("discouraged_prose_terms")
     translations.update(mapped_phrase_terms("discouraged_prose_terms"))
     return translations
+
+
+def inline_code_command_heads() -> set[str]:
+    section = _section("inline_code_literals")
+    values = section.get("command_heads", [])
+    if not isinstance(values, list):
+        raise KeyError("Invalid command-head registry section: inline_code_literals")
+    return {value for value in values if isinstance(value, str) and value.strip()}

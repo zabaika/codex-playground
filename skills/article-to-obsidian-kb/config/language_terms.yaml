@@ -8,10 +8,17 @@
       "MAU",
       "PRD",
       "CFO",
+      "DevEx",
+      "DevOps",
+      "STRIDE",
+      "cookie",
       "gateway",
       "production",
+      "push",
+      "shell",
       "playbooks",
-      "guardrails"
+      "guardrails",
+      "backlog"
     ],
     "phrases": [
       "code review",
@@ -19,8 +26,22 @@
       "Call for Papers",
       "Prompt Hardening",
       "AI-native",
+      "code-first",
+      "intent-first",
       "product engineering",
-      "AI adoption"
+      "AI adoption",
+      "open source",
+      "off-by-one"
+    ]
+  },
+  "inline_code_literals": {
+    "command_heads": [
+      "git",
+      "pip",
+      "npm",
+      "npx",
+      "curl",
+      "python3"
     ]
   },
   "role_labels": {
@@ -36,11 +57,26 @@
       "Accenture",
       "Atlassian",
       "GitHub",
+      "GitGuardian",
+      "Gitleaks",
+      "TruffleHog",
+      "Bandit",
+      "Semgrep",
+      "Opengrep",
+      "CodeQL",
+      "Snyk",
+      "OAuth",
+      "ChatGPT",
+      "Claude",
       "Microsoft",
-      "RedMonk"
+      "RedMonk",
+      "TickTick",
+      "TikTok",
+      "YouTube"
     ],
     "phrases": [
-      "1Password"
+      "1Password",
+      "GitHub Actions"
     ]
   },
   "discouraged_prose_terms": {
@@ -55,6 +91,7 @@
       "delivery": "поставка или скорость и качество поставки в зависимости от контекста",
       "evaluation": "оценка",
       "friction": "трение или лишнее сопротивление в процессе",
+      "hooks": "хуки",
       "identity": "контур идентификации",
       "incident": "инцидент",
       "intent": "намерение",

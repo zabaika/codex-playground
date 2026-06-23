@@ -19,6 +19,7 @@ from language_terms import (
     discouraged_phrases,
     discouraged_single_terms,
     discouraged_translations,
+    inline_code_command_heads,
     named_entity_phrases,
     named_entity_single_terms,
     role_label_phrases,
@@ -67,6 +68,7 @@ DISCOURAGED_LATIN_SINGLE_TERMS = discouraged_single_terms()
 DISCOURAGED_LATIN_PHRASES = discouraged_phrases()
 DISCOURAGED_TRANSLATIONS = discouraged_translations()
 DISCOURAGED_SINGLE_AS_PHRASES = DISCOURAGED_LATIN_SINGLE_TERMS
+INLINE_CODE_COMMAND_HEADS = inline_code_command_heads()
 DEFAULT_SOURCE_BOLD_HEADINGS = (
     KEY_THESES_HEADING,
     PRACTICE_HEADING,
@@ -269,7 +271,7 @@ def _find_phrase_line(body: str, phrase: str, *, include_inline_code: bool = Fal
     for idx, line in enumerate(body.splitlines(), start=1):
         if line.strip() in CANONICAL_HEADINGS:
             continue
-        line_without_wikilinks = WIKILINK_RE.sub("", line)
+        line_without_wikilinks = _strip_technical_inline_code(WIKILINK_RE.sub("", line))
         visible = _visible_text(line_without_wikilinks, keep_inline_code=include_inline_code)
         if pattern.search(visible):
             return idx
@@ -281,7 +283,7 @@ def _find_single_term_line(body: str, term: str, *, include_inline_code: bool = 
     for idx, line in enumerate(body.splitlines(), start=1):
         if line.strip() in CANONICAL_HEADINGS:
             continue
-        line_without_wikilinks = WIKILINK_RE.sub("", line)
+        line_without_wikilinks = _strip_technical_inline_code(WIKILINK_RE.sub("", line))
         visible = _visible_text(line_without_wikilinks, keep_inline_code=include_inline_code)
         visible = _strip_allowed_latin_phrases(visible, CANONICAL_LATIN_PHRASES)
         if pattern.search(visible):
@@ -309,6 +311,35 @@ def _looks_descriptive_inline_phrase(text: str) -> bool:
     if not letters:
         return False
     return all(not char.isupper() for char in letters)
+
+
+def _looks_like_technical_inline_code(text: str) -> bool:
+    value = text.strip()
+    if not value:
+        return False
+    first_token = value.split()[0]
+    if first_token in INLINE_CODE_COMMAND_HEADS:
+        return True
+    if re.fullmatch(r"[A-Za-z0-9]+(?:-[A-Za-z0-9]+)+", value):
+        return True
+    if re.fullmatch(r"[A-Z0-9]+(?:-[A-Za-z0-9]+)+", value):
+        return True
+    if value.startswith(".") and re.search(r"\.[A-Za-z0-9]+$", value):
+        return True
+    if re.fullmatch(r"\$\{[A-Z0-9_]+\}", value):
+        return True
+    if re.fullmatch(r"[A-Z][A-Z0-9_]+", value):
+        return True
+    return False
+
+
+def _strip_technical_inline_code(line: str) -> str:
+    return INLINE_CODE_RE.sub(
+        lambda match: ""
+        if _looks_like_technical_inline_code(match.group(0).strip("`"))
+        else match.group(0),
+        line,
+    )
 
 
 def _looks_titlecase_entity_token(token: str) -> bool:
@@ -1047,6 +1078,8 @@ def _check_inline_code_phrase_residue(
             continue
         line_without_wikilinks = WIKILINK_RE.sub("", line)
         for code_text in _inline_code_contents(line_without_wikilinks):
+            if _looks_like_technical_inline_code(code_text):
+                continue
             visible = _strip_allowed_latin_phrases(code_text, allow_phrases)
             visible = _strip_allowed_latin_phrases(visible, DISCOURAGED_LATIN_PHRASES)
             visible = _strip_allowed_latin_phrases(visible, DISCOURAGED_SINGLE_AS_PHRASES)
