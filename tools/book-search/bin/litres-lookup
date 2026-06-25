@@ -1,0 +1,180 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import html
+import json
+import re
+import subprocess
+import sys
+import urllib.parse
+import urllib.request
+from dataclasses import asdict, dataclass
+from pathlib import Path
+
+
+DEFAULT_BASE_URL = "https://www.litres.ru"
+DEFAULT_USER_AGENT = "Mozilla/5.0"
+
+
+@dataclass(frozen=True)
+class SearchResult:
+    query: str
+    title: str
+    author: str
+    url: str
+
+
+TITLE_AUTHOR_PATTERN = re.compile(
+    r'<a[^>]*href="(?P<href>/[^"]+)"[^>]*class="ArtInfo_title[^"]*"[^>]*>'
+    r"(?P<title>.*?)</a>"
+    r"\s*<a[^>]*data-testid=\"art__authorName--link\"[^>]*>(?P<author>.*?)</a>",
+    re.S,
+)
+
+
+def clean_html_text(value: str) -> str:
+    without_tags = re.sub(r"<[^>]+>", "", value)
+    return html.unescape(without_tags).strip()
+
+
+def fetch_search_html(query: str, base_url: str) -> str:
+    search_url = f"{base_url}/search/?q={urllib.parse.quote(query)}"
+    request = urllib.request.Request(
+        search_url,
+        headers={
+            "User-Agent": DEFAULT_USER_AGENT,
+            "Accept-Language": "ru,en;q=0.8",
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            return response.read().decode("utf-8", errors="replace")
+    except Exception:
+        completed = subprocess.run(
+            ["curl", "-L", "-s", "--fail", "--compressed", search_url],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        return completed.stdout
+
+
+def parse_results(
+    query: str,
+    body: str,
+    base_url: str,
+    limit: int,
+    include_audio: bool,
+) -> list[SearchResult]:
+    results: list[SearchResult] = []
+    seen_urls: set[str] = set()
+
+    for match in TITLE_AUTHOR_PATTERN.finditer(body):
+        href = html.unescape(match.group("href"))
+        if href.startswith("/podcast/"):
+            continue
+        if href.startswith("/audiobook/") and not include_audio:
+            continue
+
+        url = urllib.parse.urljoin(base_url, href)
+        if url in seen_urls:
+            continue
+        seen_urls.add(url)
+
+        title = clean_html_text(match.group("title"))
+        author = clean_html_text(match.group("author"))
+        if not title:
+            continue
+
+        results.append(SearchResult(query=query, title=title, author=author, url=url))
+        if len(results) >= limit:
+            break
+
+    return results
+
+
+def render_tsv(results: list[SearchResult]) -> str:
+    return "\n".join(
+        f"{result.query}\t{result.title}\t{result.author}\t{result.url}"
+        for result in results
+    )
+
+
+def render_markdown(results: list[SearchResult]) -> str:
+    return "\n".join(
+        f"- {result.query}: [{result.title}]({result.url}) — {result.author}"
+        for result in results
+    )
+
+
+def render_json(results: list[SearchResult]) -> str:
+    return json.dumps([asdict(result) for result in results], ensure_ascii=False, indent=2)
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Find Litres book result links.")
+    parser.add_argument("query", nargs="+", help="Litres search query. Repeat for batches.")
+    parser.add_argument("--limit", type=int, default=5, help="Maximum results per query.")
+    parser.add_argument(
+        "--format",
+        choices=("tsv", "json", "markdown"),
+        default="tsv",
+        help="Output format.",
+    )
+    parser.add_argument(
+        "--base-url",
+        default=DEFAULT_BASE_URL,
+        help="Litres base URL.",
+    )
+    parser.add_argument(
+        "--html-file",
+        type=Path,
+        help="Parse a saved Litres search HTML file instead of fetching each query.",
+    )
+    parser.add_argument(
+        "--include-audio",
+        action="store_true",
+        help="Include audiobook result pages. Text book pages are returned by default.",
+    )
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+    if args.limit < 1:
+        raise SystemExit("--limit must be positive")
+
+    all_results: list[SearchResult] = []
+    cached_html = args.html_file.read_text(encoding="utf-8") if args.html_file else None
+
+    for query in args.query:
+        body = cached_html if cached_html is not None else fetch_search_html(query, args.base_url)
+        all_results.extend(
+            parse_results(
+                query=query,
+                body=body,
+                base_url=args.base_url,
+                limit=args.limit,
+                include_audio=args.include_audio,
+            )
+        )
+
+    if args.format == "json":
+        output = render_json(all_results)
+    elif args.format == "markdown":
+        output = render_markdown(all_results)
+    else:
+        output = render_tsv(all_results)
+
+    if output:
+        print(output)
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main())
+    except BrokenPipeError:
+        raise SystemExit(1)

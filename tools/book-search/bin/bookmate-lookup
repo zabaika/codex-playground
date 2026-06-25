@@ -1,0 +1,243 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import json
+import urllib.error
+import urllib.parse
+import urllib.request
+from dataclasses import asdict, dataclass
+from pathlib import Path
+from typing import Any
+
+
+DEFAULT_BASE_URL = "https://rus.bookmate.com"
+DEFAULT_USER_AGENT = "Mozilla/5.0"
+RESULT_KINDS = (
+    "books",
+    "audiobooks",
+    "comicbooks",
+    "authors",
+    "series",
+    "bookshelves",
+    "users",
+)
+URL_PREFIX_BY_KIND = {
+    "books": "books",
+    "audiobooks": "audiobooks",
+    "comicbooks": "comicbooks",
+    "authors": "authors",
+    "series": "series",
+    "bookshelves": "bookshelves",
+    "users": "users",
+}
+
+
+@dataclass(frozen=True)
+class SearchResult:
+    query: str
+    kind: str
+    title: str
+    authors: str
+    uuid: str
+    url: str
+    readers_count: int | None
+    can_be_read: bool | None
+
+
+def fetch_search_json(
+    query: str,
+    base_url: str,
+    page: int,
+    limit: int,
+) -> dict[str, Any]:
+    params = urllib.parse.urlencode(
+        {
+            "query": query,
+            "page": page,
+            "per_page": limit,
+        }
+    )
+    url = f"{base_url.rstrip('/')}/p/api/v5/search?{params}"
+    headers = {
+        "User-Agent": DEFAULT_USER_AGENT,
+        "Accept": "application/json",
+        "Accept-Language": "ru,en;q=0.8",
+    }
+    request = urllib.request.Request(url, headers=headers)
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            content_type = response.headers.get("content-type", "")
+            body = response.read().decode("utf-8", errors="replace")
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace")
+        if exc.code == 403 and "cf-mitigated" in str(exc.headers).lower():
+            raise SystemExit(
+                "Bookmate returned a Cloudflare challenge. "
+                "Save the API response from a browser session and use --api-json-file."
+            ) from exc
+        raise SystemExit(f"Bookmate API request failed: HTTP {exc.code}") from exc
+
+    if "application/json" not in content_type:
+        if "Just a moment" in body or "security verification" in body:
+            raise SystemExit(
+                "Bookmate returned a Cloudflare challenge instead of JSON. "
+                "Save the API response from a browser session and use --api-json-file."
+            )
+        raise SystemExit(f"Bookmate returned non-JSON response: {content_type}")
+
+    return json.loads(body)
+
+
+def object_title(item: dict[str, Any], kind: str) -> str:
+    if kind == "users":
+        return str(item.get("name") or item.get("login") or "")
+    return str(item.get("title") or item.get("name") or "")
+
+
+def object_authors(item: dict[str, Any]) -> str:
+    authors = item.get("authors")
+    if isinstance(authors, str):
+        return authors
+    authors_objects = item.get("authors_objects")
+    if isinstance(authors_objects, list):
+        names = [str(obj.get("name")) for obj in authors_objects if obj.get("name")]
+        return ", ".join(names)
+    return ""
+
+
+def parse_results(
+    payload: dict[str, Any],
+    query: str,
+    kind: str,
+    base_url: str,
+    limit: int,
+) -> list[SearchResult]:
+    objects = payload.get("search", {}).get(kind, {}).get("objects", [])
+    if not isinstance(objects, list):
+        return []
+
+    results: list[SearchResult] = []
+    prefix = URL_PREFIX_BY_KIND[kind]
+    for item in objects[:limit]:
+        if not isinstance(item, dict):
+            continue
+        uuid = str(item.get("uuid") or "")
+        title = object_title(item, kind)
+        if not uuid or not title:
+            continue
+        url = f"{base_url.rstrip('/')}/{prefix}/{uuid}"
+        results.append(
+            SearchResult(
+                query=query,
+                kind=kind,
+                title=title,
+                authors=object_authors(item),
+                uuid=uuid,
+                url=url,
+                readers_count=item.get("readers_count"),
+                can_be_read=item.get("can_be_read"),
+            )
+        )
+    return results
+
+
+def render_tsv(results: list[SearchResult]) -> str:
+    return "\n".join(
+        "\t".join(
+            [
+                result.query,
+                result.kind,
+                result.title,
+                result.authors,
+                result.url,
+                "" if result.readers_count is None else str(result.readers_count),
+            ]
+        )
+        for result in results
+    )
+
+
+def render_markdown(results: list[SearchResult]) -> str:
+    return "\n".join(
+        f"- {result.query}: [{result.title}]({result.url})"
+        + (f" — {result.authors}" if result.authors else "")
+        for result in results
+    )
+
+
+def render_json(results: list[SearchResult]) -> str:
+    return json.dumps([asdict(result) for result in results], ensure_ascii=False, indent=2)
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Find Bookmate catalogue result links.")
+    parser.add_argument("query", nargs="+", help="Bookmate search query. Repeat for batches.")
+    parser.add_argument("--kind", choices=RESULT_KINDS, default="books", help="Result group.")
+    parser.add_argument("--limit", type=int, default=5, help="Maximum results per query.")
+    parser.add_argument("--page", type=int, default=1, help="Results page.")
+    parser.add_argument(
+        "--format",
+        choices=("tsv", "json", "markdown"),
+        default="tsv",
+        help="Output format.",
+    )
+    parser.add_argument("--base-url", default=DEFAULT_BASE_URL, help="Bookmate base URL.")
+    parser.add_argument(
+        "--api-json-file",
+        type=Path,
+        help="Parse a saved Bookmate API JSON response instead of fetching.",
+    )
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+    if args.limit < 1:
+        raise SystemExit("--limit must be positive")
+    if args.page < 1:
+        raise SystemExit("--page must be positive")
+
+    all_results: list[SearchResult] = []
+    saved_payload = None
+    if args.api_json_file:
+        saved_payload = json.loads(args.api_json_file.read_text(encoding="utf-8"))
+
+    for query in args.query:
+        payload = (
+            saved_payload
+            if saved_payload is not None
+            else fetch_search_json(
+                query=query,
+                base_url=args.base_url,
+                page=args.page,
+                limit=args.limit,
+            )
+        )
+        all_results.extend(
+            parse_results(
+                payload=payload,
+                query=query,
+                kind=args.kind,
+                base_url=args.base_url,
+                limit=args.limit,
+            )
+        )
+
+    if args.format == "json":
+        output = render_json(all_results)
+    elif args.format == "markdown":
+        output = render_markdown(all_results)
+    else:
+        output = render_tsv(all_results)
+
+    if output:
+        print(output)
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main())
+    except BrokenPipeError:
+        raise SystemExit(1)

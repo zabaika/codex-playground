@@ -17,6 +17,7 @@ Use it as an entry guide. For repository-wide engineering policy, safety rules, 
 - [plugins](./plugins): local Codex plugin sources and related documentation
 - [tools/job-search-system](./tools/job-search-system): local job-search workflow system with API-lite, CLI, skills, and canonical artifact/runtime docs
 - [tools/kb-index](./tools/kb-index): local retrieval and indexing tool for the Obsidian knowledge base
+- [tools/book-search](./tools/book-search): local Litres and Bookmate lookup helpers for reading-list link checks, with saved API JSON as the Bookmate browser fallback
 
 Keep this block current as the repository evolves:
 - when a new major program, service, tool, or top-level workflow becomes a meaningful part of the repository, add it here
@@ -41,6 +42,10 @@ When working in `tools/kb-index`, prefer these sources in this order:
 - [tools/kb-index/AGENTS.md](./tools/kb-index/AGENTS.md) for project-specific runtime and deployment rules
 - [RULEBOOK.md](./RULEBOOK.md) for cross-project rules
 - tests in [tools/kb-index/tests](./tools/kb-index/tests) for executable expectations
+
+When working in `tools/book-search`, prefer these sources in this order:
+- [tools/book-search/README.md](./tools/book-search/README.md) for operator behavior, provider limits, command surface, and the no-cookie Bookmate fallback through saved API JSON
+- [RULEBOOK.md](./RULEBOOK.md) for cross-project rules
 
 When working in `tools/job-search-system`, prefer these sources in this order:
 - [tools/job-search-system/docs/stage3-backlog.md](./tools/job-search-system/docs/stage3-backlog.md) for remaining work and the required Stage 3 implementation loop

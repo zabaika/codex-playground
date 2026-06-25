@@ -25,6 +25,9 @@ Workspace for local Codex-oriented projects, tools, plugins, skills, and shared 
 - [tools/kb-index](./tools/kb-index/README.md)  
   Local retrieval and indexing tool for the Obsidian knowledge base, built around SQLite/FTS note search and launchd-backed scheduled refresh.
 
+- [tools/book-search](./tools/book-search/README.md)  
+  Local Litres and Bookmate lookup helpers for finding catalogue links from reading-list search queries. Bookmate lookup uses the public search API response shape and supports saved API JSON files as the browser fallback; it does not handle browser cookies.
+
 - [plugins](./plugins/README.md)  
   Local Codex plugin sources that package reusable skills and, when needed, broader Codex integrations such as `codex-token-monitor`.
 
