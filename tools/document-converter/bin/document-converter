@@ -1,0 +1,2566 @@
+#!/usr/bin/env python3
+"""Convert and index a local source document tree.
+
+The pipeline is lossless-first:
+- DOCX/ODT become HTML through LibreOffice.
+- PDF stays as the readable original and only receives an index layer.
+- XLSX/PPTX keep Markdown-derived outputs.
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import html
+import importlib.util
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+import zipfile
+from collections import Counter, defaultdict
+from dataclasses import dataclass, field
+from html.parser import HTMLParser
+from pathlib import Path, PurePosixPath
+from typing import Iterable
+from urllib.parse import unquote
+from xml.etree import ElementTree as ET
+
+
+SUPPORTED_EXTS = {".docx", ".odt", ".pdf", ".xlsx", ".pptx"}
+HTML_EXTS = {".docx", ".odt"}
+MARKDOWN_EXTS = {".xlsx", ".pptx"}
+IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tif", ".tiff", ".svg"}
+SYSTEM_NAMES = {".DS_Store", "Thumbs.db"}
+
+TARGET_TEXT_CHARS = 2200
+MAX_TEXT_CHARS = 3400
+MAX_SMALL_CONTEXT_CHARS = 180
+MAX_TABLE_CONTEXT_CHARS = 1600
+
+NS = {
+    "a": "http://schemas.openxmlformats.org/drawingml/2006/main",
+    "c": "http://schemas.openxmlformats.org/spreadsheetml/2006/main",
+    "p": "http://schemas.openxmlformats.org/presentationml/2006/main",
+    "r": "http://schemas.openxmlformats.org/officeDocument/2006/relationships",
+    "rel": "http://schemas.openxmlformats.org/package/2006/relationships",
+}
+
+CYRILLIC_TRANSLIT = {
+    "а": "a",
+    "б": "b",
+    "в": "v",
+    "г": "g",
+    "д": "d",
+    "е": "e",
+    "ё": "e",
+    "ж": "zh",
+    "з": "z",
+    "и": "i",
+    "й": "y",
+    "к": "k",
+    "л": "l",
+    "м": "m",
+    "н": "n",
+    "о": "o",
+    "п": "p",
+    "р": "r",
+    "с": "s",
+    "т": "t",
+    "у": "u",
+    "ф": "f",
+    "х": "h",
+    "ц": "ts",
+    "ч": "ch",
+    "ш": "sh",
+    "щ": "sch",
+    "ъ": "",
+    "ы": "y",
+    "ь": "",
+    "э": "e",
+    "ю": "yu",
+    "я": "ya",
+}
+
+
+@dataclass
+class ConversionResult:
+    source: str
+    target: str | None
+    ext: str
+    status: str
+    reason: str | None = None
+    details: dict = field(default_factory=dict)
+
+
+class UnsafeGeneratedPathError(RuntimeError):
+    pass
+
+
+@dataclass
+class IndexState:
+    source_root: Path
+    dest_root: Path
+    build_index: bool
+    documents: list[dict] = field(default_factory=list)
+    chunks: list[dict] = field(default_factory=list)
+    tables: list[dict] = field(default_factory=list)
+    asset_paths_by_hash: dict[str, Path] = field(default_factory=dict)
+
+    def table_pack_rel_path(self, rel_output: Path) -> Path:
+        rel_posix = rel_output.as_posix()
+        digest = hashlib.sha1(rel_posix.encode("utf-8")).hexdigest()[:10]
+        return Path("tables") / f"{slugify(rel_posix)}-{digest}.tables.json"
+
+    def table_pack_path(self, rel_output: Path) -> Path:
+        return self.dest_root / self.table_pack_rel_path(rel_output)
+
+    def asset_store_dir(self) -> Path:
+        return self.dest_root / "assets" / "by-hash"
+
+
+@dataclass
+class AssetInfo:
+    digest: str
+    suffix: str
+    byte_count: int
+    width: int | None = None
+    height: int | None = None
+
+
+@dataclass
+class AssetRewriteStats:
+    copied_files: int = 0
+    duplicate_refs: int = 0
+    decorative_skipped: int = 0
+    missing_image_markers: int = 0
+
+
+@dataclass
+class TextContext:
+    parts: list[str] = field(default_factory=list)
+    links: list[dict] = field(default_factory=list)
+
+
+@dataclass
+class TextBuffer:
+    heading_path: list[str]
+    parts: list[str] = field(default_factory=list)
+    links: list[dict] = field(default_factory=list)
+    has_list: bool = False
+    item_count: int = 0
+
+    @property
+    def text(self) -> str:
+        return normalize("\n\n".join(self.parts))
+
+    @property
+    def chunk_type(self) -> str:
+        if self.has_list and len(self.parts) > 1:
+            return "mixed_text"
+        if self.has_list:
+            return "list"
+        return "paragraph"
+
+
+class DocumentHtmlParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.blocks: list[dict] = []
+        self.in_table = False
+        self.table_depth = 0
+        self.current_table_id: str | None = None
+        self.current_original_table_id: str | None = None
+        self.current_table: list[list[dict]] = []
+        self.current_row: list[dict] = []
+        self.current_cell = TextContext()
+        self.current_cell_attrs: dict = {}
+        self.current_paragraph: TextContext | None = None
+        self.current_list: list[dict] | None = None
+        self.current_list_item: TextContext | None = None
+        self.current_link_href: str | None = None
+        self.current_link_parts: list[str] = []
+        self.ignore_depth = 0
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        tag = tag.lower()
+        attr = {name.lower(): value or "" for name, value in attrs}
+        if tag in {"head", "style", "script"}:
+            self.ignore_depth += 1
+            return
+        if self.ignore_depth:
+            return
+        if tag == "table":
+            if self.in_table:
+                self.table_depth += 1
+                return
+            self.flush_paragraph()
+            self.flush_list()
+            self.in_table = True
+            self.table_depth = 1
+            self.current_table_id = attr.get("id")
+            self.current_original_table_id = attr.get("data-original-table-id")
+            self.current_table = []
+        elif tag == "tr" and self.in_table and self.table_depth == 1:
+            self.current_row = []
+        elif tag in {"td", "th"} and self.in_table and self.table_depth == 1:
+            self.current_cell = TextContext()
+            self.current_cell_attrs = {
+                "rowspan": attr.get("rowspan"),
+                "colspan": attr.get("colspan"),
+                "is_header": tag == "th",
+            }
+        elif tag == "br":
+            self.current_context().parts.append("\n")
+        elif tag == "p" and not self.in_table and self.current_list is None:
+            self.current_paragraph = TextContext()
+        elif tag in {"ul", "ol"} and not self.in_table:
+            self.flush_paragraph()
+            if self.current_list is None:
+                self.current_list = []
+        elif tag == "li" and self.current_list is not None:
+            self.current_list_item = TextContext()
+        elif tag == "a":
+            self.current_link_href = attr.get("href")
+            self.current_link_parts = []
+
+    def handle_endtag(self, tag: str) -> None:
+        tag = tag.lower()
+        if tag in {"head", "style", "script"} and self.ignore_depth:
+            self.ignore_depth -= 1
+            return
+        if self.ignore_depth:
+            return
+        if tag in {"td", "th"} and self.in_table and self.table_depth == 1:
+            cell = {
+                "text": normalize(" ".join(self.current_cell.parts)),
+                "rowspan": self.current_cell_attrs.get("rowspan"),
+                "colspan": self.current_cell_attrs.get("colspan"),
+                "is_header": self.current_cell_attrs.get("is_header", False),
+            }
+            if self.current_cell.links:
+                cell["links"] = self.current_cell.links
+            self.current_row.append(cell)
+            self.current_cell = TextContext()
+            self.current_cell_attrs = {}
+        elif tag == "tr" and self.in_table and self.table_depth == 1:
+            if any(cell["text"] for cell in self.current_row):
+                self.current_table.append(self.current_row)
+            self.current_row = []
+        elif tag == "table" and self.in_table:
+            self.table_depth -= 1
+            if self.table_depth <= 0:
+                block = {"type": "table", "table_id": self.current_table_id, "rows": self.current_table}
+                if self.current_original_table_id:
+                    block["original_table_id"] = self.current_original_table_id
+                self.blocks.append(block)
+                self.current_table = []
+                self.current_table_id = None
+                self.current_original_table_id = None
+                self.in_table = False
+                self.table_depth = 0
+        elif tag == "p":
+            self.flush_paragraph()
+        elif tag == "li" and self.current_list is not None:
+            text = normalize(" ".join(self.current_list_item.parts if self.current_list_item else []))
+            links = self.current_list_item.links if self.current_list_item else []
+            if text:
+                item = {"text": text}
+                if links:
+                    item["links"] = links
+                self.current_list.append(item)
+            self.current_list_item = None
+        elif tag in {"ul", "ol"}:
+            self.flush_list()
+        elif tag == "a":
+            link_text = normalize(" ".join(self.current_link_parts))
+            if self.current_link_href and link_text:
+                self.current_context().links.append({"text": link_text, "href": self.current_link_href})
+            self.current_link_href = None
+            self.current_link_parts = []
+
+    def handle_data(self, data: str) -> None:
+        if not data or self.ignore_depth:
+            return
+        self.current_context().parts.append(data)
+        if self.current_link_href is not None:
+            self.current_link_parts.append(data)
+
+    def current_context(self) -> TextContext:
+        if self.in_table:
+            return self.current_cell
+        if self.current_list_item is not None:
+            return self.current_list_item
+        if self.current_paragraph is None:
+            self.current_paragraph = TextContext()
+        return self.current_paragraph
+
+    def flush_paragraph(self) -> None:
+        if self.current_paragraph is None:
+            return
+        text = normalize(" ".join(self.current_paragraph.parts))
+        if text:
+            block = {"type": "paragraph", "text": text}
+            if self.current_paragraph.links:
+                block["links"] = self.current_paragraph.links
+            self.blocks.append(block)
+        self.current_paragraph = None
+
+    def flush_list(self) -> None:
+        if self.current_list:
+            self.blocks.append({"type": "list", "items": self.current_list})
+        self.current_list = None
+
+
+@dataclass
+class TableState:
+    table_id: str | None
+    original_table_id: str | None = None
+    rows: list[list[dict]] = field(default_factory=list)
+    current_row: list[dict] = field(default_factory=list)
+    current_cell: TextContext | None = None
+    current_cell_attrs: dict = field(default_factory=dict)
+
+
+class AllTablesParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.tables: list[dict] = []
+        self.stack: list[TableState] = []
+        self.current_link_href: str | None = None
+        self.current_link_parts: list[str] = []
+        self.ignore_depth = 0
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        tag = tag.lower()
+        attr = {name.lower(): value or "" for name, value in attrs}
+        if tag in {"head", "style", "script"}:
+            self.ignore_depth += 1
+            return
+        if self.ignore_depth:
+            return
+        if tag == "table":
+            self.stack.append(TableState(table_id=attr.get("id"), original_table_id=attr.get("data-original-table-id")))
+        elif tag == "tr" and self.stack:
+            self.stack[-1].current_row = []
+        elif tag in {"td", "th"} and self.stack:
+            self.stack[-1].current_cell = TextContext()
+            self.stack[-1].current_cell_attrs = {
+                "rowspan": attr.get("rowspan"),
+                "colspan": attr.get("colspan"),
+                "is_header": tag == "th",
+            }
+        elif tag == "br":
+            for state in self.stack:
+                if state.current_cell is not None:
+                    state.current_cell.parts.append("\n")
+        elif tag == "a":
+            self.current_link_href = attr.get("href")
+            self.current_link_parts = []
+
+    def handle_endtag(self, tag: str) -> None:
+        tag = tag.lower()
+        if tag in {"head", "style", "script"} and self.ignore_depth:
+            self.ignore_depth -= 1
+            return
+        if self.ignore_depth:
+            return
+        if tag in {"td", "th"} and self.stack:
+            state = self.stack[-1]
+            if state.current_cell is not None:
+                cell = {
+                    "text": normalize(" ".join(state.current_cell.parts)),
+                    "rowspan": state.current_cell_attrs.get("rowspan"),
+                    "colspan": state.current_cell_attrs.get("colspan"),
+                    "is_header": state.current_cell_attrs.get("is_header", False),
+                }
+                if state.current_cell.links:
+                    cell["links"] = state.current_cell.links
+                state.current_row.append(cell)
+            state.current_cell = None
+            state.current_cell_attrs = {}
+        elif tag == "tr" and self.stack:
+            state = self.stack[-1]
+            if any(cell["text"] for cell in state.current_row):
+                state.rows.append(state.current_row)
+            state.current_row = []
+        elif tag == "table" and self.stack:
+            state = self.stack.pop()
+            table = {"type": "table", "table_id": state.table_id, "rows": state.rows}
+            if state.original_table_id:
+                table["original_table_id"] = state.original_table_id
+            self.tables.append(table)
+        elif tag == "a":
+            link_text = normalize(" ".join(self.current_link_parts))
+            if self.current_link_href and link_text:
+                for state in self.stack:
+                    if state.current_cell is not None:
+                        state.current_cell.links.append({"text": link_text, "href": self.current_link_href})
+            self.current_link_href = None
+            self.current_link_parts = []
+
+    def handle_data(self, data: str) -> None:
+        if not data or self.ignore_depth:
+            return
+        for state in self.stack:
+            if state.current_cell is not None:
+                state.current_cell.parts.append(data)
+        if self.current_link_href is not None:
+            self.current_link_parts.append(data)
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("source", help="Source tree with document files.")
+    parser.add_argument("dest", help="Destination tree for converted/indexed files.")
+    parser.add_argument("--dry-run", action="store_true", help="Print planned actions without writing files.")
+    parser.add_argument("--force", action="store_true", help="Overwrite existing generated files.")
+    parser.add_argument("--build-index", action="store_true", help="Build documents/chunks/tables JSONL index.")
+    parser.add_argument("--report-only", action="store_true", help="Only build inventory and dependency report.")
+    return parser.parse_args()
+
+
+def safe_resolve(path: Path) -> Path:
+    return path.expanduser().resolve(strict=False)
+
+
+def is_relative_to(child: Path, parent: Path) -> bool:
+    try:
+        child.relative_to(parent)
+        return True
+    except ValueError:
+        return False
+
+
+def symlink_component(path: Path, root: Path) -> Path | None:
+    try:
+        rel = path.relative_to(root)
+    except ValueError as exc:
+        raise UnsafeGeneratedPathError(f"generated path is outside destination: {path}") from exc
+    current = root
+    for part in rel.parts:
+        current = current / part
+        if current.is_symlink():
+            return current
+    return None
+
+
+def ensure_safe_generated_path(path: Path, dest_root: Path, label: str = "generated path") -> None:
+    dest_root = dest_root.resolve(strict=False)
+    symlink = symlink_component(path, dest_root)
+    if symlink is not None:
+        raise UnsafeGeneratedPathError(f"{label} uses symlink: {symlink}")
+    resolved = path.resolve(strict=False)
+    if not is_relative_to(resolved, dest_root):
+        raise UnsafeGeneratedPathError(f"{label} resolves outside destination: {path}")
+
+
+def ensure_safe_generated_file(path: Path, dest_root: Path, label: str = "generated file") -> None:
+    ensure_safe_generated_path(path, dest_root, label)
+    if path.exists() and path.is_dir():
+        raise UnsafeGeneratedPathError(f"{label} is a directory: {path}")
+    if path.parent.exists() and not path.parent.is_dir():
+        raise UnsafeGeneratedPathError(f"{label} parent is not a directory: {path.parent}")
+
+
+def ensure_no_symlinks_under(path: Path, dest_root: Path, label: str = "generated tree") -> None:
+    ensure_safe_generated_path(path, dest_root, label)
+    if not path.exists():
+        return
+    if not path.is_dir():
+        raise UnsafeGeneratedPathError(f"{label} is not a directory: {path}")
+    for root, dirs, files in os.walk(path):
+        root_path = Path(root)
+        for name in [*dirs, *files]:
+            candidate = root_path / name
+            if candidate.is_symlink():
+                raise UnsafeGeneratedPathError(f"{label} contains symlink: {candidate}")
+
+
+def normalize(text: object) -> str:
+    if text is None:
+        return ""
+    text = str(text)
+    text = text.replace("\x01", "").replace("\xa0", " ")
+    text = "".join(ch for ch in text if ch >= " " or ch in "\n\t")
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def slugify(text: str) -> str:
+    chars = [CYRILLIC_TRANSLIT.get(char, char) for char in text.lower()]
+    return re.sub(r"[^a-z0-9]+", "-", "".join(chars)).strip("-") or "document"
+
+
+def doc_id_for_source(rel: Path) -> str:
+    rel_posix = rel.as_posix()
+    digest = hashlib.sha1(rel_posix.encode("utf-8")).hexdigest()[:10]
+    return f"{slugify(rel_posix)}-{digest}"
+
+
+def word_count(text: str) -> int:
+    return len(re.findall(r"[A-Za-zА-Яа-яЁё0-9]{2,}", text or ""))
+
+
+def is_system_file(path: Path) -> bool:
+    return path.name in SYSTEM_NAMES or path.name.startswith("~$")
+
+
+def is_image_path(path: Path) -> bool:
+    if path.suffix.lower() in IMAGE_EXTS:
+        return True
+    return any(part.lower() in {"image", "images"} for part in path.parts)
+
+
+def iter_files(source: Path) -> Iterable[Path]:
+    for root, dirs, files in os.walk(source):
+        root_path = Path(root)
+        dirs[:] = [d for d in dirs if d not in {".git", "__MACOSX"} and not (root_path / d).is_symlink()]
+        for name in files:
+            yield root_path / name
+
+
+def supported_file_sort_key(path: Path, source_root: Path) -> tuple[str, str, int, str]:
+    rel = path.relative_to(source_root)
+    ext_priority = {".docx": 0, ".odt": 1}.get(path.suffix.lower(), 2)
+    return (rel.parent.as_posix(), rel.stem.lower(), ext_priority, rel.name.lower())
+
+
+def command_version(command: str, args: list[str]) -> dict:
+    path = shutil.which(command)
+    if not path:
+        return {"available": False, "path": None, "version": None}
+    try:
+        proc = subprocess.run([path, *args], text=True, capture_output=True, timeout=20)
+        text = (proc.stdout or proc.stderr).strip().splitlines()
+        version = text[0] if text else None
+    except Exception as exc:
+        version = f"version check failed: {exc}"
+    return {"available": True, "path": path, "version": version}
+
+
+def python_module_available(module: str) -> dict:
+    spec = importlib.util.find_spec(module)
+    if spec is None:
+        return {"available": False, "module": module, "version": None}
+    version = None
+    try:
+        imported = __import__(module)
+        version = getattr(imported, "__version__", None)
+    except Exception:
+        version = "available"
+    return {"available": True, "module": module, "version": version}
+
+
+def preflight() -> dict:
+    return {
+        "python": {"available": True, "path": sys.executable, "version": sys.version.split()[0]},
+        "soffice": command_version("soffice", ["--version"]),
+        "pymupdf": python_module_available("fitz"),
+        "pdftotext": command_version("pdftotext", ["-v"]),
+        "pdfinfo": command_version("pdfinfo", ["-v"]),
+    }
+
+
+def run_command(args: list[str], cwd: Path | None = None, timeout: int = 600) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(args, text=True, capture_output=True, cwd=str(cwd) if cwd else None, timeout=timeout)
+
+
+def write_text(path: Path, text: str, dest_root: Path | None = None) -> None:
+    if dest_root is not None:
+        ensure_safe_generated_file(path, dest_root, "write target")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+
+
+def write_jsonl(path: Path, rows: list[dict], dest_root: Path | None = None) -> None:
+    if dest_root is not None:
+        ensure_safe_generated_file(path, dest_root, "index target")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows), encoding="utf-8")
+
+
+def relative_posix(path: Path) -> str:
+    return path.as_posix()
+
+
+def classify_file(path: Path) -> str:
+    if path.is_symlink():
+        return "symlink"
+    if is_system_file(path):
+        return "system"
+    if path.suffix.lower() in SUPPORTED_EXTS:
+        return "supported"
+    if is_image_path(path):
+        return "image"
+    return "unsupported"
+
+
+def generated_path_key(path: Path) -> str:
+    return path.as_posix().casefold()
+
+
+def relative_path_key(path: str) -> str:
+    return path.casefold()
+
+
+def target_for(source_file: Path, source_root: Path, dest_root: Path, taken: set[str]) -> Path | None:
+    ext = source_file.suffix.lower()
+    if ext == ".pdf":
+        return None
+    rel = source_file.relative_to(source_root)
+    suffix = ".html" if ext in HTML_EXTS else ".md"
+    base = (dest_root / rel).with_suffix(suffix)
+    candidate = base
+    suffix_count = 2
+    while generated_path_key(candidate) in taken:
+        candidate = base.with_name(f"{base.stem}-{suffix_count}{base.suffix}")
+        suffix_count += 1
+    taken.add(generated_path_key(candidate))
+    return candidate
+
+
+def output_rel(target: Path | None, dest_root: Path) -> Path | None:
+    if target is None:
+        return None
+    return target.relative_to(dest_root)
+
+
+def rel_link(from_file: Path, to_file: Path) -> str:
+    return Path(os.path.relpath(to_file, from_file.parent)).as_posix()
+
+
+def image_dimensions(data: bytes, suffix: str) -> tuple[int | None, int | None]:
+    suffix = suffix.lower()
+    if suffix == ".png" and data.startswith(b"\x89PNG\r\n\x1a\n") and len(data) >= 24:
+        return int.from_bytes(data[16:20], "big"), int.from_bytes(data[20:24], "big")
+    if suffix in {".gif"} and data[:6] in {b"GIF87a", b"GIF89a"} and len(data) >= 10:
+        return int.from_bytes(data[6:8], "little"), int.from_bytes(data[8:10], "little")
+    if suffix == ".bmp" and data.startswith(b"BM") and len(data) >= 26:
+        return int.from_bytes(data[18:22], "little"), abs(int.from_bytes(data[22:26], "little", signed=True))
+    if suffix in {".jpg", ".jpeg"} and data.startswith(b"\xff\xd8"):
+        index = 2
+        while index + 9 < len(data):
+            if data[index] != 0xFF:
+                index += 1
+                continue
+            marker = data[index + 1]
+            index += 2
+            if marker in {0xD8, 0xD9}:
+                continue
+            if index + 2 > len(data):
+                break
+            size = int.from_bytes(data[index : index + 2], "big")
+            if size < 2 or index + size > len(data):
+                break
+            if marker in {0xC0, 0xC1, 0xC2, 0xC3, 0xC5, 0xC6, 0xC7, 0xC9, 0xCA, 0xCB, 0xCD, 0xCE, 0xCF}:
+                return int.from_bytes(data[index + 5 : index + 7], "big"), int.from_bytes(data[index + 3 : index + 5], "big")
+            index += size
+    if suffix == ".webp" and data.startswith(b"RIFF") and data[8:12] == b"WEBP" and len(data) >= 30:
+        chunk = data[12:16]
+        if chunk == b"VP8 " and len(data) >= 30:
+            return int.from_bytes(data[26:28], "little") & 0x3FFF, int.from_bytes(data[28:30], "little") & 0x3FFF
+        if chunk == b"VP8L" and len(data) >= 25:
+            value = int.from_bytes(data[21:25], "little")
+            return (value & 0x3FFF) + 1, ((value >> 14) & 0x3FFF) + 1
+        if chunk == b"VP8X" and len(data) >= 30:
+            return int.from_bytes(data[24:27], "little") + 1, int.from_bytes(data[27:30], "little") + 1
+    if suffix == ".svg":
+        try:
+            root = ET.fromstring(data.decode("utf-8", errors="replace"))
+        except ET.ParseError:
+            return None, None
+        width = svg_dimension(root.attrib.get("width"))
+        height = svg_dimension(root.attrib.get("height"))
+        if (width is None or height is None) and root.attrib.get("viewBox"):
+            parts = root.attrib["viewBox"].replace(",", " ").split()
+            if len(parts) == 4:
+                try:
+                    width = width or int(float(parts[2]))
+                    height = height or int(float(parts[3]))
+                except ValueError:
+                    pass
+        return width, height
+    return None, None
+
+
+def svg_dimension(value: str | None) -> int | None:
+    if not value:
+        return None
+    match = re.match(r"\s*([0-9]+(?:\.[0-9]+)?)", value)
+    return int(float(match.group(1))) if match else None
+
+
+def asset_info(data: bytes, source_name: str) -> AssetInfo:
+    suffix = Path(source_name).suffix.lower() or ".bin"
+    width, height = image_dimensions(data, suffix)
+    return AssetInfo(hashlib.sha256(data).hexdigest(), suffix, len(data), width, height)
+
+
+def is_decorative_asset(info: AssetInfo, source_name: str) -> bool:
+    name = Path(source_name).stem.lower()
+    name_looks_decorative = any(part in name for part in ("spacer", "blank", "pixel", "transparent", "shim"))
+    if info.byte_count == 0:
+        return True
+    if info.width is None or info.height is None:
+        return False
+    if min(info.width, info.height) <= 2 and info.byte_count <= 4096:
+        return True
+    if name_looks_decorative and max(info.width, info.height) <= 32 and info.byte_count <= 8192:
+        return True
+    return False
+
+
+def write_deduped_asset(
+    data: bytes,
+    source_name: str,
+    assets_dir: Path,
+    dest_root: Path,
+    output_file: Path,
+    copied_by_hash: dict[str, Path],
+    stats: AssetRewriteStats,
+) -> str | None:
+    info = asset_info(data, source_name)
+    if is_decorative_asset(info, source_name):
+        stats.decorative_skipped += 1
+        return None
+    dest_image = copied_by_hash.get(info.digest)
+    if dest_image is None:
+        ensure_safe_generated_path(assets_dir, dest_root, "asset directory")
+        assets_dir.mkdir(parents=True, exist_ok=True)
+        dest_image = assets_dir / f"image-{info.digest[:16]}{info.suffix}"
+        ensure_safe_generated_file(dest_image, dest_root, "asset target")
+        if not dest_image.exists():
+            dest_image.write_bytes(data)
+            stats.copied_files += 1
+        copied_by_hash[info.digest] = dest_image
+    else:
+        stats.duplicate_refs += 1
+    return rel_link(output_file, dest_image)
+
+
+def img_attr(tag: str, name: str) -> str:
+    match = re.search(rf"\b{name}\s*=\s*(['\"])(.*?)\1", tag, flags=re.IGNORECASE | re.DOTALL)
+    return html.unescape(match.group(2)) if match else ""
+
+
+def missing_shape_name(tag: str) -> str | None:
+    for attr_name in ("name", "alt"):
+        value = img_attr(tag, attr_name)
+        if re.fullmatch(r"Shape\d+", value):
+            return value
+    return None
+
+
+def extract_html_body(text: str) -> str:
+    match = re.search(r"<body[^>]*>(.*)</body>", text, flags=re.IGNORECASE | re.DOTALL)
+    return match.group(1).strip() if match else text.strip()
+
+
+def tag_attr(tag: str, name: str) -> str | None:
+    match = re.search(rf"\b{name}\s*=\s*(['\"])(.*?)\1", tag, flags=re.IGNORECASE | re.DOTALL)
+    return html.unescape(match.group(2)) if match else None
+
+
+def replace_tag_attr(tag: str, name: str, value: str) -> str:
+    escaped = html.escape(value, quote=True)
+    pattern = rf"(\b{name}\s*=\s*)(['\"])(.*?)\2"
+    if re.search(pattern, tag, flags=re.IGNORECASE | re.DOTALL):
+        return re.sub(
+            pattern,
+            lambda match: f"{match.group(1)}{match.group(2)}{escaped}{match.group(2)}",
+            tag,
+            count=1,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+    return tag[:-1] + f' {name}="{escaped}">'
+
+
+def append_tag_attr(tag: str, name: str, value: str) -> str:
+    if re.search(rf"\b{name}\s*=", tag, flags=re.IGNORECASE):
+        return tag
+    return tag[:-1] + f' {name}="{html.escape(value, quote=True)}">'
+
+
+def unique_table_anchor(base: str, used_ids: set[str], reserved_ids: set[str]) -> str:
+    candidate = base
+    suffix = 2
+    while candidate in used_ids or candidate in reserved_ids:
+        candidate = f"{base}-{suffix}"
+        suffix += 1
+    return candidate
+
+
+def assign_table_ids(html_text: str, warnings: list[str] | None = None) -> str:
+    counter = 0
+    used_ids: set[str] = set()
+    reserved_original_ids = {
+        html.unescape(match.group(2))
+        for match in re.finditer(r"\bid\s*=\s*(['\"])(.*?)\1", html_text, flags=re.IGNORECASE | re.DOTALL)
+    }
+    non_table_ids: set[str] = set()
+    for tag_match in re.finditer(r"<([a-zA-Z][\w:-]*)\b[^>]*>", html_text, flags=re.IGNORECASE | re.DOTALL):
+        if tag_match.group(1).lower() == "table":
+            continue
+        current_id = tag_attr(tag_match.group(0), "id")
+        if current_id:
+            non_table_ids.add(current_id)
+
+    def replace(match: re.Match[str]) -> str:
+        nonlocal counter
+        tag = match.group(0)
+        tag_name = match.group(1).lower()
+        current_id = tag_attr(tag, "id")
+        if tag_name != "table":
+            if current_id:
+                used_ids.add(current_id)
+            return tag
+
+        counter += 1
+        generated_id = f"table-{counter:04d}"
+        if current_id and current_id not in used_ids and current_id not in non_table_ids:
+            used_ids.add(current_id)
+            return tag
+
+        new_id = unique_table_anchor(generated_id, used_ids, reserved_original_ids)
+        used_ids.add(new_id)
+        updated = replace_tag_attr(tag, "id", new_id)
+        if current_id:
+            updated = append_tag_attr(updated, "data-original-table-id", current_id)
+            if warnings is not None:
+                warnings.append(f"duplicate-table-id-renamed: {current_id} -> {new_id}")
+        return updated
+
+    return re.sub(r"<([a-zA-Z][\w:-]*)\b[^>]*>", replace, html_text, flags=re.IGNORECASE | re.DOTALL)
+
+
+def rewrite_local_image_sources(
+    html_text: str,
+    temp_dir: Path,
+    output_file: Path,
+    assets_dir: Path,
+    dest_root: Path,
+    copied_by_hash: dict[str, Path],
+    missing_image_label: str = "missing image",
+) -> tuple[str, AssetRewriteStats]:
+    stats = AssetRewriteStats()
+    temp_root = temp_dir.resolve()
+
+    def replace(match: re.Match[str]) -> str:
+        full_tag, quote, src = match.group(1), match.group(2), match.group(3)
+        shape_name = missing_shape_name(full_tag)
+        if shape_name:
+            stats.missing_image_markers += 1
+            return html.escape(f"[{missing_image_label}: {shape_name}]")
+        if re.match(r"^[a-zA-Z][a-zA-Z0-9+.-]*:", src) or src.startswith("#"):
+            return full_tag
+        raw_src = html.unescape(src)
+        decoded = unquote(raw_src)
+        candidates = [(temp_dir / decoded).resolve(strict=False), (temp_dir / raw_src).resolve(strict=False)]
+        source_image = next((candidate for candidate in candidates if candidate.exists() and candidate.is_file()), candidates[0])
+        try:
+            source_image.relative_to(temp_root)
+        except ValueError:
+            return full_tag
+        if not source_image.exists() or not source_image.is_file():
+            return full_tag
+        rel_asset = write_deduped_asset(source_image.read_bytes(), source_image.name, assets_dir, dest_root, output_file, copied_by_hash, stats)
+        if rel_asset is None:
+            return ""
+        escaped = html.escape(rel_asset, quote=True)
+        return full_tag[: match.start(3) - match.start(1)] + escaped + full_tag[match.end(3) - match.start(1) :]
+
+    rewritten = re.sub(r"(<img\b[^>]*\bsrc\s*=\s*(['\"])(.*?)\2[^>]*>)", replace, html_text, flags=re.IGNORECASE | re.DOTALL)
+    return rewritten, stats
+
+
+def docx_via_pandoc_html(
+    source: Path,
+    target: Path,
+    assets_dir: Path,
+    dest_root: Path,
+    copied_by_hash: dict[str, Path],
+    failure_warnings: list[str] | None = None,
+) -> tuple[str, AssetRewriteStats, str, list[str]] | None:
+    if not shutil.which("pandoc"):
+        if failure_warnings is not None:
+            failure_warnings.append("Pandoc fallback unavailable: pandoc not found.")
+        return None
+    with tempfile.TemporaryDirectory(prefix="document-converter-pandoc-html.") as tmp:
+        tmp_dir = Path(tmp)
+        output_html = tmp_dir / "document.html"
+        proc = run_command(
+            [
+                "pandoc",
+                str(source),
+                "--from",
+                "docx",
+                "--to",
+                "html",
+                "--wrap=none",
+                "--extract-media",
+                str(tmp_dir),
+                "--output",
+                str(output_html),
+            ],
+            timeout=900,
+        )
+        if proc.returncode != 0 or not output_html.exists():
+            if failure_warnings is not None:
+                message = (proc.stderr or proc.stdout or "pandoc did not create html").strip()
+                failure_warnings.append(f"Pandoc fallback failed: {message}")
+            return None
+        html_text = output_html.read_text(encoding="utf-8", errors="replace").replace("\x01", "")
+        warnings: list[str] = []
+        html_text = assign_table_ids(html_text, warnings)
+        html_text, asset_stats = rewrite_local_image_sources(html_text, tmp_dir, target, assets_dir, dest_root, copied_by_hash)
+        return html_text, asset_stats, "pandoc-html-fallback", warnings
+
+
+def docx_via_document_xml_html(source: Path) -> tuple[str, int, str] | None:
+    if not shutil.which("bsdtar"):
+        return None
+    proc = run_command(["bsdtar", "-xOf", str(source), "word/document.xml"], timeout=300)
+    if not proc.stdout.strip():
+        return None
+    ns = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
+    try:
+        root = ET.fromstring(proc.stdout.encode("utf-8"))
+    except ET.ParseError:
+        return None
+    parts = [
+        "<!doctype html>",
+        "<html>",
+        "<head><meta charset=\"utf-8\"></head>",
+        "<body>",
+        '<p><strong>Conversion note:</strong> recovered from word/document.xml; layout, tables, links, and media may be incomplete.</p>',
+    ]
+    paragraph_count = 0
+    for paragraph in root.findall(".//w:p", ns):
+        text = "".join(node.text or "" for node in paragraph.findall(".//w:t", ns)).strip()
+        if text:
+            parts.append(f"<p>{html.escape(text)}</p>")
+            paragraph_count += 1
+    parts.extend(["</body>", "</html>"])
+    if paragraph_count == 0:
+        return None
+    return "\n".join(parts), 0, "document-xml-html-recovery"
+
+
+def parse_html_blocks(html_text: str) -> list[dict]:
+    parser = DocumentHtmlParser()
+    parser.feed(html_text)
+    parser.flush_paragraph()
+    parser.flush_list()
+    return parser.blocks
+
+
+def parse_all_html_tables(html_text: str) -> list[dict]:
+    parser = AllTablesParser()
+    parser.feed(html_text)
+    return parser.tables
+
+
+def is_heading_candidate(text: str, index: int, blocks: list[dict]) -> bool:
+    if not text or len(text) > 180 or word_count(text) > 18:
+        return False
+    if index == 0:
+        return True
+    previous = blocks[index - 1] if index else None
+    next_block = blocks[index + 1] if index + 1 < len(blocks) else None
+    if next_block and next_block["type"] in {"table", "list"}:
+        return True
+    if previous and previous["type"] == "table":
+        return True
+    return False
+
+
+def chunk_base(doc_id: str, order: int, source_path: str, source_format: str, chunk_type: str) -> dict:
+    return {
+        "doc_id": doc_id,
+        "chunk_id": f"{doc_id}:chunk-{order:04d}",
+        "order": order,
+        "source_path": source_path,
+        "source_format": source_format,
+        "chunk_type": chunk_type,
+    }
+
+
+def compact_links(links: list[dict]) -> list[dict]:
+    result = []
+    seen = set()
+    for link in links:
+        href = link.get("href") or link.get("uri")
+        label = link.get("text") or link.get("label") or ""
+        if not href:
+            continue
+        key = (href, label)
+        if key in seen:
+            continue
+        seen.add(key)
+        item = {"href": href}
+        if label:
+            item["text"] = label
+        result.append(item)
+    return result
+
+
+def append_text_chunk(
+    state: IndexState,
+    doc_id: str,
+    source_path: str,
+    source_format: str,
+    primary_output_path: str | None,
+    heading_path: list[str],
+    buffer: TextBuffer | None,
+) -> None:
+    if buffer is None or not buffer.text:
+        return
+    order = len([chunk for chunk in state.chunks if chunk["doc_id"] == doc_id]) + 1
+    chunk = chunk_base(doc_id, order, source_path, source_format, buffer.chunk_type)
+    chunk.update(
+        {
+            "heading_path": buffer.heading_path,
+            "source_anchor": " / ".join(buffer.heading_path) if buffer.heading_path else None,
+            "text": buffer.text,
+            "search_text": normalize(" ".join(buffer.heading_path + [buffer.text])),
+            "char_count": len(buffer.text),
+            "word_count": word_count(buffer.text),
+        }
+    )
+    if primary_output_path:
+        chunk["primary_output_path"] = primary_output_path
+    if buffer.item_count:
+        chunk["item_count"] = buffer.item_count
+    links = compact_links(buffer.links)
+    if links:
+        chunk["links"] = links
+    state.chunks.append(chunk)
+
+
+def table_rows_to_json(rows: list[list[dict]]) -> list[list[dict]]:
+    output_rows = []
+    for row_idx, row in enumerate(rows, start=1):
+        output_row = []
+        for col_idx, cell in enumerate(row, start=1):
+            item = {
+                "row": row_idx,
+                "col": col_idx,
+                "text": normalize(cell.get("text", "")),
+                "is_header": bool(cell.get("is_header")),
+            }
+            if cell.get("rowspan"):
+                item["rowspan"] = cell["rowspan"]
+            if cell.get("colspan"):
+                item["colspan"] = cell["colspan"]
+            links = compact_links(cell.get("links", []))
+            if links:
+                item["links"] = links
+            output_row.append(item)
+        output_rows.append(output_row)
+    return output_rows
+
+
+def write_table_pack(
+    state: IndexState,
+    rel_output: Path,
+    doc_id: str,
+    source_path: str,
+    source_format: str,
+    primary_output_path: str | None,
+    table_payloads: list[dict],
+) -> Path | None:
+    if not table_payloads:
+        return None
+    table_rel = state.table_pack_rel_path(rel_output)
+    payload = {
+        "doc_id": doc_id,
+        "source_path": source_path,
+        "source_format": source_format,
+        "primary_output_path": primary_output_path,
+        "table_count": len(table_payloads),
+        "tables": table_payloads,
+    }
+    table_path = state.dest_root / table_rel
+    ensure_safe_generated_file(table_path, state.dest_root, "table pack")
+    table_path.parent.mkdir(parents=True, exist_ok=True)
+    table_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    return table_rel
+
+
+def add_html_index(
+    state: IndexState,
+    doc_id: str,
+    title: str,
+    source_path: str,
+    source_format: str,
+    primary_output_path: str,
+    html_text: str,
+    rel_output: Path,
+) -> dict:
+    blocks = parse_html_blocks(html_text)
+    all_tables = parse_all_html_tables(html_text)
+    all_tables_by_id = {table.get("table_id") or f"table-{idx:04d}": table for idx, table in enumerate(all_tables, start=1)}
+    emitted_tables: set[str] = set()
+    table_payloads: list[dict] = []
+    table_rel = state.table_pack_rel_path(rel_output)
+    heading_path = [title]
+    text_buffer: TextBuffer | None = None
+    asset_links = len(re.findall(r"<img\b", html_text, flags=re.IGNORECASE))
+    link_count = len(re.findall(r"<a\b[^>]*\bhref=", html_text, flags=re.IGNORECASE))
+
+    def flush() -> None:
+        nonlocal text_buffer
+        append_text_chunk(state, doc_id, source_path, source_format, primary_output_path, heading_path, text_buffer)
+        text_buffer = None
+
+    def emit_table(table: dict, table_heading_path: list[str], context_text: str = "") -> None:
+        html_anchor = table.get("table_id") or f"table-{len(emitted_tables) + 1:04d}"
+        if html_anchor in emitted_tables:
+            return
+        rows_json = table_rows_to_json(table.get("rows", []))
+        if not rows_json:
+            return
+        table_index = len(emitted_tables) + 1
+        table_id = f"{doc_id}:table-{table_index:04d}"
+        table_pointer = f"/tables/{len(table_payloads)}"
+        table_links = [link for row in rows_json for cell in row for link in cell.get("links", [])]
+        table_payload = {
+            "doc_id": doc_id,
+            "table_id": table_id,
+            "source_path": source_path,
+            "source_format": source_format,
+            "table_source": "document_structured",
+            "primary_output_path": primary_output_path,
+            "html_anchor": html_anchor,
+            "source_anchor": f"table={table_index}",
+            "row_count": len(rows_json),
+            "col_count": max(len(row) for row in rows_json),
+            "nonempty_cells": sum(1 for row in rows_json for cell in row if cell["text"]),
+            "rows": rows_json,
+        }
+        if table.get("original_table_id"):
+            table_payload["original_html_anchor"] = table["original_table_id"]
+        if table_links:
+            table_payload["links"] = table_links
+        table_payloads.append(table_payload)
+        table_row = {
+            "doc_id": doc_id,
+            "table_id": table_id,
+            "source_path": source_path,
+            "source_format": source_format,
+            "table_source": "document_structured",
+            "source_anchor": f"table={table_index}",
+            "primary_output_path": primary_output_path,
+            "html_anchor": html_anchor,
+            "table_json_path": table_rel.as_posix(),
+            "table_payload_pointer": table_pointer,
+            "rows": len(rows_json),
+            "cols_max": max(len(row) for row in rows_json),
+            "nonempty_cells": table_payload["nonempty_cells"],
+            "has_links": bool(table_links),
+            "link_count": len(table_links),
+        }
+        if table.get("original_table_id"):
+            table_row["original_html_anchor"] = table["original_table_id"]
+        state.tables.append(table_row)
+        header = [cell["text"] for cell in rows_json[0]]
+        preview = " ".join(cell["text"] for row in rows_json[:6] for cell in row if cell["text"])
+        order = len([chunk for chunk in state.chunks if chunk["doc_id"] == doc_id]) + 1
+        chunk = chunk_base(doc_id, order, source_path, source_format, "table_summary")
+        summary = f"Таблица {table_index}: {' / '.join(table_heading_path)}. Колонки: {'; '.join(header)}. Строк: {len(rows_json)}."
+        if context_text:
+            summary = f"{context_text}\n\n{summary}"
+        chunk.update(
+            {
+                "heading_path": table_heading_path[:],
+                "source_anchor": f"table={table_index}",
+                "primary_output_path": primary_output_path,
+                "primary_output_anchor": html_anchor,
+                "text": summary,
+                "search_text": normalize(" ".join(table_heading_path + [context_text] + header + [preview])),
+                "table_ids": [table_id],
+                "table_json_path": table_rel.as_posix(),
+                "table_payload_pointer": table_pointer,
+                "table_rows": len(rows_json),
+                "table_cols_max": max(len(row) for row in rows_json),
+                "char_count": len(summary),
+                "word_count": word_count(summary),
+            }
+        )
+        state.chunks.append(chunk)
+        emitted_tables.add(html_anchor)
+
+    for index, block in enumerate(blocks):
+        if block["type"] == "paragraph" and is_heading_candidate(block["text"], index, blocks):
+            flush()
+            heading_path = [title, block["text"]] if block["text"] != title else [title]
+            continue
+        if block["type"] == "paragraph":
+            text = block["text"]
+            if text_buffer is not None and (text_buffer.heading_path != heading_path or len(text_buffer.text) + len(text) > MAX_TEXT_CHARS):
+                flush()
+            if text_buffer is None:
+                text_buffer = TextBuffer(heading_path=heading_path[:])
+            text_buffer.parts.append(text)
+            text_buffer.links.extend(block.get("links", []))
+        elif block["type"] == "list":
+            text = "\n".join(f"- {item['text']}" for item in block["items"])
+            if text_buffer is not None and (text_buffer.heading_path != heading_path or len(text_buffer.text) + len(text) > MAX_TEXT_CHARS):
+                flush()
+            if text_buffer is None:
+                text_buffer = TextBuffer(heading_path=heading_path[:])
+            text_buffer.parts.append(text)
+            text_buffer.has_list = True
+            text_buffer.item_count += len(block["items"])
+            for item in block["items"]:
+                text_buffer.links.extend(item.get("links", []))
+        elif block["type"] == "table":
+            context_text = ""
+            if text_buffer is not None and len(text_buffer.text) <= MAX_TABLE_CONTEXT_CHARS:
+                context_text = text_buffer.text
+                text_buffer = None
+            else:
+                flush()
+            html_anchor = block.get("table_id") or f"table-{len(emitted_tables) + 1:04d}"
+            emit_table(all_tables_by_id.get(html_anchor, block), heading_path, context_text)
+    flush()
+    for table in all_tables:
+        table_id = table.get("table_id")
+        if table_id and table_id not in emitted_tables:
+            emit_table(table, [title])
+    write_table_pack(state, rel_output, doc_id, source_path, source_format, primary_output_path, table_payloads)
+    return {"chunks": len([chunk for chunk in state.chunks if chunk["doc_id"] == doc_id]), "tables": len(emitted_tables), "assets": asset_links, "links": link_count}
+
+
+def index_office_html_output(
+    state: IndexState,
+    source: Path,
+    rel: Path,
+    rel_output: Path,
+    html_text: str,
+    method: str,
+    warnings: list[str],
+    asset_counts: dict | None = None,
+    recovery_source_path: str | None = None,
+    source_docx_skipped: bool = False,
+) -> dict:
+    source_path = rel.as_posix()
+    content_source_path = source_path
+    content_source_format = source.suffix.lower().lstrip(".")
+    if source_docx_skipped and recovery_source_path:
+        content_source_path = recovery_source_path
+        content_source_format = Path(recovery_source_path).suffix.lower().lstrip(".") or content_source_format
+    primary_output_path = rel_output.as_posix()
+    doc_id = doc_id_for_source(rel)
+    index_counts = add_html_index(
+        state,
+        doc_id,
+        source.stem,
+        content_source_path,
+        content_source_format,
+        primary_output_path,
+        html_text,
+        rel_output,
+    )
+    if asset_counts:
+        index_counts.update(asset_counts)
+    document = {
+        "doc_id": doc_id,
+        "title": source.stem,
+        "source_path": source_path,
+        "source_format": source.suffix.lower().lstrip("."),
+        "primary_output_format": "html",
+        "primary_output_path": primary_output_path,
+        "conversion_method": method,
+        "index_backend": "html-parser",
+        **index_counts,
+        "warnings": warnings,
+    }
+    if recovery_source_path:
+        document["recovery_source_path"] = recovery_source_path
+    if source_docx_skipped:
+        document["source_docx_skipped"] = True
+        document["indexed_content_source_path"] = content_source_path
+        document["indexed_content_source_format"] = content_source_format
+    state.documents.append(document)
+    return index_counts
+
+
+def office_via_libreoffice_html(
+    source: Path,
+    target: Path,
+    assets_dir: Path,
+    state: IndexState,
+    warnings: list[str],
+) -> tuple[str, AssetRewriteStats, str]:
+    last_error = "soffice failed"
+    asset_stats = AssetRewriteStats()
+    for attempt in range(1, 4):
+        with tempfile.TemporaryDirectory(prefix="document-converter-lo-html.") as out_tmp, tempfile.TemporaryDirectory(prefix="document-converter-lo-profile.") as profile_tmp:
+            out_dir = Path(out_tmp)
+            profile_dir = Path(profile_tmp)
+            proc = run_command(
+                [
+                    "soffice",
+                    "--headless",
+                    "--nologo",
+                    "--nofirststartwizard",
+                    f"-env:UserInstallation=file://{profile_dir}",
+                    "--convert-to",
+                    "html",
+                    "--outdir",
+                    str(out_dir),
+                    str(source),
+                ],
+                timeout=900,
+            )
+            if proc.returncode != 0:
+                last_error = (proc.stderr or proc.stdout or f"soffice failed on attempt {attempt}").strip()
+                continue
+            html_files = sorted(out_dir.glob("*.html"))
+            if not html_files:
+                last_error = f"soffice did not create html on attempt {attempt}"
+                continue
+            html_text = html_files[0].read_text(encoding="utf-8", errors="replace").replace("\x01", "")
+            html_text = assign_table_ids(html_text, warnings)
+            missing_image_label = "missing ODT image" if source.suffix.lower() == ".odt" else "missing image"
+            html_text, asset_stats = rewrite_local_image_sources(
+                html_text,
+                out_dir,
+                target,
+                assets_dir,
+                state.dest_root,
+                state.asset_paths_by_hash,
+                missing_image_label,
+            )
+            return html_text, asset_stats, last_error
+    return "", asset_stats, last_error
+
+
+def sibling_odt_source(source: Path, state: IndexState) -> Path | None:
+    candidate = source.with_suffix(".odt")
+    try:
+        candidate_key = candidate.name.casefold()
+        candidate = next((item for item in source.parent.iterdir() if item.name.casefold() == candidate_key), candidate)
+    except OSError:
+        return None
+    if candidate == source or candidate.is_symlink() or not candidate.is_file():
+        return None
+    try:
+        candidate.resolve(strict=True).relative_to(state.source_root.resolve(strict=True))
+    except (OSError, ValueError):
+        return None
+    return candidate
+
+
+def convert_office_html(source: Path, target: Path, rel: Path, force: bool, state: IndexState) -> ConversionResult:
+    try:
+        ensure_safe_generated_file(target, state.dest_root, "office output")
+    except UnsafeGeneratedPathError as exc:
+        return ConversionResult(str(source), str(target), source.suffix.lower(), "failed", str(exc))
+    rel_output = target.relative_to(state.dest_root)
+    if target.exists() and not force:
+        if state.build_index:
+            html_text = target.read_text(encoding="utf-8", errors="replace")
+            try:
+                index_counts = index_office_html_output(
+                    state,
+                    source,
+                    rel,
+                    rel_output,
+                    html_text,
+                    "existing-html-index",
+                    ["target exists; indexed existing HTML output without reconversion."],
+                )
+            except UnsafeGeneratedPathError as exc:
+                return ConversionResult(str(source), str(target), source.suffix.lower(), "failed", str(exc))
+            return ConversionResult(str(source), str(target), source.suffix.lower(), "indexed", details={"existing_output": True, **index_counts})
+        return ConversionResult(str(source), str(target), source.suffix.lower(), "skipped", "target exists")
+
+    source_ext = source.suffix.lower()
+    soffice_available = bool(shutil.which("soffice"))
+    if not soffice_available and source_ext != ".docx":
+        return ConversionResult(str(source), str(target), source.suffix.lower(), "failed", "soffice not found")
+
+    assets_dir = state.asset_store_dir()
+    table_pack_path = state.table_pack_path(rel_output)
+    if force:
+        try:
+            ensure_safe_generated_file(table_pack_path, state.dest_root, "table pack")
+        except UnsafeGeneratedPathError as exc:
+            return ConversionResult(str(source), str(target), source.suffix.lower(), "failed", str(exc))
+        if table_pack_path.exists():
+            table_pack_path.unlink()
+
+    method = "libreoffice-html"
+    warnings: list[str] = []
+    recovery_source_path: str | None = None
+    source_docx_skipped = False
+    if soffice_available:
+        html_text, asset_stats, last_error = office_via_libreoffice_html(source, target, assets_dir, state, warnings)
+    else:
+        html_text = ""
+        asset_stats = AssetRewriteStats()
+        last_error = "soffice not found"
+        warnings.append("LibreOffice unavailable: soffice not found")
+    if html_text:
+        write_text(target, html_text, state.dest_root)
+    if not html_text:
+        if source_ext == ".docx":
+            sibling_odt = sibling_odt_source(source, state)
+            if sibling_odt is not None and soffice_available:
+                sibling_warnings: list[str] = []
+                html_text, asset_stats, sibling_error = office_via_libreoffice_html(sibling_odt, target, assets_dir, state, sibling_warnings)
+                sibling_rel = sibling_odt.relative_to(state.source_root).as_posix()
+                if html_text:
+                    method = "sibling-odt-libreoffice-html"
+                    recovery_source_path = sibling_rel
+                    source_docx_skipped = True
+                    warnings.append(f"LibreOffice failed: {last_error}; skipped source DOCX and used sibling ODT source {sibling_rel}.")
+                    warnings.extend(sibling_warnings)
+                    write_text(target, html_text, state.dest_root)
+                else:
+                    warnings.append(f"Sibling ODT recovery failed for {sibling_rel}: {sibling_error}")
+            elif sibling_odt is not None:
+                sibling_rel = sibling_odt.relative_to(state.source_root).as_posix()
+                warnings.append(f"Sibling ODT recovery unavailable for {sibling_rel}: soffice not found")
+            if not html_text:
+                pandoc_failure_warnings: list[str] = []
+                pandoc_fallback = docx_via_pandoc_html(
+                    source,
+                    target,
+                    assets_dir,
+                    state.dest_root,
+                    state.asset_paths_by_hash,
+                    pandoc_failure_warnings,
+                )
+                if pandoc_fallback is not None:
+                    html_text, asset_stats, method, table_id_warnings = pandoc_fallback
+                    warnings.append(f"LibreOffice failed: {last_error}; used pandoc HTML fallback.")
+                    warnings.extend(table_id_warnings)
+                    write_text(target, html_text, state.dest_root)
+            if not html_text:
+                xml_fallback = docx_via_document_xml_html(source)
+                if xml_fallback is not None:
+                    html_text, asset_count, method = xml_fallback
+                    asset_stats = AssetRewriteStats(copied_files=asset_count)
+                    warnings.append(f"LibreOffice failed: {last_error}; recovered text from word/document.xml.")
+                    warnings.extend(pandoc_failure_warnings)
+                    write_text(target, html_text, state.dest_root)
+        if not html_text:
+            return ConversionResult(str(source), str(target), source.suffix.lower(), "failed", last_error)
+
+    asset_counts = {
+        "asset_files": asset_stats.copied_files,
+        "asset_duplicate_refs": asset_stats.duplicate_refs,
+        "asset_decorative_skipped": asset_stats.decorative_skipped,
+        "missing_image_markers": asset_stats.missing_image_markers,
+    }
+    index_counts = {"chunks": 0, "tables": 0, "assets": asset_stats.copied_files, "links": 0}
+    if state.build_index:
+        try:
+            index_counts = index_office_html_output(
+                state,
+                source,
+                rel,
+                rel_output,
+                html_text,
+                method,
+                warnings,
+                asset_counts,
+                recovery_source_path,
+                source_docx_skipped,
+            )
+        except UnsafeGeneratedPathError as exc:
+            return ConversionResult(str(source), str(target), source.suffix.lower(), "failed", str(exc))
+    else:
+        index_counts.update(asset_counts)
+    return ConversionResult(
+        str(source),
+        str(target),
+        source.suffix.lower(),
+        "converted",
+        details={
+            "bytes": target.stat().st_size,
+            "method": method,
+            **index_counts,
+            "warnings": warnings,
+            "recovery_source_path": recovery_source_path,
+            "source_docx_skipped": source_docx_skipped,
+        },
+    )
+
+
+def col_index(cell_ref: str) -> int:
+    letters = "".join(ch for ch in cell_ref if ch.isalpha())
+    idx = 0
+    for ch in letters:
+        idx = idx * 26 + (ord(ch.upper()) - ord("A") + 1)
+    return max(idx - 1, 0)
+
+
+def cell_text(cell: ET.Element, shared_strings: list[str]) -> str:
+    cell_type = cell.attrib.get("t")
+    if cell_type == "inlineStr":
+        return "".join(t.text or "" for t in cell.findall(".//c:t", NS)).strip()
+    value = cell.find("c:v", NS)
+    raw = value.text if value is not None and value.text is not None else ""
+    if cell_type == "s":
+        try:
+            return shared_strings[int(raw)]
+        except (ValueError, IndexError):
+            return raw
+    if cell_type == "b":
+        return "TRUE" if raw == "1" else "FALSE"
+    return raw
+
+
+def escape_table_cell(value: str) -> str:
+    text = str(value).replace("\r\n", "\n").replace("\r", "\n")
+    escaped = html.escape(text.replace("|", "\\|"), quote=False)
+    return escaped.replace("\n", "<br>")
+
+
+def markdown_table(rows: list[list[str]]) -> str:
+    if not rows:
+        return "_No tabular data extracted._\n"
+    width = max(len(row) for row in rows)
+    normalized = [row + [""] * (width - len(row)) for row in rows]
+    while normalized and not any(cell.strip() for cell in normalized[-1]):
+        normalized.pop()
+    if not normalized:
+        return "_No tabular data extracted._\n"
+    header = normalized[0] if any(cell.strip() for cell in normalized[0]) else [f"Column {i + 1}" for i in range(width)]
+    data = normalized[1:] if any(cell.strip() for cell in normalized[0]) else normalized
+    lines = [
+        "| " + " | ".join(escape_table_cell(cell) for cell in header) + " |",
+        "| " + " | ".join("---" for _ in range(width)) + " |",
+    ]
+    for row in data:
+        lines.append("| " + " | ".join(escape_table_cell(cell) for cell in row) + " |")
+    return "\n".join(lines) + "\n"
+
+
+def read_shared_strings(zf: zipfile.ZipFile) -> list[str]:
+    try:
+        root = ET.fromstring(zf.read("xl/sharedStrings.xml"))
+    except KeyError:
+        return []
+    return ["".join(t.text or "" for t in item.findall(".//c:t", NS)) for item in root.findall("c:si", NS)]
+
+
+def read_workbook_sheets(zf: zipfile.ZipFile) -> list[tuple[str, str]]:
+    workbook = ET.fromstring(zf.read("xl/workbook.xml"))
+    rels = ET.fromstring(zf.read("xl/_rels/workbook.xml.rels"))
+    rid_to_target = {}
+    for rel in rels.findall("rel:Relationship", NS):
+        rid = rel.attrib.get("Id")
+        target = rel.attrib.get("Target", "")
+        rid_to_target[rid] = "xl/" + target.lstrip("/")
+    sheets = []
+    for sheet in workbook.findall(".//c:sheet", NS):
+        name = sheet.attrib.get("name", "Sheet")
+        rid = sheet.attrib.get(f"{{{NS['r']}}}id")
+        if rid in rid_to_target:
+            sheets.append((name, rid_to_target[rid]))
+    return sheets
+
+
+def add_markdown_text_chunks(
+    state: IndexState,
+    doc_id: str,
+    title: str,
+    source_path: str,
+    source_format: str,
+    primary_output_path: str,
+    markdown_text: str,
+) -> int:
+    body = re.sub(r"^# .+?\n+", "", markdown_text, count=1, flags=re.DOTALL)
+    parts = [part.strip() for part in re.split(r"\n(?=##\s+)", body) if part.strip()]
+    count = 0
+    for part in parts or [body]:
+        heading_match = re.match(r"##\s+(.+)", part)
+        heading = heading_match.group(1).strip() if heading_match else title
+        text = normalize(re.sub(r"^#+\s+", "", part, flags=re.MULTILINE))
+        if not text:
+            continue
+        order = len([chunk for chunk in state.chunks if chunk["doc_id"] == doc_id]) + 1
+        chunk = chunk_base(doc_id, order, source_path, source_format, "markdown_text")
+        chunk.update(
+            {
+                "heading_path": [title, heading] if heading != title else [title],
+                "source_anchor": heading,
+                "primary_output_path": primary_output_path,
+                "text": text,
+                "search_text": text,
+                "char_count": len(text),
+                "word_count": word_count(text),
+            }
+        )
+        state.chunks.append(chunk)
+        count += 1
+    return count
+
+
+def convert_xlsx(source: Path, target: Path, rel: Path, force: bool, state: IndexState) -> ConversionResult:
+    try:
+        ensure_safe_generated_file(target, state.dest_root, "spreadsheet output")
+    except UnsafeGeneratedPathError as exc:
+        return ConversionResult(str(source), str(target), ".xlsx", "failed", str(exc))
+    if target.exists() and not force and not state.build_index:
+        return ConversionResult(str(source), str(target), ".xlsx", "skipped", "target exists")
+    rel_output = target.relative_to(state.dest_root)
+    write_output = force or not target.exists()
+    table_pack_path = state.table_pack_path(rel_output)
+    if force:
+        try:
+            ensure_safe_generated_file(table_pack_path, state.dest_root, "table pack")
+        except UnsafeGeneratedPathError as exc:
+            return ConversionResult(str(source), str(target), ".xlsx", "failed", str(exc))
+        if table_pack_path.exists():
+            table_pack_path.unlink()
+    try:
+        with zipfile.ZipFile(source) as zf:
+            shared = read_shared_strings(zf)
+            sheets = read_workbook_sheets(zf)
+            sections = []
+            table_count = 0
+            non_empty_sheets = 0
+            doc_id = doc_id_for_source(rel)
+            source_path = rel.as_posix()
+            primary_output_path = rel_output.as_posix()
+            table_payloads: list[dict] = []
+            table_rel = state.table_pack_rel_path(rel_output)
+            for sheet_idx, (sheet_name, sheet_path) in enumerate(sheets, start=1):
+                root = ET.fromstring(zf.read(sheet_path))
+                rows = []
+                for row in root.findall(".//c:sheetData/c:row", NS):
+                    values: list[str] = []
+                    for cell in row.findall("c:c", NS):
+                        ref = cell.attrib.get("r", "")
+                        idx = col_index(ref) if ref else len(values)
+                        while len(values) < idx:
+                            values.append("")
+                        values.append(cell_text(cell, shared))
+                    rows.append(values)
+                sections.append(f"## Sheet: {sheet_name}\n\n{markdown_table(rows)}")
+                if any(any(cell.strip() for cell in row) for row in rows):
+                    non_empty_sheets += 1
+                    table_count += 1
+                    width = max(len(row) for row in rows) if rows else 0
+                    normalized = [row + [""] * (width - len(row)) for row in rows]
+                    table_id = f"{doc_id}:table-{table_count:04d}"
+                    rows_json = [
+                        [
+                            {"row": r_idx, "col": c_idx, "text": normalize(value)}
+                            for c_idx, value in enumerate(row, start=1)
+                        ]
+                        for r_idx, row in enumerate(normalized, start=1)
+                    ]
+                    if state.build_index:
+                        payload = {
+                            "doc_id": doc_id,
+                            "table_id": table_id,
+                            "source_path": source_path,
+                            "source_format": "xlsx",
+                            "table_source": "spreadsheet_structured",
+                            "primary_output_path": primary_output_path,
+                            "source_anchor": f"sheet={sheet_idx}",
+                            "sheet_name": sheet_name,
+                            "row_count": len(rows_json),
+                            "col_count": width,
+                            "nonempty_cells": sum(1 for row in rows_json for cell in row if cell["text"]),
+                            "rows": rows_json,
+                        }
+                        table_pointer = f"/tables/{len(table_payloads)}"
+                        table_payloads.append(payload)
+                        state.tables.append(
+                            {
+                                "doc_id": doc_id,
+                                "table_id": table_id,
+                                "source_path": source_path,
+                                "source_format": "xlsx",
+                                "table_source": "spreadsheet_structured",
+                                "source_anchor": f"sheet={sheet_idx}",
+                                "primary_output_path": primary_output_path,
+                                "table_json_path": table_rel.as_posix(),
+                                "table_payload_pointer": table_pointer,
+                                "rows": len(rows_json),
+                                "cols_max": width,
+                                "nonempty_cells": payload["nonempty_cells"],
+                                "has_links": False,
+                                "link_count": 0,
+                            }
+                        )
+            if state.build_index:
+                write_table_pack(state, rel_output, doc_id, source_path, "xlsx", primary_output_path, table_payloads)
+    except Exception as exc:
+        return ConversionResult(str(source), str(target), ".xlsx", "failed", f"xlsx parse failed: {exc}")
+
+    title = source.stem
+    markdown = f"# {title}\n\n> Source: `{rel.as_posix()}`  \n> Source type: `xlsx`\n\n" + "\n\n".join(sections).rstrip() + "\n"
+    if write_output:
+        write_text(target, markdown, state.dest_root)
+    chunks = 0
+    if state.build_index:
+        doc_id = doc_id_for_source(rel)
+        chunks = add_markdown_text_chunks(state, doc_id, title, rel.as_posix(), "xlsx", rel_output.as_posix(), markdown)
+        state.documents.append(
+            {
+                "doc_id": doc_id,
+                "title": title,
+                "source_path": rel.as_posix(),
+                "source_format": "xlsx",
+                "primary_output_format": "md",
+                "primary_output_path": rel_output.as_posix(),
+                "conversion_method": "xlsx-ooxml-markdown" if write_output else "existing-md-index",
+                "index_backend": "markdown-parser",
+                "sheets": len(sheets),
+                "chunks": chunks,
+                "tables": table_count,
+                "assets": 0,
+                "links": 0,
+                "warnings": [],
+            }
+        )
+    return ConversionResult(
+        str(source),
+        str(target),
+        ".xlsx",
+        "converted" if write_output else "indexed",
+        details={"bytes": target.stat().st_size, "sheets": len(sheets), "non_empty_sheets": non_empty_sheets, "tables": table_count, "chunks": chunks},
+    )
+
+
+def slide_number(name: str) -> int:
+    match = re.search(r"slide(\d+)\.xml$", name)
+    return int(match.group(1)) if match else 0
+
+
+def extract_xml_text(root: ET.Element) -> list[str]:
+    texts = []
+    for paragraph in root.findall(".//a:p", NS):
+        line = "".join(t.text or "" for t in paragraph.findall(".//a:t", NS)).strip()
+        if line:
+            texts.append(line)
+    return texts
+
+
+def rels_path_for_slide(slide_path: str) -> str:
+    posix = PurePosixPath(slide_path)
+    return str(posix.parent / "_rels" / f"{posix.name}.rels")
+
+
+def package_target_path(base_path: str, target: str) -> str:
+    if re.match(r"^[a-zA-Z][a-zA-Z0-9+.-]*:", target):
+        return ""
+    if target.startswith("/"):
+        image_path = PurePosixPath(target.lstrip("/"))
+    else:
+        image_path = PurePosixPath(base_path).parent / target
+    parts = []
+    for part in image_path.parts:
+        if part in {"", "."}:
+            continue
+        if part == "..":
+            if parts:
+                parts.pop()
+            continue
+        parts.append(part)
+    return "/".join(parts)
+
+
+def copy_pptx_slide_images(
+    zf: zipfile.ZipFile,
+    slide_path: str,
+    assets_path: Path,
+    dest_root: Path,
+    output_file: Path,
+    copied_by_hash: dict[str, Path],
+    stats: AssetRewriteStats,
+) -> list[str]:
+    copied = []
+    try:
+        rels = ET.fromstring(zf.read(rels_path_for_slide(slide_path)))
+    except KeyError:
+        return copied
+    for index, rel in enumerate(rels.findall("rel:Relationship", NS), start=1):
+        target = rel.attrib.get("Target", "")
+        rel_type = rel.attrib.get("Type", "")
+        if "image" not in rel_type:
+            continue
+        normalized = package_target_path(slide_path, target)
+        if not normalized:
+            continue
+        try:
+            data = zf.read(normalized)
+        except KeyError:
+            continue
+        rel_asset = write_deduped_asset(data, Path(normalized).name, assets_path, dest_root, output_file, copied_by_hash, stats)
+        if rel_asset is not None:
+            copied.append(rel_asset)
+    return copied
+
+
+def convert_pptx(source: Path, target: Path, rel: Path, force: bool, state: IndexState) -> ConversionResult:
+    try:
+        ensure_safe_generated_file(target, state.dest_root, "presentation output")
+    except UnsafeGeneratedPathError as exc:
+        return ConversionResult(str(source), str(target), ".pptx", "failed", str(exc))
+    if target.exists() and not force and not state.build_index:
+        return ConversionResult(str(source), str(target), ".pptx", "skipped", "target exists")
+    rel_output = target.relative_to(state.dest_root)
+    write_output = force or not target.exists()
+    assets_path = state.asset_store_dir()
+    try:
+        with zipfile.ZipFile(source) as zf:
+            slide_paths = sorted(
+                [name for name in zf.namelist() if re.match(r"ppt/slides/slide\d+\.xml$", name)],
+                key=slide_number,
+            )
+            sections = []
+            asset_stats = AssetRewriteStats()
+            image_count = 0
+            for idx, slide_path in enumerate(slide_paths, start=1):
+                root = ET.fromstring(zf.read(slide_path))
+                text_lines = extract_xml_text(root)
+                image_links = copy_pptx_slide_images(zf, slide_path, assets_path, state.dest_root, target, state.asset_paths_by_hash, asset_stats)
+                image_count += len(image_links)
+                section = [f"## Slide {idx}", ""]
+                section.extend([f"- {line}" for line in text_lines] or ["_No text extracted from this slide._"])
+                section.extend([f"\n![Slide {idx} image]({link})" for link in image_links])
+                sections.append("\n".join(section))
+    except Exception as exc:
+        return ConversionResult(str(source), str(target), ".pptx", "failed", f"pptx parse failed: {exc}")
+
+    title = source.stem
+    markdown = f"# {title}\n\n> Source: `{rel.as_posix()}`  \n> Source type: `pptx`\n\n" + "\n\n".join(sections).rstrip() + "\n"
+    if write_output:
+        write_text(target, markdown, state.dest_root)
+    chunks = 0
+    if state.build_index:
+        doc_id = doc_id_for_source(rel)
+        chunks = add_markdown_text_chunks(state, doc_id, title, rel.as_posix(), "pptx", rel_output.as_posix(), markdown)
+        state.documents.append(
+            {
+                "doc_id": doc_id,
+                "title": title,
+                "source_path": rel.as_posix(),
+                "source_format": "pptx",
+                "primary_output_format": "md",
+                "primary_output_path": rel_output.as_posix(),
+                "conversion_method": "pptx-ooxml-markdown" if write_output else "existing-md-index",
+                "index_backend": "markdown-parser",
+                "slides": len(slide_paths),
+                "chunks": chunks,
+                "tables": 0,
+                "assets": image_count,
+                "asset_files": asset_stats.copied_files,
+                "asset_duplicate_refs": asset_stats.duplicate_refs,
+                "asset_decorative_skipped": asset_stats.decorative_skipped,
+                "missing_image_markers": asset_stats.missing_image_markers,
+                "links": 0,
+                "warnings": [],
+            }
+        )
+    return ConversionResult(
+        str(source),
+        str(target),
+        ".pptx",
+        "converted" if write_output else "indexed",
+        details={
+            "bytes": target.stat().st_size,
+            "slides": len(slide_paths),
+            "images": image_count,
+            "asset_files": asset_stats.copied_files,
+            "asset_duplicate_refs": asset_stats.duplicate_refs,
+            "asset_decorative_skipped": asset_stats.decorative_skipped,
+            "missing_image_markers": asset_stats.missing_image_markers,
+            "chunks": chunks,
+        },
+    )
+
+
+def convert_pdf(source: Path, rel: Path, state: IndexState) -> ConversionResult:
+    if not state.build_index:
+        return ConversionResult(str(source), None, ".pdf", "skipped", "PDF requires --build-index in this pipeline")
+    if python_module_available("fitz")["available"]:
+        document_count = len(state.documents)
+        chunk_count = len(state.chunks)
+        table_count = len(state.tables)
+        try:
+            return index_pdf_pymupdf(source, rel, state)
+        except Exception as exc:
+            del state.documents[document_count:]
+            del state.chunks[chunk_count:]
+            del state.tables[table_count:]
+            return ConversionResult(str(source), None, ".pdf", "failed", f"pymupdf failed: {exc}")
+    return index_pdf_poppler(source, rel, state)
+
+
+def rect_from(value):
+    import fitz
+
+    return fitz.Rect(value) if value is not None else None
+
+
+def rect_list(value) -> list[float] | None:
+    rect = rect_from(value)
+    if rect is None:
+        return None
+    return [round(rect.x0, 3), round(rect.y0, 3), round(rect.x1, 3), round(rect.y1, 3)]
+
+
+def center_in(outer, inner) -> bool:
+    if outer is None or inner is None:
+        return False
+    center = (inner.tl + inner.br) / 2
+    return outer.contains(center)
+
+
+def index_pdf_pymupdf(source: Path, rel: Path, state: IndexState) -> ConversionResult:
+    try:
+        import fitz
+
+        doc_id = doc_id_for_source(rel)
+        source_path = rel.as_posix()
+        pdf = fitz.open(source)
+        all_links = []
+        table_count = 0
+        table_payloads: list[dict] = []
+        table_rel = state.table_pack_rel_path(rel.with_suffix(".pdf"))
+    except Exception as exc:
+        return ConversionResult(str(source), None, ".pdf", "failed", f"pymupdf failed: {exc}")
+
+    for page_index in range(pdf.page_count):
+        page_no = page_index + 1
+        page = pdf[page_index]
+        links = []
+        for link_idx, link in enumerate(page.get_links(), start=1):
+            uri = link.get("uri") or ""
+            if not uri:
+                continue
+            bbox = rect_list(link.get("from"))
+            label = normalize(page.get_textbox(rect_from(link.get("from")))) if bbox else ""
+            link_item = {"uri": uri, "label": label, "page": page_no, "bbox": bbox}
+            links.append(link_item)
+            all_links.append(link_item)
+
+        blocks = []
+        for block in page.get_text("blocks"):
+            x0, y0, x1, y1, text, _block_no, _block_type = block[:7]
+            text = normalize(text)
+            if text:
+                blocks.append({"bbox": [x0, y0, x1, y1], "text": text})
+
+        buffer: list[str] = []
+        buffer_bbox = None
+        buffer_links: list[dict] = []
+
+        def block_links(block_bbox: list[float]) -> list[dict]:
+            outer = rect_from(block_bbox)
+            found = []
+            seen = set()
+            for link in links:
+                if center_in(outer, rect_from(link["bbox"])):
+                    key = (link["uri"], link.get("label", ""))
+                    if key not in seen:
+                        seen.add(key)
+                        found.append(link)
+            return found
+
+        def flush() -> None:
+            nonlocal buffer, buffer_bbox, buffer_links
+            text = normalize("\n\n".join(buffer))
+            if not text:
+                buffer, buffer_bbox, buffer_links = [], None, []
+                return
+            order = len([chunk for chunk in state.chunks if chunk["doc_id"] == doc_id]) + 1
+            chunk = chunk_base(doc_id, order, source_path, "pdf", "pdf_text")
+            chunk.update(
+                {
+                    "page_start": page_no,
+                    "page_end": page_no,
+                    "source_anchor": f"page={page_no}",
+                    "bbox": [round(v, 3) for v in buffer_bbox] if buffer_bbox else None,
+                    "text": text,
+                    "search_text": text,
+                    "char_count": len(text),
+                    "word_count": word_count(text),
+                }
+            )
+            if buffer_links:
+                compact = compact_links([{"href": link["uri"], "text": link.get("label", "")} for link in buffer_links])
+                if compact:
+                    chunk["links"] = compact
+            state.chunks.append(chunk)
+            buffer, buffer_bbox, buffer_links = [], None, []
+
+        for block in blocks:
+            current = "\n\n".join(buffer)
+            if buffer and (len(current) + len(block["text"]) > 2600 or len(current) >= 1800):
+                flush()
+            buffer.append(block["text"])
+            bbox = block["bbox"]
+            if buffer_bbox is None:
+                buffer_bbox = bbox[:]
+            else:
+                buffer_bbox = [min(buffer_bbox[0], bbox[0]), min(buffer_bbox[1], bbox[1]), max(buffer_bbox[2], bbox[2]), max(buffer_bbox[3], bbox[3])]
+            buffer_links.extend(block_links(bbox))
+        flush()
+
+        try:
+            tables = list(page.find_tables().tables)
+        except Exception:
+            tables = []
+        for page_table_idx, table in enumerate(tables, start=1):
+            table_count += 1
+            table_id = f"{doc_id}:table-{table_count:04d}"
+            table_anchor = f"page={page_no}&table={page_table_idx}"
+            extracted = table.extract()
+            table_rows = []
+            table_links = []
+            for row_idx, row in enumerate(extracted, start=1):
+                row_cells = table.rows[row_idx - 1].cells if row_idx - 1 < len(table.rows) else []
+                output_row = []
+                for col_idx, value in enumerate(row, start=1):
+                    cell_bbox = row_cells[col_idx - 1] if col_idx - 1 < len(row_cells) and row_cells[col_idx - 1] else None
+                    links_in_cell = []
+                    for link in links:
+                        if center_in(rect_from(cell_bbox), rect_from(link["bbox"])):
+                            label = link.get("label") or "link"
+                            links_in_cell.append({"label": label, "uri": link["uri"], "bbox": link.get("bbox")})
+                            table_links.append({"row": row_idx, "col": col_idx, "label": label, "uri": link["uri"], "bbox": link.get("bbox")})
+                    cell = {"row": row_idx, "col": col_idx, "text": normalize(value), "bbox": rect_list(cell_bbox)}
+                    if links_in_cell:
+                        cell["links"] = [{"label": link["label"], "uri": link["uri"]} for link in links_in_cell]
+                    output_row.append(cell)
+                table_rows.append(output_row)
+
+            table_pointer = f"/tables/{len(table_payloads)}"
+            payload = {
+                "doc_id": doc_id,
+                "table_id": table_id,
+                "source_path": source_path,
+                "source_format": "pdf",
+                "table_source": "pdf_detected",
+                "confidence": "heuristic",
+                "page": page_no,
+                "source_anchor": table_anchor,
+                "bbox": rect_list(table.bbox),
+                "row_count": table.row_count,
+                "col_count": table.col_count,
+                "nonempty_cells": sum(1 for row in table_rows for cell in row if cell["text"]),
+                "links": table_links,
+                "rows": table_rows,
+            }
+            table_payloads.append(payload)
+            state.tables.append(
+                {
+                    "doc_id": doc_id,
+                    "table_id": table_id,
+                    "source_path": source_path,
+                    "source_format": "pdf",
+                    "table_source": "pdf_detected",
+                    "confidence": "heuristic",
+                    "page": page_no,
+                    "source_anchor": table_anchor,
+                    "bbox": payload["bbox"],
+                    "table_json_path": table_rel.as_posix(),
+                    "table_payload_pointer": table_pointer,
+                    "rows": table.row_count,
+                    "cols_max": table.col_count,
+                    "nonempty_cells": payload["nonempty_cells"],
+                    "has_links": bool(table_links),
+                    "link_count": len(table_links),
+                }
+            )
+            preview = " ".join(cell["text"] for row in table_rows[:4] for cell in row if cell["text"])
+            order = len([chunk for chunk in state.chunks if chunk["doc_id"] == doc_id]) + 1
+            chunk = chunk_base(doc_id, order, source_path, "pdf", "pdf_table_summary")
+            chunk.update(
+                {
+                    "page_start": page_no,
+                    "page_end": page_no,
+                    "source_anchor": table_anchor,
+                    "bbox": payload["bbox"],
+                    "text": f"PDF table {table_count} on page {page_no}. Rows: {table.row_count}. Columns: {table.col_count}.",
+                    "search_text": normalize(preview),
+                    "table_ids": [table_id],
+                    "table_json_path": table_rel.as_posix(),
+                    "table_payload_pointer": table_pointer,
+                    "table_source": "pdf_detected",
+                    "table_rows": table.row_count,
+                    "table_cols_max": table.col_count,
+                    "char_count": len(preview),
+                    "word_count": word_count(preview),
+                }
+            )
+            state.chunks.append(chunk)
+
+    write_table_pack(state, rel.with_suffix(".pdf"), doc_id, source_path, "pdf", None, table_payloads)
+    doc_record = {
+        "doc_id": doc_id,
+        "title": source.stem,
+        "source_path": source_path,
+        "source_format": "pdf",
+        "primary_output_format": "original",
+        "primary_output_path": None,
+        "conversion_method": "index-only",
+        "index_backend": "pymupdf",
+        "pages": pdf.page_count,
+        "chunks": len([chunk for chunk in state.chunks if chunk["doc_id"] == doc_id]),
+        "tables": table_count,
+        "assets": 0,
+        "links": len(all_links),
+        "table_links": sum(table["link_count"] for table in state.tables if table["doc_id"] == doc_id),
+        "warnings": [],
+    }
+    state.documents.append(doc_record)
+    return ConversionResult(str(source), None, ".pdf", "indexed", details={"backend": "pymupdf", "pages": pdf.page_count, "tables": table_count, "links": len(all_links)})
+
+
+def index_pdf_poppler(source: Path, rel: Path, state: IndexState) -> ConversionResult:
+    if not shutil.which("pdftotext"):
+        return ConversionResult(str(source), None, ".pdf", "failed", "PyMuPDF and pdftotext are unavailable")
+    proc = run_command(["pdftotext", "-layout", str(source), "-"])
+    if proc.returncode != 0 or not proc.stdout.strip():
+        return ConversionResult(str(source), None, ".pdf", "failed_needs_ocr", "no extractable text")
+    doc_id = doc_id_for_source(rel)
+    source_path = rel.as_posix()
+    pages = proc.stdout.replace("\r\n", "\n").replace("\r", "\n").split("\f")
+    for page_no, text in enumerate(pages, start=1):
+        text = normalize(text)
+        if not text:
+            continue
+        order = len([chunk for chunk in state.chunks if chunk["doc_id"] == doc_id]) + 1
+        chunk = chunk_base(doc_id, order, source_path, "pdf", "pdf_text")
+        chunk.update(
+            {
+                "page_start": page_no,
+                "page_end": page_no,
+                "source_anchor": f"page={page_no}",
+                "text": text,
+                "search_text": text,
+                "char_count": len(text),
+                "word_count": word_count(text),
+            }
+        )
+        state.chunks.append(chunk)
+    state.documents.append(
+        {
+            "doc_id": doc_id,
+            "title": source.stem,
+            "source_path": source_path,
+            "source_format": "pdf",
+            "primary_output_format": "original",
+            "primary_output_path": None,
+            "conversion_method": "index-only",
+            "index_backend": "poppler-pdftotext",
+            "pages": len(pages),
+            "chunks": len([chunk for chunk in state.chunks if chunk["doc_id"] == doc_id]),
+            "tables": 0,
+            "assets": 0,
+            "links": 0,
+            "warnings": ["PyMuPDF unavailable; PDF links and detected tables were not extracted."],
+        }
+    )
+    return ConversionResult(str(source), None, ".pdf", "indexed", details={"backend": "poppler-pdftotext", "pages": len(pages)})
+
+
+def convert_one(source: Path, target: Path | None, rel: Path, force: bool, state: IndexState) -> ConversionResult:
+    ext = source.suffix.lower()
+    if ext in HTML_EXTS:
+        assert target is not None
+        return convert_office_html(source, target, rel, force, state)
+    if ext == ".pdf":
+        return convert_pdf(source, rel, state)
+    if ext == ".xlsx":
+        assert target is not None
+        return convert_xlsx(source, target, rel, force, state)
+    if ext == ".pptx":
+        assert target is not None
+        return convert_pptx(source, target, rel, force, state)
+    return ConversionResult(str(source), str(target) if target else None, ext, "skipped", "unsupported extension")
+
+
+def validate_index(state: IndexState, source_root: Path) -> list[str]:
+    warnings = []
+    for rowset_name, rows in {"documents": state.documents, "chunks": state.chunks, "tables": state.tables}.items():
+        for row in rows:
+            source_path = row.get("source_path")
+            if not source_path:
+                warnings.append(f"{rowset_name}: missing source_path")
+                continue
+            if source_path.startswith("/") or ".." in Path(source_path).parts:
+                warnings.append(f"{rowset_name}: unsafe source_path {source_path}")
+            if not (source_root / source_path).exists():
+                warnings.append(f"{rowset_name}: source_path does not exist {source_path}")
+            if row.get("links") == []:
+                warnings.append(f"{rowset_name}: empty links array in {row.get('doc_id')}")
+    seen_chunks = set()
+    for chunk in state.chunks:
+        key = chunk["chunk_id"]
+        if key in seen_chunks:
+            warnings.append(f"duplicate chunk_id {key}")
+        seen_chunks.add(key)
+        table_path = chunk.get("table_json_path")
+        if table_path and not (state.dest_root / table_path).exists():
+            warnings.append(f"missing table_json_path {table_path}")
+        if table_path and not chunk.get("table_payload_pointer"):
+            warnings.append(f"missing table_payload_pointer in {chunk.get('chunk_id')}")
+    for table in state.tables:
+        table_path = table.get("table_json_path")
+        if table_path and not (state.dest_root / table_path).exists():
+            warnings.append(f"missing table json {table_path}")
+        if table_path and not table.get("table_payload_pointer"):
+            warnings.append(f"missing table_payload_pointer in {table.get('table_id')}")
+    return warnings
+
+
+def index_output_files(dest_root: Path) -> list[Path]:
+    index_dir = dest_root / "index"
+    return [
+        index_dir / "documents.jsonl",
+        index_dir / "chunks.jsonl",
+        index_dir / "tables.jsonl",
+        index_dir / "conversion-report.json",
+        index_dir / "conversion-summary.md",
+    ]
+
+
+def ensure_index_outputs_safe(dest_root: Path) -> None:
+    ensure_no_symlinks_under(dest_root / "index", dest_root, "index directory")
+    for index_file in index_output_files(dest_root):
+        ensure_safe_generated_file(index_file, dest_root, "index output")
+
+
+def write_index(state: IndexState) -> dict:
+    ensure_index_outputs_safe(state.dest_root)
+    index_files = index_output_files(state.dest_root)
+    write_jsonl(index_files[0], state.documents, state.dest_root)
+    write_jsonl(index_files[1], state.chunks, state.dest_root)
+    write_jsonl(index_files[2], state.tables, state.dest_root)
+    return {"documents": len(state.documents), "chunks": len(state.chunks), "tables": len(state.tables)}
+
+
+def recovery_summary_details(document: dict) -> list[str]:
+    method = document.get("conversion_method") or "unknown"
+    warnings = document.get("warnings") or []
+    details: list[str] = []
+    recovery_source_path = document.get("recovery_source_path")
+    if document.get("source_docx_skipped"):
+        details.append("  - Source DOCX: skipped after LibreOffice failure; output was produced from same-name ODT fallback")
+        indexed_source = document.get("indexed_content_source_path")
+        indexed_format = document.get("indexed_content_source_format")
+        if indexed_source:
+            details.append(f"  - Indexed content source: `{indexed_source}`" + (f" (`{indexed_format}`)" if indexed_format else ""))
+    if recovery_source_path:
+        details.append(f"  - Recovery source: `{recovery_source_path}`")
+    for warning in warnings:
+        match = re.match(r"LibreOffice failed: (.*?); (.*)", warning)
+        if match:
+            details.append(f"  - LibreOffice failure: {match.group(1)}")
+            continue
+        if warning.startswith("Pandoc fallback failed: "):
+            details.append(f"  - Pandoc fallback failure: {warning.removeprefix('Pandoc fallback failed: ')}")
+            continue
+        if warning.startswith("Pandoc fallback unavailable: "):
+            details.append(f"  - Pandoc fallback unavailable: {warning.removeprefix('Pandoc fallback unavailable: ')}")
+            continue
+        details.append(f"  - Recovery note: {warning}")
+    if method == "document-xml-html-recovery":
+        details.append("  - Data loss risk: layout, tables, links, and media may be incomplete")
+    return details
+
+
+def build_summary(report: dict) -> str:
+    results = report.get("results", [])
+    documents = report.get("documents", [])
+    by_status = Counter(result["status"] for result in results)
+    if documents:
+        by_ext = Counter(
+            f".{source_format}"
+            for document in documents
+            for source_format in [document.get("indexed_content_source_format") or document.get("source_format")]
+            if source_format
+        )
+    else:
+        by_ext = Counter(result["ext"] for result in results if result["status"] in {"converted", "indexed"})
+    lines = [
+        "# Conversion Summary",
+        "",
+        "## Source Safety",
+        "",
+        f"- Source unchanged: `{report.get('source_unchanged')}`",
+        f"- Source dir: `{report.get('source_dir')}`",
+        f"- Destination dir: `{report.get('dest_dir')}`",
+        "",
+        "## Inventory",
+        "",
+    ]
+    for key, value in sorted(report.get("inventory", {}).items()):
+        lines.append(f"- `{key}`: {value}")
+    lines.extend(["", "## Results", ""])
+    for key in sorted(by_status):
+        lines.append(f"- `{key}`: {by_status[key]}")
+    lines.extend(["", "## Processed By Type", ""])
+    for key in sorted(by_ext):
+        lines.append(f"- `{key}`: {by_ext[key]}")
+    index = report.get("index", {})
+    if index:
+        lines.extend(["", "## Index", ""])
+        for key in ["documents", "chunks", "tables"]:
+            lines.append(f"- `{key}`: {index.get(key, 0)}")
+    recovered = [
+        document
+        for document in documents
+        if document.get("conversion_method") in {"sibling-odt-libreoffice-html", "pandoc-html-fallback", "document-xml-html-recovery"}
+        or any("fallback" in warning.lower() or "recovered" in warning.lower() for warning in document.get("warnings", []))
+    ]
+    if recovered:
+        lines.extend(["", "## Recovered / Fallback Conversions", ""])
+        for document in recovered:
+            source = document.get("source_path") or "unknown"
+            output = document.get("primary_output_path") or "none"
+            method = document.get("conversion_method") or "unknown"
+            lines.append(f"- `{source}` -> `{output}`")
+            lines.append(f"  - Method: `{method}`")
+            lines.extend(recovery_summary_details(document))
+    failures = [result for result in results if result["status"] not in {"converted", "indexed", "skipped"}]
+    if failures:
+        lines.extend(["", "## Failures", ""])
+        for result in failures:
+            lines.append(f"- `{result['source']}`: {result['status']} - {result.get('reason')}")
+    skipped = [result for result in results if result["status"] == "skipped"]
+    if skipped:
+        lines.extend(["", "## Skipped", ""])
+        for result in skipped:
+            lines.append(f"- `{result['source']}`: {result.get('reason')}")
+    warnings = report.get("warnings", [])
+    if warnings:
+        lines.extend(["", "## Warnings", ""])
+        for warning in warnings[:200]:
+            lines.append(f"- {warning}")
+        if len(warnings) > 200:
+            lines.append(f"- ... {len(warnings) - 200} more warnings")
+    lines.extend(["", "## Tool Versions", ""])
+    for name, info in report.get("dependencies", {}).items():
+        path = info.get("path") or info.get("module") or "not found"
+        version = info.get("version") or "not available"
+        lines.append(f"- `{name}`: {version} ({path})")
+    return "\n".join(lines) + "\n"
+
+
+def stat_sources(paths: list[Path]) -> dict[str, tuple[int, int]]:
+    return {str(path): (path.stat().st_mtime_ns, path.stat().st_size) for path in paths if path.exists()}
+
+
+def index_state_snapshot(state: IndexState) -> tuple[int, int, int, set[str]]:
+    return len(state.documents), len(state.chunks), len(state.tables), set(state.asset_paths_by_hash)
+
+
+def rollback_index_state(state: IndexState, snapshot: tuple[int, int, int, set[str]]) -> None:
+    documents_len, chunks_len, tables_len, asset_keys = snapshot
+    del state.documents[documents_len:]
+    del state.chunks[chunks_len:]
+    del state.tables[tables_len:]
+    for digest in set(state.asset_paths_by_hash) - asset_keys:
+        asset_path = state.asset_paths_by_hash.pop(digest)
+        try:
+            ensure_safe_generated_file(asset_path, state.dest_root, "rolled back asset")
+        except UnsafeGeneratedPathError:
+            continue
+        if asset_path.exists() and asset_path.is_file():
+            asset_path.unlink()
+
+
+def source_intersects_generated_dir(source_root: Path, generated_root: Path) -> bool:
+    return source_root == generated_root or is_relative_to(source_root, generated_root)
+
+
+def remove_old_root_reports(dest_root: Path) -> None:
+    old_reports = [dest_root / "conversion-report.json", dest_root / "conversion-summary.md"]
+    for old_report in old_reports:
+        ensure_safe_generated_file(old_report, dest_root, "old root report")
+    for old_report in old_reports:
+        if old_report.exists():
+            old_report.unlink()
+
+
+def main() -> int:
+    args = parse_args()
+    source_root = safe_resolve(Path(args.source))
+    dest_root = safe_resolve(Path(args.dest))
+
+    if not source_root.is_dir():
+        print(f"Source directory does not exist: {source_root}", file=sys.stderr)
+        return 2
+    if source_root == dest_root:
+        print("Source and destination must differ.", file=sys.stderr)
+        return 2
+    if is_relative_to(dest_root, source_root):
+        print("Destination must not be inside the source tree.", file=sys.stderr)
+        return 2
+    if is_relative_to(source_root, dest_root):
+        print("Source must not be inside the destination tree.", file=sys.stderr)
+        return 2
+
+    deps = preflight()
+    files = sorted(iter_files(source_root))
+    inventory = Counter()
+    classified: list[tuple[Path, str]] = []
+    for path in files:
+        category = classify_file(path)
+        key = path.suffix.lower() if path.suffix else "[no_ext]"
+        inventory[key] += 1
+        classified.append((path, category))
+
+    supported = sorted((path for path, category in classified if category == "supported"), key=lambda path: supported_file_sort_key(path, source_root))
+    taken: set[str] = set()
+    planned = [(path, target_for(path, source_root, dest_root, taken)) for path in supported]
+    skipped_results = [
+        ConversionResult(
+            str(path),
+            None,
+            path.suffix.lower() or "[no_ext]",
+            "skipped",
+            category,
+            {"relative_path": path.relative_to(source_root).as_posix()},
+        )
+        for path, category in classified
+        if category != "supported"
+    ]
+    manifest = {
+        "source_dir": str(source_root),
+        "dest_dir": str(dest_root),
+        "inventory": dict(sorted(inventory.items())),
+        "dependencies": deps,
+        "build_index": args.build_index,
+        "planned_conversions": [
+            {
+                "source_path": path.relative_to(source_root).as_posix(),
+                "source": str(path),
+                "target": str(target) if target else None,
+                "primary_output_format": "original" if path.suffix.lower() == ".pdf" else ("html" if path.suffix.lower() in HTML_EXTS else "md"),
+                "ext": path.suffix.lower(),
+            }
+            for path, target in planned
+        ],
+        "skipped": [result.__dict__ for result in skipped_results],
+        "safety": {
+            "source_read_only": True,
+            "dry_run_writes_nothing": True,
+            "dest_not_inside_source": True,
+            "source_not_inside_dest": True,
+        },
+    }
+
+    if args.dry_run or args.report_only:
+        print(json.dumps(manifest, ensure_ascii=False, indent=2))
+        return 0
+
+    if args.build_index and not args.force:
+        print("--build-index requires --force for write runs; use --dry-run --build-index to inspect the plan.", file=sys.stderr)
+        return 2
+
+    dest_root.mkdir(parents=True, exist_ok=True)
+    try:
+        remove_old_root_reports(dest_root)
+        if args.build_index:
+            ensure_index_outputs_safe(dest_root)
+    except UnsafeGeneratedPathError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    if args.force and args.build_index:
+        generated_tables_root = dest_root / "tables"
+        generated_assets_root = dest_root / "assets"
+        try:
+            for generated_root, label in [(generated_tables_root, "tables directory"), (generated_assets_root, "assets directory")]:
+                ensure_no_symlinks_under(generated_root, dest_root, label)
+                if source_intersects_generated_dir(source_root, generated_root):
+                    print(f"Refusing to clear generated directory because it contains source tree: {generated_root}", file=sys.stderr)
+                    return 2
+                if generated_root.exists():
+                    shutil.rmtree(generated_root)
+        except UnsafeGeneratedPathError as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
+    state = IndexState(source_root=source_root, dest_root=dest_root, build_index=args.build_index)
+    source_before = stat_sources(supported)
+    results: list[ConversionResult] = []
+    results.extend(skipped_results)
+    consumed_recovery_sources: dict[str, str] = {}
+
+    for path, target in planned:
+        rel = path.relative_to(source_root)
+        rel_posix = rel.as_posix()
+        rel_key = relative_path_key(rel_posix)
+        if rel_key in consumed_recovery_sources:
+            recovery_for = consumed_recovery_sources[rel_key]
+            results.append(
+                ConversionResult(
+                    str(path),
+                    str(target) if target else None,
+                    path.suffix.lower(),
+                    "skipped",
+                    f"used as same-name ODT fallback for {recovery_for}",
+                    {
+                        "relative_path": rel_posix,
+                        "recovery_for": recovery_for,
+                        "skip_reason": "used_as_same_name_odt_fallback",
+                    },
+                )
+            )
+            continue
+        snapshot = index_state_snapshot(state)
+        result = convert_one(path, target, rel, args.force, state)
+        if result.status not in {"converted", "indexed", "skipped"}:
+            rollback_index_state(state, snapshot)
+        results.append(result)
+        recovery_source_path = result.details.get("recovery_source_path")
+        if result.status in {"converted", "indexed"} and result.details.get("source_docx_skipped") and recovery_source_path:
+            consumed_recovery_sources[relative_path_key(recovery_source_path)] = rel_posix
+
+    source_after = stat_sources(supported)
+    source_unchanged = source_before == source_after
+    warnings = validate_index(state, source_root) if args.build_index else []
+    if not source_unchanged:
+        warnings.append("Source file mtime/size changed during conversion.")
+    try:
+        index_counts = write_index(state) if args.build_index else {}
+    except UnsafeGeneratedPathError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+
+    report = {
+        **manifest,
+        "results": [result.__dict__ for result in results],
+        "status_counts": dict(Counter(result.status for result in results)),
+        "processed_counts": dict(Counter(result.ext for result in results if result.status in {"converted", "indexed"})),
+        "index": index_counts,
+        "documents": state.documents,
+        "warnings": warnings,
+        "source_unchanged": source_unchanged,
+    }
+    index_dir = dest_root / "index"
+    report_path = index_dir / "conversion-report.json"
+    summary_path = index_dir / "conversion-summary.md"
+    try:
+        ensure_safe_generated_file(report_path, dest_root, "conversion report")
+        ensure_safe_generated_file(summary_path, dest_root, "conversion summary")
+        write_text(report_path, json.dumps(report, ensure_ascii=False, indent=2) + "\n", dest_root)
+        write_text(summary_path, build_summary(report), dest_root)
+    except UnsafeGeneratedPathError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+
+    failures = [result for result in results if result.status not in {"converted", "indexed", "skipped"}]
+    return 1 if failures or not source_unchanged else 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

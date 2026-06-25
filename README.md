@@ -28,6 +28,9 @@ Workspace for local Codex-oriented projects, tools, plugins, skills, and shared 
 - [tools/book-search](./tools/book-search/README.md)  
   Local Litres and Bookmate lookup helpers for finding catalogue links from reading-list search queries. Bookmate lookup uses the public search API response shape and supports saved API JSON files as the browser fallback; it does not handle browser cookies.
 
+- [tools/document-converter](./tools/document-converter/README.md)  
+  Local one-shot converter and index builder that mirrors a source document tree into readable converted files plus search indexes while preserving source inputs.
+
 - [plugins](./plugins/README.md)  
   Local Codex plugin sources that package reusable skills and, when needed, broader Codex integrations such as `codex-token-monitor`.
 
