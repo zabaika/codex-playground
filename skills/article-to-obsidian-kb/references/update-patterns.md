@@ -40,6 +40,14 @@ Canonical section-heading strings live in [config/note_schema.yaml](../config/no
 - If an older source is being backfilled later, insert its bullet by date instead of mechanically pushing it to the end.
 - When appending into schema-defined dated sections such as `headings.additional_insights`, `headings.evidence`, or `headings.observed_practices`, place the new bullet immediately before the next heading or the end of the note.
 
+## Dated-Log Reinforcement Updates
+
+- Treat an existing-note update as evidence-only reinforcement when the new source only confirms, clarifies, or adds a dated observation to an existing note through `headings.evidence`, `headings.additional_insights`, or `headings.observed_practices`.
+- For evidence-only reinforcement, do not add the new source URL to the existing note's frontmatter `source`.
+- Keep the new source URL in the new source-derived note that was created from that material.
+- In the existing note's dated log bullet, preserve provenance by linking to that source-derived note. The provenance chain should be: existing note -> dated log bullet -> source-derived note -> source-derived note frontmatter `source`.
+- Extend an existing note's frontmatter `source` only when the new source becomes part of that note's primary identity: for example, when the note itself is being rewritten as a source-derived artifact, when it absorbs or replaces another source-derived note, or when a structural merge makes the source materially responsible for the stable body rather than just a later confirmation.
+
 ## Lessons Notes
 
 - Keep or improve the existing lesson wording only when the new article adds a clearer mechanism or trade-off.

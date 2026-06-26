@@ -161,6 +161,7 @@ python3 scripts/detect_source_route.py --source-file "[SOURCE_FILE]"
    - Map the extracted signal into vault note types instead of copying the analysis headings verbatim.
    - Apply the canonical final-note contract from [references/vault-conventions.md](references/vault-conventions.md) instead of restating those rules locally.
    - Apply the canonical update contract from [references/update-patterns.md](references/update-patterns.md) whenever an existing note is touched.
+   - For evidence-only reinforcement updates, use the canonical frontmatter provenance rule in [references/update-patterns.md](references/update-patterns.md); do not mutate `source` frontmatter from this entrypoint.
    - If you need intermediate files, previews, or staged markdown, store them only under the resolved scratch root and never under repo-local `tmp/`.
 8. Resolve source dates before final frontmatter normalization.
    - Build a source-date map for every source that materially contributes to the saved note.

@@ -109,6 +109,7 @@ Frontmatter is part of the note schema, not optional decoration.
 - When a concept note is manually reworked, re-check that `title`, `type: concept`, and `tags` are still present, and preserve `source` when the note already has it.
 - When migrating or restructuring any legacy note into the current format, preserve surviving `source` provenance regardless of note type; do not drop `source` just because the note became `concept`, `lessons`, `general`, or `operating-model`.
 - When a touched legacy note already contains a valid `source` field, carry it forward into the rewritten frontmatter instead of silently removing it during normalization.
+- Update-time decisions about whether a new reinforcing source should mutate frontmatter `source` are owned by [update-patterns.md](update-patterns.md).
 - Do not save a note with partial frontmatter just because the body already looks finished.
 
 ## Tags
