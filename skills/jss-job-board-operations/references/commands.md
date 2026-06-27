@@ -61,6 +61,7 @@ python3 -m job_search.interfaces.cli.vacancy_cli --config-path "$CONFIG_PATH" --
 - `manual_note`
 
 `application_submitted`, `message_sent`, and `profile_updated` require `artifact_id` and `external_action_approval_id` when logged as `completed`.
+The approval must match the exact candidate, platform, action type, artifact, vacancy/application target, and external target of the completed board action.
 
 ## Reconciliation Outcomes
 

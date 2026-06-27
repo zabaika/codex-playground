@@ -1114,6 +1114,49 @@ class VacancyCoreIntegrationTest(unittest.TestCase):
         self.assertTrue(repeated_acceptance["reused"])
         self.assertEqual(len(approvals), 2)
 
+        second_import = self.handlers.import_vacancy_batch(
+            ImportVacancyBatch(
+                candidate_id=self.candidate_id,
+                source_kind="manual",
+                items=[VacancyImportItem(title="VP Engineering", company_name="Other Corp")],
+            )
+        )
+        second_vacancy_id = second_import["imported"][0]["canonical_vacancy_id"]
+        second_application = self.handlers._vacancy_repository.get_or_create_application(
+            self.candidate_id,
+            second_vacancy_id,
+        )
+        with self.assertRaisesRegex(PermissionError, "target does not match"):
+            self.handlers.record_manual_board_action(
+                RecordManualBoardAction(
+                    candidate_id=self.candidate_id,
+                    platform="LinkedIn",
+                    action_type="application_submitted",
+                    canonical_vacancy_id=second_vacancy_id,
+                    application_id=second_application["application_id"],
+                    artifact_id=payload["message_artifact_id"],
+                    external_target="https://www.linkedin.com/jobs/view/123",
+                    occurred_at="2026-05-20T12:00:00+00:00",
+                    idempotency_key="submit-linkedin-wrong-application",
+                    external_action_approval_id=approval["approval"]["approval_id"],
+                )
+            )
+        with self.assertRaisesRegex(PermissionError, "external_target does not match"):
+            self.handlers.record_manual_board_action(
+                RecordManualBoardAction(
+                    candidate_id=self.candidate_id,
+                    platform="LinkedIn",
+                    action_type="application_submitted",
+                    canonical_vacancy_id=canonical_vacancy_id,
+                    application_id=payload["application_id"],
+                    artifact_id=payload["message_artifact_id"],
+                    external_target="https://www.linkedin.com/jobs/view/999",
+                    occurred_at="2026-05-20T12:00:00+00:00",
+                    idempotency_key="submit-linkedin-wrong-target",
+                    external_action_approval_id=approval["approval"]["approval_id"],
+                )
+            )
+
         command = RecordManualBoardAction(
             candidate_id=self.candidate_id,
             platform="LinkedIn",
@@ -1155,6 +1198,43 @@ class VacancyCoreIntegrationTest(unittest.TestCase):
         self.assertEqual(first["reconciliation_item"]["review_status"], "resolved")
         self.assertEqual(second["reconciliation_item"]["reconciliation_item_id"], first["reconciliation_item"]["reconciliation_item_id"])
         self.assertEqual(usage_events, 1)
+
+    def test_manual_board_action_rejects_cross_candidate_application_without_vacancy(self) -> None:
+        other_candidate_id = self.candidate_handlers.create_candidate(CreateCandidate(display_name="Other Candidate"))["candidate_id"]
+        imported = self.handlers.import_vacancy_batch(
+            ImportVacancyBatch(
+                candidate_id=other_candidate_id,
+                source_kind="manual",
+                items=[VacancyImportItem(title="CTO", company_name="Other Hiring Corp")],
+            )
+        )
+        other_vacancy_id = imported["imported"][0]["canonical_vacancy_id"]
+        other_application = self.handlers._vacancy_repository.get_or_create_application(
+            other_candidate_id,
+            other_vacancy_id,
+        )
+
+        with self.assertRaisesRegex(PermissionError, "application_id does not belong"):
+            self.handlers.record_manual_board_action(
+                RecordManualBoardAction(
+                    candidate_id=self.candidate_id,
+                    platform="LinkedIn",
+                    action_type="manual_note",
+                    application_id=other_application["application_id"],
+                    notes="Checked manually.",
+                    idempotency_key="cross-candidate-manual-note",
+                )
+            )
+        with self.assertRaisesRegex(PermissionError, "application_id does not belong"):
+            self.handlers.record_external_action_approval(
+                RecordExternalActionApproval(
+                    candidate_id=self.candidate_id,
+                    platform="LinkedIn",
+                    action_type="manual_note",
+                    application_id=other_application["application_id"],
+                    idempotency_key="cross-candidate-approval",
+                )
+            )
 
     def test_manual_board_action_reconciliation_needs_review_when_not_confidently_linked(self) -> None:
         action = self.handlers.record_manual_board_action(

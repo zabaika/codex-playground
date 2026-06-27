@@ -505,10 +505,10 @@ class VacancyHandlers:
         if vacancy is None:
             raise KeyError(f"Unknown canonical_vacancy_id: {command.canonical_vacancy_id}")
         if command.application_id:
-            self._assert_application_belongs_to_vacancy(
+            self._assert_application_matches_target(
                 candidate_id=command.candidate_id,
-                canonical_vacancy_id=command.canonical_vacancy_id,
                 application_id=command.application_id,
+                canonical_vacancy_id=command.canonical_vacancy_id,
             )
         if command.message_artifact_id:
             self._assert_artifact_belongs_to_candidate(command.message_artifact_id, command.candidate_id)
@@ -707,11 +707,11 @@ class VacancyHandlers:
             vacancy = self._vacancy_repository.get_vacancy(command.candidate_id, command.canonical_vacancy_id)
             if vacancy is None:
                 raise KeyError(f"Unknown canonical_vacancy_id: {command.canonical_vacancy_id}")
-        if command.application_id and command.canonical_vacancy_id:
-            self._assert_application_belongs_to_vacancy(
+        if command.application_id:
+            self._assert_application_matches_target(
                 candidate_id=command.candidate_id,
-                canonical_vacancy_id=command.canonical_vacancy_id,
                 application_id=command.application_id,
+                canonical_vacancy_id=command.canonical_vacancy_id,
             )
         if action_type in self._ARTIFACT_REQUIRED_ACTIONS and not command.artifact_id:
             raise ValueError(f"artifact_id is required for {action_type}")
@@ -727,6 +727,9 @@ class VacancyHandlers:
                 platform=platform,
                 action_type=action_type,
                 artifact_id=command.artifact_id,
+                canonical_vacancy_id=command.canonical_vacancy_id,
+                application_id=command.application_id,
+                external_target=command.external_target,
             )
         idempotency_key = command.idempotency_key or self._manual_board_action_idempotency_key(
             candidate_id=command.candidate_id,
@@ -837,11 +840,11 @@ class VacancyHandlers:
             vacancy = self._vacancy_repository.get_vacancy(command.candidate_id, command.canonical_vacancy_id)
             if vacancy is None:
                 raise KeyError(f"Unknown canonical_vacancy_id: {command.canonical_vacancy_id}")
-        if command.application_id and command.canonical_vacancy_id:
-            self._assert_application_belongs_to_vacancy(
+        if command.application_id:
+            self._assert_application_matches_target(
                 candidate_id=command.candidate_id,
-                canonical_vacancy_id=command.canonical_vacancy_id,
                 application_id=command.application_id,
+                canonical_vacancy_id=command.canonical_vacancy_id,
             )
         target_entity_type = "application" if command.application_id else "vacancy" if command.canonical_vacancy_id else None
         target_entity_id = command.application_id or command.canonical_vacancy_id
@@ -1736,6 +1739,9 @@ class VacancyHandlers:
         platform: str,
         action_type: str,
         artifact_id: str | None,
+        canonical_vacancy_id: str | None,
+        application_id: str | None,
+        external_target: str | None,
     ) -> dict[str, object]:
         approval = self._approval_repository.get_approval(candidate_id=candidate_id, approval_id=approval_id)
         if approval is None:
@@ -1750,6 +1756,14 @@ class VacancyHandlers:
             raise PermissionError("external_action_approval action_type does not match board action")
         if artifact_id and str(approval.get("artifact_id") or "") != artifact_id:
             raise PermissionError("external_action_approval artifact_id does not match board action")
+        target_entity_type = "application" if application_id else "vacancy" if canonical_vacancy_id else ""
+        target_entity_id = application_id or canonical_vacancy_id or ""
+        if str(approval.get("target_entity_type") or "") != target_entity_type:
+            raise PermissionError("external_action_approval target does not match board action")
+        if str(approval.get("target_entity_id") or "") != target_entity_id:
+            raise PermissionError("external_action_approval target does not match board action")
+        if str(approval.get("external_target") or "") != (external_target or ""):
+            raise PermissionError("external_action_approval external_target does not match board action")
         return approval
 
     def _assert_artifact_belongs_to_candidate(self, artifact_id: str, candidate_id: str) -> None:
@@ -1759,15 +1773,17 @@ class VacancyHandlers:
         if str(artifact.get("candidate_id")) != candidate_id:
             raise PermissionError("artifact_id does not belong to the requested candidate")
 
-    def _assert_application_belongs_to_vacancy(
+    def _assert_application_matches_target(
         self,
         *,
         candidate_id: str,
-        canonical_vacancy_id: str,
         application_id: str,
+        canonical_vacancy_id: str | None,
     ) -> None:
-        application = self._vacancy_repository.get_application(candidate_id, canonical_vacancy_id)
-        if application is None or str(application["application_id"]) != application_id:
+        application = self._vacancy_repository.get_application_by_id(candidate_id, application_id)
+        if application is None:
+            raise PermissionError("application_id does not belong to the requested candidate")
+        if canonical_vacancy_id and str(application["canonical_vacancy_id"]) != canonical_vacancy_id:
             raise PermissionError("application_id does not belong to the requested candidate vacancy")
 
     def _count_by(self, items: list[dict[str, object]], key: str) -> dict[str, int]:
