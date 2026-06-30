@@ -435,6 +435,11 @@ PYTHONPATH=skills/article-to-obsidian-kb/scripts python3 -m unittest discover -s
   - derive the final user-facing report only from that ledger
   - if a wrapper skill invoked this workflow, the wrapper must still reuse this skill's final-output contract instead of improvising its own block structure
   - if a file was not actually created or updated in this run, it must not appear in the final report
+- When sending a pre-write approval response that includes staged previews, diffs, or raw markdown blocks:
+  - label every block with the target note title and relative vault path before the fenced block
+  - use `Diff: <note title> (<relative vault path>)` for existing-note changes
+  - use `Preview: <note title> (<relative vault path>)` for newly created staged notes
+  - do not combine multiple notes in one unlabeled diff, preview, or raw block
 
 ## Final Output
 

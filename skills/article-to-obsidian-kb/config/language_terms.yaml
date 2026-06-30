@@ -18,20 +18,24 @@
       "shell",
       "playbooks",
       "guardrails",
-      "backlog"
+      "compliance",
+      "backlog",
+      "fallback"
     ],
     "phrases": [
       "code review",
       "performance review",
       "Call for Papers",
       "Prompt Hardening",
+      "Feature Velocity",
       "AI-native",
       "code-first",
       "intent-first",
       "product engineering",
       "AI adoption",
       "open source",
-      "off-by-one"
+      "off-by-one",
+      "high-cardinality"
     ]
   },
   "inline_code_literals": {
@@ -68,6 +72,7 @@
       "OAuth",
       "ChatGPT",
       "Claude",
+      "LinkedIn",
       "Microsoft",
       "RedMonk",
       "TickTick",
@@ -87,9 +92,10 @@
       "brownfield": "зрелый легаси-контур",
       "choreography": "хореография взаимодействия",
       "cloud": "облачный контур или облачная среда",
-      "compliance": "комплаенс-контур",
       "delivery": "поставка или скорость и качество поставки в зависимости от контекста",
       "evaluation": "оценка",
+      "baseline": "исходные значения или начальные измерения в зависимости от контекста",
+      "feature": "функционал",
       "friction": "трение или лишнее сопротивление в процессе",
       "hooks": "хуки",
       "identity": "контур идентификации",
@@ -110,6 +116,7 @@
       "signal": "сигнал",
       "specification": "спецификация",
       "steering": "ручное направление работы агента",
+      "traces": "трассировки",
       "verification": "проверка",
       "workflows": "рабочие процессы"
     },
@@ -127,6 +134,8 @@
       "learning system": "система организационного обучения",
       "messy middle": "хаотичная промежуточная стадия внедрения",
       "root-cause analysis": "разбор первопричины",
+      "policy-driven templates": "шаблоны, управляемые политиками",
+      "product discovery": "исследование продукта или уточнение продукта в зависимости от контекста",
       "usage dashboards": "дашборды использования"
     }
   }
