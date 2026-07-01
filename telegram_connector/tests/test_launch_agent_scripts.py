@@ -48,8 +48,9 @@ class LaunchAgentScriptTests(unittest.TestCase):
 
     def test_restart_script_reloads_launch_agent(self) -> None:
         content = RESTARTER.read_text(encoding="utf-8")
-        self.assertIn('launchctl unload "$PLIST_PATH"', content)
-        self.assertIn('launchctl load "$PLIST_PATH"', content)
+        self.assertIn('launchctl bootout "$LAUNCHCTL_DOMAIN" "$PLIST_PATH"', content)
+        self.assertIn('launchctl bootstrap "$LAUNCHCTL_DOMAIN" "$PLIST_PATH"', content)
+        self.assertIn('launchctl kickstart -k "$LAUNCHCTL_DOMAIN/com.zabaika.telegram-connector-bridge"', content)
         self.assertIn('com.zabaika.telegram-connector-bridge', content)
 
     def test_bridge_plist_template_uses_launcher_entrypoint(self) -> None:

@@ -22,6 +22,12 @@ agent_stats_row_limit = "200"
 # Wall-clock timeout in seconds for one bridge-launched agent worker subprocess.
 # Values are clamped to 60..14400.
 worker_process_timeout_seconds = "3600"
+# Number of Telegram sendMessage attempts for transient network failures in one outbound message send.
+# Values are clamped to 1..5.
+send_message_retry_attempts = "3"
+# Base backoff in seconds between Telegram sendMessage retries; the wait grows linearly per retry.
+# Values are clamped to 0..30.
+send_message_retry_backoff_seconds = "2"
 # worker_path = "/absolute/path/to/telegram_agent_worker.py"
 
 [agent]

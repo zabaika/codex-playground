@@ -66,60 +66,6 @@ class TelegramAgentBridgeTests(unittest.TestCase):
             "/agent test",
         )
 
-    def test_parse_allowed_chat_ids_falls_back_to_default_chat(self) -> None:
-        config = {"telegram": {"default_chat_id": "133126275"}}
-        self.assertEqual(telegram_agent_bridge.parse_allowed_chat_ids(config), {"133126275"})
-
-    def test_parse_allowed_usernames_normalizes_values(self) -> None:
-        config = {"bridge": {"allowed_usernames": "@Andrej, codex_user"}}
-        self.assertEqual(telegram_agent_bridge.parse_allowed_usernames(config), {"andrej", "codex_user"})
-
-    def test_parse_allowed_usernames_supports_keychain_reference(self) -> None:
-        original_run = telegram_agent_bridge.subprocess.run
-        telegram_agent_bridge._SECRET_CACHE.clear()
-
-        def fake_run(*args, **kwargs):
-            return subprocess.CompletedProcess(args=args[0], returncode=0, stdout="@Andrej, codex_user\n", stderr="")
-
-        telegram_agent_bridge.subprocess.run = fake_run
-        try:
-            config = {"bridge": {"allowed_usernames": "keychain://telegram-connector/allowed_users"}}
-            result = telegram_agent_bridge.parse_allowed_usernames(config)
-        finally:
-            telegram_agent_bridge.subprocess.run = original_run
-
-        self.assertEqual(result, {"andrej", "codex_user"})
-
-    def test_is_user_allowed_denies_empty_user_allowlist(self) -> None:
-        update = {
-            "message": {
-                "from": {"id": 7, "username": "alice"},
-            },
-        }
-
-        self.assertFalse(
-            telegram_agent_bridge.is_user_allowed(
-                update,
-                allowed_user_ids=set(),
-                allowed_usernames=set(),
-            )
-        )
-
-    def test_is_user_allowed_accepts_configured_user_id(self) -> None:
-        update = {
-            "message": {
-                "from": {"id": 7, "username": "alice"},
-            },
-        }
-
-        self.assertTrue(
-            telegram_agent_bridge.is_user_allowed(
-                update,
-                allowed_user_ids={"7"},
-                allowed_usernames=set(),
-            )
-        )
-
     def test_resolve_bridge_runtime_resolves_secrets_once_into_runtime_bundle(self) -> None:
         original_run = telegram_agent_bridge.subprocess.run
         telegram_agent_bridge._SECRET_CACHE.clear()
@@ -165,65 +111,11 @@ class TelegramAgentBridgeTests(unittest.TestCase):
         self.assertEqual(runtime.agent_stats_row_limit, 200)
         self.assertEqual(runtime.worker_process_timeout_seconds, 3600)
 
-    def test_resolve_text_chunk_size_reads_bridge_config(self) -> None:
-        self.assertEqual(
-            telegram_agent_bridge.resolve_text_chunk_size({"bridge": {"text_chunk_size": "3900"}}),
-            3900,
-        )
-
-    def test_resolve_agent_stats_row_limit_reads_bridge_config(self) -> None:
-        self.assertEqual(
-            telegram_agent_bridge.resolve_agent_stats_row_limit({"bridge": {"agent_stats_row_limit": "150"}}),
-            150,
-        )
-
-    def test_resolve_worker_process_timeout_seconds_reads_bridge_config(self) -> None:
-        self.assertEqual(
-            telegram_agent_bridge.resolve_worker_process_timeout_seconds(
-                {"bridge": {"worker_process_timeout_seconds": "7200"}}
-            ),
-            7200,
-        )
-
     def test_resolve_default_command_reads_bridge_config(self) -> None:
         self.assertEqual(
             telegram_agent_bridge.resolve_default_command({"bridge": {"default_command": "agent"}}),
             "agent",
         )
-
-    def test_format_telegram_html_escapes_and_normalizes_text(self) -> None:
-        self.assertEqual(
-            telegram_agent_bridge.format_telegram_html("a < b\n\n\n- item"),
-            "a &lt; b\n\n• item",
-        )
-
-    def test_format_telegram_html_formats_headings_and_commands(self) -> None:
-        self.assertEqual(
-            telegram_agent_bridge.format_telegram_html("Bot commands:\n/agent test"),
-            "<b>Bot commands:</b>\n<code>/agent test</code>",
-        )
-
-    def test_format_inline_telegram_html_supports_simple_bold_and_code(self) -> None:
-        self.assertEqual(
-            telegram_agent_bridge.format_inline_telegram_html("use `rg` and **README**"),
-            "use <code>rg</code> and <b>README</b>",
-        )
-
-    def test_redact_sensitive_text_masks_secret_refs_and_tokens(self) -> None:
-        text = (
-            "keychain://telegram-agent-bot/bot_token Authorization: Bearer abcdefghijklmnop "
-            "OPENAI_API_KEY=sk-123456789012 /Users/alice/file bot123456:ABCDEF"
-        )
-        redacted = telegram_agent_bridge.redact_sensitive_text(text)
-        self.assertNotIn("keychain://telegram-agent-bot/bot_token", redacted)
-        self.assertNotIn("abcdefghijklmnop", redacted)
-        self.assertNotIn("sk-123456789012", redacted)
-        self.assertNotIn("/Users/alice/file", redacted)
-        self.assertNotIn("bot123456:ABCDEF", redacted)
-        self.assertIn("<secret_ref>", redacted)
-        self.assertIn("OPENAI_API_KEY=<redacted>", redacted)
-        self.assertIn("<path>", redacted)
-        self.assertIn("<bot_token>", redacted)
 
     def test_api_call_converts_shared_api_error_to_system_exit(self) -> None:
         original_shared_api_call = telegram_agent_bridge.shared_api_call
@@ -452,7 +344,7 @@ class TelegramAgentBridgeTests(unittest.TestCase):
         telegram_agent_bridge.api_call = fake_api_call
         telegram_agent_bridge.append_outbox_record = lambda record: captured.update({"outbox": record})
         try:
-            telegram_agent_bridge.send_text_message("token", 42, "a < b")
+            telegram_agent_bridge.send_text_message("token", 42, "a < b", retry_attempts=1, retry_backoff_seconds=0)
         finally:
             telegram_agent_bridge.api_call = original_api_call
             telegram_agent_bridge.append_outbox_record = original_append_outbox_record
@@ -467,6 +359,17 @@ class TelegramAgentBridgeTests(unittest.TestCase):
         assert isinstance(outbox, dict)
         self.assertEqual(outbox["status"], "sent")
         self.assertEqual(outbox["attempt"], 1)
+
+    def test_resolve_send_message_retry_settings_read_bridge_config(self) -> None:
+        config = {
+            "bridge": {
+                "send_message_retry_attempts": "4",
+                "send_message_retry_backoff_seconds": "7",
+            }
+        }
+
+        self.assertEqual(telegram_agent_bridge.resolve_send_message_retry_attempts(config), 4)
+        self.assertEqual(telegram_agent_bridge.resolve_send_message_retry_backoff_seconds(config), 7)
 
     def test_send_text_message_retries_and_logs_failed_attempt(self) -> None:
         original_api_call = telegram_agent_bridge.api_call
@@ -488,7 +391,7 @@ class TelegramAgentBridgeTests(unittest.TestCase):
         telegram_agent_bridge.log_bridge_error = lambda message: errors.append(message)
         telegram_agent_bridge.time.sleep = lambda seconds: None
         try:
-            telegram_agent_bridge.send_text_message("token", 42, "retry me")
+            telegram_agent_bridge.send_text_message("token", 42, "retry me", retry_attempts=3, retry_backoff_seconds=0)
         finally:
             telegram_agent_bridge.api_call = original_api_call
             telegram_agent_bridge.append_outbox_record = original_append_outbox_record
@@ -501,6 +404,35 @@ class TelegramAgentBridgeTests(unittest.TestCase):
         self.assertEqual(records[0]["attempt"], 1)
         self.assertEqual(records[1]["status"], "sent")
         self.assertEqual(records[1]["attempt"], 2)
+        self.assertIn("sendMessage failed attempt=1", errors[0])
+
+    def test_send_text_message_does_not_retry_non_transient_errors(self) -> None:
+        original_api_call = telegram_agent_bridge.api_call
+        original_append_outbox_record = telegram_agent_bridge.append_outbox_record
+        original_log_bridge_error = telegram_agent_bridge.log_bridge_error
+        attempts: list[int] = []
+        records: list[dict[str, object]] = []
+        errors: list[str] = []
+
+        def fake_api_call(token: str, method: str, payload: dict[str, object] | None = None) -> object:
+            attempts.append(len(attempts) + 1)
+            raise SystemExit("Telegram API error while calling sendMessage: chat not found")
+
+        telegram_agent_bridge.api_call = fake_api_call
+        telegram_agent_bridge.append_outbox_record = lambda record: records.append(record)
+        telegram_agent_bridge.log_bridge_error = lambda message: errors.append(message)
+        try:
+            with self.assertRaises(SystemExit):
+                telegram_agent_bridge.send_text_message("token", 42, "bad chat", retry_attempts=3, retry_backoff_seconds=0)
+        finally:
+            telegram_agent_bridge.api_call = original_api_call
+            telegram_agent_bridge.append_outbox_record = original_append_outbox_record
+            telegram_agent_bridge.log_bridge_error = original_log_bridge_error
+
+        self.assertEqual(attempts, [1])
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0]["status"], "failed")
+        self.assertEqual(records[0]["attempt"], 1)
         self.assertIn("sendMessage failed attempt=1", errors[0])
 
     def test_cmd_listen_logs_send_failures_and_keeps_running(self) -> None:

@@ -32,6 +32,12 @@ agent_stats_row_limit = "200"
 # Wall-clock timeout in seconds for one bridge-launched worker subprocess, such as /digest, /update, /tail, /ocr, or /exportcsv.
 # Values are clamped to 60..14400.
 worker_process_timeout_seconds = "3600"
+# Number of Telegram sendMessage attempts for transient network failures in one outbound message send.
+# Values are clamped to 1..5.
+send_message_retry_attempts = "3"
+# Base backoff in seconds between Telegram sendMessage retries; the wait grows linearly per retry.
+# Values are clamped to 0..30.
+send_message_retry_backoff_seconds = "2"
 # External ranking API used by /top-models.
 top_models_api_url = "https://shir-man.com/api/free-llm/top-models"
 # Network timeout in seconds for one /top-models attempt. Values are clamped to 3..60.

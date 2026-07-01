@@ -23,6 +23,7 @@ from telegram_shared.ai_usage_stats import fetch_ai_usage_summary as shared_fetc
 from telegram_shared.ai_usage_stats import format_ai_usage_summary as shared_format_ai_usage_summary
 from telegram_shared.bot_api import api_call as shared_api_call
 from telegram_shared.bot_api import append_jsonl_record as shared_append_jsonl_record
+from telegram_shared.bot_api import call_bot_api_with_retry as shared_call_bot_api_with_retry
 from telegram_shared.bot_api import extract_chat_id as shared_extract_chat_id
 from telegram_shared.bot_api import extract_text as shared_extract_text
 from telegram_shared.bot_api import extract_user_id as shared_extract_user_id
@@ -114,6 +115,12 @@ TOP_MODELS_MAX_CACHE_TTL_SECONDS = 3600
 TOP_MODELS_DEFAULT_RETRY_ATTEMPTS = 3
 TOP_MODELS_MIN_RETRY_ATTEMPTS = 1
 TOP_MODELS_MAX_RETRY_ATTEMPTS = 5
+SEND_MESSAGE_DEFAULT_RETRY_ATTEMPTS = 3
+SEND_MESSAGE_MIN_RETRY_ATTEMPTS = 1
+SEND_MESSAGE_MAX_RETRY_ATTEMPTS = 5
+SEND_MESSAGE_DEFAULT_RETRY_BACKOFF_SECONDS = 2
+SEND_MESSAGE_MIN_RETRY_BACKOFF_SECONDS = 0
+SEND_MESSAGE_MAX_RETRY_BACKOFF_SECONDS = 30
 TOP_MODELS_USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -303,6 +310,28 @@ def resolve_ocr_pending_default_limit(config: dict[str, Any] | None = None) -> i
     )
 
 
+def resolve_send_message_retry_attempts(config: dict[str, Any] | None = None) -> int:
+    runtime_config = config if config is not None else load_runtime_config()
+    raw = get_config_value(runtime_config, "bridge", "send_message_retry_attempts")
+    return shared_parse_int_range(
+        raw,
+        default=SEND_MESSAGE_DEFAULT_RETRY_ATTEMPTS,
+        min_value=SEND_MESSAGE_MIN_RETRY_ATTEMPTS,
+        max_value=SEND_MESSAGE_MAX_RETRY_ATTEMPTS,
+    )
+
+
+def resolve_send_message_retry_backoff_seconds(config: dict[str, Any] | None = None) -> int:
+    runtime_config = config if config is not None else load_runtime_config()
+    raw = get_config_value(runtime_config, "bridge", "send_message_retry_backoff_seconds")
+    return shared_parse_int_range(
+        raw,
+        default=SEND_MESSAGE_DEFAULT_RETRY_BACKOFF_SECONDS,
+        min_value=SEND_MESSAGE_MIN_RETRY_BACKOFF_SECONDS,
+        max_value=SEND_MESSAGE_MAX_RETRY_BACKOFF_SECONDS,
+    )
+
+
 def is_channel_token(value: str) -> bool:
     token = value.strip()
     if not token:
@@ -464,7 +493,15 @@ def extract_date(update: dict[str, Any]) -> str:
     return datetime.fromtimestamp(unix_ts, tz=timezone.utc).isoformat()
 
 
-def send_text_message(token: str, chat_id: str | int, text: str, parse_mode: str | None = None) -> None:
+def send_text_message(
+    token: str,
+    chat_id: str | int,
+    text: str,
+    parse_mode: str | None = None,
+    *,
+    retry_attempts: int | None = None,
+    retry_backoff_seconds: int | None = None,
+) -> None:
     payload = {
         "chat_id": str(chat_id),
         "text": text,
@@ -473,7 +510,16 @@ def send_text_message(token: str, chat_id: str | int, text: str, parse_mode: str
         payload["parse_mode"] = parse_mode
     if parse_mode == "HTML":
         payload["disable_web_page_preview"] = True
-    api_call(token, "sendMessage", payload)
+    attempts = resolve_send_message_retry_attempts() if retry_attempts is None else retry_attempts
+    backoff_seconds = (
+        resolve_send_message_retry_backoff_seconds() if retry_backoff_seconds is None else retry_backoff_seconds
+    )
+    shared_call_bot_api_with_retry(
+        lambda: api_call(token, "sendMessage", payload),
+        method="sendMessage",
+        attempts=attempts,
+        backoff_seconds=backoff_seconds,
+    )
 
 
 def send_text_chunks(

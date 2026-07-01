@@ -22,6 +22,7 @@ from telegram_shared.ai_usage_stats import fetch_ai_usage_summary as shared_fetc
 from telegram_shared.ai_usage_stats import format_ai_usage_summary as shared_format_ai_usage_summary
 from telegram_shared.bot_api import api_call as shared_api_call
 from telegram_shared.bot_api import append_jsonl_record as shared_append_jsonl_record
+from telegram_shared.bot_api import call_bot_api_with_retry as shared_call_bot_api_with_retry
 from telegram_shared.bot_api import extract_chat_id as shared_extract_chat_id
 from telegram_shared.bot_api import extract_text as shared_extract_text
 from telegram_shared.bot_api import extract_user_id as shared_extract_user_id
@@ -43,6 +44,7 @@ from telegram_shared.config import DEFAULT_BRIDGE_WORKER_PROCESS_TIMEOUT_SECONDS
 from telegram_shared.config import resolve_agent_stats_row_limit as shared_resolve_agent_stats_row_limit
 from telegram_shared.config import resolve_bridge_text_chunk_size as shared_resolve_bridge_text_chunk_size
 from telegram_shared.config import resolve_bridge_worker_process_timeout_seconds as shared_resolve_bridge_worker_process_timeout_seconds
+from telegram_shared.config import parse_int_range as shared_parse_int_range
 from telegram_shared.errors import SecretResolutionError
 from telegram_shared.errors import TelegramApiError
 from telegram_shared.formatting import format_inline_telegram_html as shared_format_inline_telegram_html
@@ -86,7 +88,14 @@ SAFE_SUBPROCESS_ENV_KEYS = {
     "TMPDIR",
     "USER",
 }
-SEND_RETRY_DELAYS = (0.5, 1.0)
+SEND_MESSAGE_DEFAULT_RETRY_ATTEMPTS = 3
+SEND_MESSAGE_MIN_RETRY_ATTEMPTS = 1
+SEND_MESSAGE_MAX_RETRY_ATTEMPTS = 5
+SEND_MESSAGE_DEFAULT_RETRY_BACKOFF_SECONDS = 2
+SEND_MESSAGE_MIN_RETRY_BACKOFF_SECONDS = 0
+SEND_MESSAGE_MAX_RETRY_BACKOFF_SECONDS = 30
+
+
 @dataclass
 class BridgeRuntime:
     bot_token: str
@@ -210,6 +219,28 @@ def resolve_agent_stats_row_limit(config: dict[str, Any] | None = None) -> int:
 def resolve_worker_process_timeout_seconds(config: dict[str, Any] | None = None) -> int:
     runtime_config = config if config is not None else load_runtime_config()
     return shared_resolve_bridge_worker_process_timeout_seconds(runtime_config)
+
+
+def resolve_send_message_retry_attempts(config: dict[str, Any] | None = None) -> int:
+    runtime_config = config if config is not None else load_runtime_config()
+    raw = get_config_value(runtime_config, "bridge", "send_message_retry_attempts")
+    return shared_parse_int_range(
+        raw,
+        default=SEND_MESSAGE_DEFAULT_RETRY_ATTEMPTS,
+        min_value=SEND_MESSAGE_MIN_RETRY_ATTEMPTS,
+        max_value=SEND_MESSAGE_MAX_RETRY_ATTEMPTS,
+    )
+
+
+def resolve_send_message_retry_backoff_seconds(config: dict[str, Any] | None = None) -> int:
+    runtime_config = config if config is not None else load_runtime_config()
+    raw = get_config_value(runtime_config, "bridge", "send_message_retry_backoff_seconds")
+    return shared_parse_int_range(
+        raw,
+        default=SEND_MESSAGE_DEFAULT_RETRY_BACKOFF_SECONDS,
+        min_value=SEND_MESSAGE_MIN_RETRY_BACKOFF_SECONDS,
+        max_value=SEND_MESSAGE_MAX_RETRY_BACKOFF_SECONDS,
+    )
 
 
 def resolve_default_command(config: dict[str, Any] | None = None) -> str:
@@ -373,7 +404,14 @@ def now_utc() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
 
-def send_text_message(token: str, chat_id: str | int, text: str) -> None:
+def send_text_message(
+    token: str,
+    chat_id: str | int,
+    text: str,
+    *,
+    retry_attempts: int | None = None,
+    retry_backoff_seconds: int | None = None,
+) -> None:
     formatted_text = format_telegram_html(text)
     payload = {
         "chat_id": str(chat_id),
@@ -381,38 +419,46 @@ def send_text_message(token: str, chat_id: str | int, text: str) -> None:
         "parse_mode": "HTML",
         "disable_web_page_preview": True,
     }
-    max_attempts = 1 + len(SEND_RETRY_DELAYS)
-    for attempt in range(1, max_attempts + 1):
-        try:
-            result = api_call(token, "sendMessage", payload)
-        except SystemExit as exc:
-            error_text = str(exc)
-            append_outbox_record(
-                build_outbox_record(
-                    chat_id=chat_id,
-                    text=text,
-                    formatted_text=formatted_text,
-                    status="failed",
-                    attempt=attempt,
-                    error=error_text,
-                )
-            )
-            log_bridge_error(f"sendMessage failed attempt={attempt} chat_id={chat_id}: {error_text}")
-            if attempt >= max_attempts:
-                raise
-            time.sleep(SEND_RETRY_DELAYS[attempt - 1])
-            continue
+    attempts = resolve_send_message_retry_attempts() if retry_attempts is None else retry_attempts
+    backoff_seconds = (
+        resolve_send_message_retry_backoff_seconds() if retry_backoff_seconds is None else retry_backoff_seconds
+    )
+    failed_attempt_count = 0
+
+    def record_failed_attempt(attempt: int, exc: BaseException) -> None:
+        nonlocal failed_attempt_count
+        failed_attempt_count = attempt
+        error_text = str(exc)
         append_outbox_record(
             build_outbox_record(
                 chat_id=chat_id,
                 text=text,
                 formatted_text=formatted_text,
-                status="sent",
+                status="failed",
                 attempt=attempt,
-                api_result=result if isinstance(result, dict) else None,
+                error=error_text,
             )
         )
-        return
+        log_bridge_error(f"sendMessage failed attempt={attempt} chat_id={chat_id}: {error_text}")
+
+    result = shared_call_bot_api_with_retry(
+        lambda: api_call(token, "sendMessage", payload),
+        method="sendMessage",
+        attempts=attempts,
+        backoff_seconds=backoff_seconds,
+        sleep_func=time.sleep,
+        on_failed_attempt=record_failed_attempt,
+    )
+    append_outbox_record(
+        build_outbox_record(
+            chat_id=chat_id,
+            text=text,
+            formatted_text=formatted_text,
+            status="sent",
+            attempt=failed_attempt_count + 1,
+            api_result=result if isinstance(result, dict) else None,
+        )
+    )
 
 
 def send_text_chunks(token: str, chat_id: str | int, text: str, chunk_size: int | None = None) -> None:

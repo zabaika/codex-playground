@@ -169,25 +169,16 @@ class TelegramConnectorTests(unittest.TestCase):
             ["export-csv", "--channel", "@vcnews", "--since=-4d", "--until=-4d", "--auth-mode", "user"],
         )
 
-    def test_resolve_text_chunk_size_reads_bridge_config(self) -> None:
-        self.assertEqual(
-            telegram_connector.resolve_text_chunk_size({"bridge": {"text_chunk_size": "3900"}}),
-            3900,
-        )
+    def test_resolve_send_message_retry_settings_read_bridge_config(self) -> None:
+        config = {
+            "bridge": {
+                "send_message_retry_attempts": "4",
+                "send_message_retry_backoff_seconds": "7",
+            }
+        }
 
-    def test_resolve_agent_stats_row_limit_reads_bridge_config(self) -> None:
-        self.assertEqual(
-            telegram_connector.resolve_agent_stats_row_limit({"bridge": {"agent_stats_row_limit": "150"}}),
-            150,
-        )
-
-    def test_resolve_worker_process_timeout_seconds_reads_bridge_config(self) -> None:
-        self.assertEqual(
-            telegram_connector.resolve_worker_process_timeout_seconds(
-                {"bridge": {"worker_process_timeout_seconds": "7200"}}
-            ),
-            7200,
-        )
+        self.assertEqual(telegram_connector.resolve_send_message_retry_attempts(config), 4)
+        self.assertEqual(telegram_connector.resolve_send_message_retry_backoff_seconds(config), 7)
 
     def test_resolve_top_models_default_limit_reads_bridge_config(self) -> None:
         self.assertEqual(
@@ -404,30 +395,6 @@ class TelegramConnectorTests(unittest.TestCase):
             ["ocr-pending", "--channel", "@vcnews", "--limit", "50", "--since", "2026-03-15", "--until", "2026-03-16"],
         )
 
-    def test_parse_allowed_chat_ids_falls_back_to_default_chat(self) -> None:
-        config = {"telegram": {"default_chat_id": "133126275"}}
-        self.assertEqual(telegram_connector.parse_allowed_chat_ids(config), {"133126275"})
-
-    def test_parse_allowed_usernames_normalizes_values(self) -> None:
-        config = {"bridge": {"allowed_usernames": "@Andrej, codex_user"}}
-        self.assertEqual(telegram_connector.parse_allowed_usernames(config), {"andrej", "codex_user"})
-
-    def test_parse_allowed_usernames_supports_keychain_reference(self) -> None:
-        original_run = telegram_connector.subprocess.run
-        telegram_connector._SECRET_CACHE.clear()
-
-        def fake_run(*args, **kwargs):
-            return subprocess.CompletedProcess(args=args[0], returncode=0, stdout="@Andrej, codex_user\n", stderr="")
-
-        telegram_connector.subprocess.run = fake_run
-        try:
-            config = {"bridge": {"allowed_usernames": "keychain://telegram-connector/allowed_users"}}
-            result = telegram_connector.parse_allowed_usernames(config)
-        finally:
-            telegram_connector.subprocess.run = original_run
-
-        self.assertEqual(result, {"andrej", "codex_user"})
-
     def test_send_text_chunks_splits_long_messages(self) -> None:
         sent_messages: list[str] = []
 
@@ -470,6 +437,53 @@ class TelegramConnectorTests(unittest.TestCase):
         self.assertEqual(payload["text"], "Bot commands:\n/update 10")
         self.assertEqual(payload["parse_mode"], "HTML")
         self.assertTrue(payload["disable_web_page_preview"])
+
+    def test_send_text_message_retries_transient_send_message_failures(self) -> None:
+        original_api_call = telegram_connector.api_call
+        calls: list[str] = []
+
+        def fake_api_call(token: str, method: str, payload: dict[str, object]) -> dict[str, object]:
+            calls.append(method)
+            if len(calls) < 3:
+                raise SystemExit("Telegram API request failed while calling sendMessage: [Errno 54] Connection reset by peer.")
+            return {"ok": True}
+
+        telegram_connector.api_call = fake_api_call
+        try:
+            telegram_connector.send_text_message(
+                "token",
+                42,
+                "hello",
+                retry_attempts=3,
+                retry_backoff_seconds=0,
+            )
+        finally:
+            telegram_connector.api_call = original_api_call
+
+        self.assertEqual(calls, ["sendMessage", "sendMessage", "sendMessage"])
+
+    def test_send_text_message_does_not_retry_non_transient_send_message_errors(self) -> None:
+        original_api_call = telegram_connector.api_call
+        calls: list[str] = []
+
+        def fake_api_call(token: str, method: str, payload: dict[str, object]) -> dict[str, object]:
+            calls.append(method)
+            raise SystemExit("Telegram API HTTP 400 while calling sendMessage.")
+
+        telegram_connector.api_call = fake_api_call
+        try:
+            with self.assertRaises(SystemExit):
+                telegram_connector.send_text_message(
+                    "token",
+                    42,
+                    "hello",
+                    retry_attempts=3,
+                    retry_backoff_seconds=0,
+                )
+        finally:
+            telegram_connector.api_call = original_api_call
+
+        self.assertEqual(calls, ["sendMessage"])
 
     def test_redact_update_for_storage_removes_message_text(self) -> None:
         update = {
@@ -541,22 +555,6 @@ class TelegramConnectorTests(unittest.TestCase):
         self.assertIn("<path>", text)
         self.assertIn("<bot_token>", text)
         self.assertIsNone(payload)
-
-    def test_redact_sensitive_text_masks_secret_refs_and_keys(self) -> None:
-        text = (
-            "keychain://telegram-connector/bot_token Authorization: Bearer abcdefghijklmnop "
-            "OPENAI_API_KEY=sk-123456789012 /Users/alice/file bot123456:ABCDEF"
-        )
-        redacted = telegram_connector.redact_sensitive_text(text)
-        self.assertNotIn("keychain://telegram-connector/bot_token", redacted)
-        self.assertNotIn("abcdefghijklmnop", redacted)
-        self.assertNotIn("sk-123456789012", redacted)
-        self.assertNotIn("/Users/alice/file", redacted)
-        self.assertNotIn("bot123456:ABCDEF", redacted)
-        self.assertIn("<secret_ref>", redacted)
-        self.assertIn("OPENAI_API_KEY=<redacted>", redacted)
-        self.assertIn("<path>", redacted)
-        self.assertIn("<bot_token>", redacted)
 
     def test_resolve_secret_value_reads_keychain_reference(self) -> None:
         original_run = telegram_connector.subprocess.run

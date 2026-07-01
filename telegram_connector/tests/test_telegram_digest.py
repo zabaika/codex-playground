@@ -1359,6 +1359,254 @@ batch_digest_template = "Batch={batch_index}"
         self.assertIn("Digest completed with errors", sent[1])
         self.assertIn("analysis failed: boom", sent[1])
 
+    def test_cmd_run_continues_after_channel_delivery_failure_and_marks_partial(self) -> None:
+        temp_dir = tempfile.TemporaryDirectory()
+        prompt_file = self.write_prompt_bundle(Path(temp_dir.name))
+        original_resolve_runtime = telegram_digest.history_client.resolve_runtime
+        original_load_runtime_config = telegram_digest.history_client.load_runtime_config
+        original_connect_db = telegram_digest.history_client.connect_db
+        original_init_db = telegram_digest.history_client.init_db
+        original_resolve_channels_argument = telegram_digest.history_client.resolve_channels_argument
+        original_require_openai_api_key = telegram_digest.require_openai_api_key
+        original_run_sync = telegram_digest.run_sync
+        original_iter_channel_messages = telegram_digest.iter_channel_messages
+        original_count_channel_messages = telegram_digest.count_channel_messages
+        original_summarize_channel_batches = telegram_digest.summarize_channel_batches
+        original_require_token = telegram_digest.bridge.require_token
+        original_send_text_chunks = telegram_digest.bridge.send_text_chunks
+        original_project_root = telegram_digest.PROJECT_ROOT
+        original_launchd_log_dir = telegram_digest.LAUNCHD_LOG_DIR
+        original_digest_last_attempt_log = telegram_digest.DIGEST_LAST_ATTEMPT_LOG
+        original_write_digest_last_attempt = telegram_digest.write_digest_last_attempt
+        attempts: list[dict[str, object]] = []
+        try:
+            telegram_digest.PROJECT_ROOT = Path(temp_dir.name)
+            telegram_digest.LAUNCHD_LOG_DIR = telegram_digest.PROJECT_ROOT / "data" / "launchd"
+            telegram_digest.DIGEST_LAST_ATTEMPT_LOG = telegram_digest.LAUNCHD_LOG_DIR / "digest.last_attempt.json"
+
+            def recording_write_digest_last_attempt(payload: dict[str, object]) -> None:
+                attempts.append(dict(payload))
+                original_write_digest_last_attempt(payload)
+
+            telegram_digest.write_digest_last_attempt = recording_write_digest_last_attempt
+            telegram_digest.history_client.resolve_runtime = lambda: type("Runtime", (), {"default_auth_mode": "user"})()
+            telegram_digest.history_client.load_runtime_config = lambda: {
+                "telegram": {"default_chat_id": "1"},
+                "processing": {"model": "test-model"},
+                "digest_prompts": {"file": str(prompt_file)},
+                "digest_ai": {
+                    "messages_per_ai_pass": "111",
+                    "message_text_max_chars": "450",
+                    "message_ocr_max_chars": "300",
+                    "message_block_max_chars": "100000",
+                },
+                "digest_limits": {
+                    "day": {
+                        "sync_limit": "6100",
+                    },
+                },
+            }
+            telegram_digest.history_client.connect_db = lambda runtime: sqlite3.connect(":memory:")
+            telegram_digest.history_client.init_db = lambda conn: conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS ai_usage_log (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    created_at TEXT NOT NULL,
+                    feature TEXT NOT NULL,
+                    stage TEXT NOT NULL,
+                    channel TEXT,
+                    since TEXT,
+                    until TEXT,
+                    model TEXT NOT NULL,
+                    response_id TEXT,
+                    prompt_cache_key TEXT,
+                    prompt_cache_retention TEXT,
+                    request_index INTEGER,
+                    message_count INTEGER,
+                    system_chars INTEGER,
+                    prompt_chars INTEGER,
+                    shared_prefix_chars INTEGER,
+                    shared_prefix_hash TEXT,
+                    prompt_hash TEXT,
+                    previous_prompt_hash TEXT,
+                    previous_response_id TEXT,
+                    prefix_match_chars_with_previous INTEGER,
+                    prompt_text TEXT,
+                    input_tokens INTEGER,
+                    cached_input_tokens INTEGER,
+                    output_tokens INTEGER,
+                    total_tokens INTEGER,
+                    latency_ms INTEGER,
+                    status TEXT NOT NULL,
+                    error TEXT
+                )
+                """
+            )
+            telegram_digest.history_client.resolve_channels_argument = lambda runtime, channel: ["@a", "@b", "@c"]
+            telegram_digest.require_openai_api_key = lambda config: "k"
+
+            async def fake_run_sync(runtime, **kwargs):
+                return [{"channel": "@a"}, {"channel": "@b"}, {"channel": "@c"}]
+
+            telegram_digest.run_sync = fake_run_sync
+            telegram_digest.iter_channel_messages = lambda conn, channel, since, until, max_messages=None: iter(
+                [
+                    {
+                        "title": channel,
+                        "username": channel.lstrip("@"),
+                        "message_id": 1,
+                        "date_utc": since,
+                        "sender_username": "u",
+                        "sender_display_name": "User",
+                        "forwards": 0,
+                        "replies": 0,
+                        "text": "x",
+                        "ocr_text": None,
+                    }
+                ]
+            )
+            telegram_digest.count_channel_messages = lambda conn, channel, since, until: 1
+            telegram_digest.summarize_channel_batches = lambda conn, **kwargs: (
+                1,
+                f"summary {kwargs['channel']}",
+                False,
+            )
+            telegram_digest.bridge.require_token = lambda: "token"
+            sent: list[str] = []
+
+            def fake_send_text_chunks(token, chat_id, message, chunk_size=None, parse_mode=None):
+                if "Digest completed with errors" in message:
+                    raise RuntimeError("Telegram API request failed while calling sendMessage: summary reset.")
+                if "@b" in message:
+                    raise RuntimeError("Telegram API request failed while calling sendMessage: telegram reset.")
+                sent.append(message)
+
+            telegram_digest.bridge.send_text_chunks = fake_send_text_chunks
+
+            args = type("Args", (), {"channel": None, "since": None, "until": None, "auth_mode": None})()
+            exit_code = telegram_digest.cmd_run(args)
+            payload = json.loads(telegram_digest.DIGEST_LAST_ATTEMPT_LOG.read_text(encoding="utf-8"))
+        finally:
+            telegram_digest.history_client.resolve_runtime = original_resolve_runtime
+            telegram_digest.history_client.load_runtime_config = original_load_runtime_config
+            telegram_digest.history_client.connect_db = original_connect_db
+            telegram_digest.history_client.init_db = original_init_db
+            telegram_digest.history_client.resolve_channels_argument = original_resolve_channels_argument
+            telegram_digest.require_openai_api_key = original_require_openai_api_key
+            telegram_digest.run_sync = original_run_sync
+            telegram_digest.iter_channel_messages = original_iter_channel_messages
+            telegram_digest.count_channel_messages = original_count_channel_messages
+            telegram_digest.summarize_channel_batches = original_summarize_channel_batches
+            telegram_digest.bridge.require_token = original_require_token
+            telegram_digest.bridge.send_text_chunks = original_send_text_chunks
+            telegram_digest.PROJECT_ROOT = original_project_root
+            telegram_digest.LAUNCHD_LOG_DIR = original_launchd_log_dir
+            telegram_digest.DIGEST_LAST_ATTEMPT_LOG = original_digest_last_attempt_log
+            telegram_digest.write_digest_last_attempt = original_write_digest_last_attempt
+            temp_dir.cleanup()
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(len(sent), 2)
+        self.assertIn("@a", sent[0])
+        self.assertIn("@c", sent[1])
+        self.assertEqual(payload["status"], "partial")
+        self.assertEqual(payload["phase"], "completed")
+        self.assertEqual(payload["sent_channel_messages"], 2)
+        self.assertTrue(any(item.get("phase") == "sending_channel" and item.get("current_channel") == "@b" for item in attempts))
+        self.assertTrue(
+            any(
+                "@b: delivery failed: Telegram API request failed while calling sendMessage: telegram reset." in item
+                for item in payload["errors"]
+            )
+        )
+        self.assertTrue(
+            any(
+                "Digest error summary delivery failed: Telegram API request failed while calling sendMessage: summary reset."
+                in item
+                for item in payload["errors"]
+            )
+        )
+
+    def test_cmd_run_fails_on_permanent_channel_delivery_error(self) -> None:
+        temp_dir = tempfile.TemporaryDirectory()
+        prompt_file = self.write_prompt_bundle(Path(temp_dir.name))
+        original_resolve_runtime = telegram_digest.history_client.resolve_runtime
+        original_load_runtime_config = telegram_digest.history_client.load_runtime_config
+        original_connect_db = telegram_digest.history_client.connect_db
+        original_init_db = telegram_digest.history_client.init_db
+        original_resolve_channels_argument = telegram_digest.history_client.resolve_channels_argument
+        original_run_sync = telegram_digest.run_sync
+        original_iter_channel_messages = telegram_digest.iter_channel_messages
+        original_count_channel_messages = telegram_digest.count_channel_messages
+        original_require_token = telegram_digest.bridge.require_token
+        original_send_text_chunks = telegram_digest.bridge.send_text_chunks
+        original_project_root = telegram_digest.PROJECT_ROOT
+        original_launchd_log_dir = telegram_digest.LAUNCHD_LOG_DIR
+        original_digest_last_attempt_log = telegram_digest.DIGEST_LAST_ATTEMPT_LOG
+        raised_error: str | None = None
+        try:
+            telegram_digest.PROJECT_ROOT = Path(temp_dir.name)
+            telegram_digest.LAUNCHD_LOG_DIR = telegram_digest.PROJECT_ROOT / "data" / "launchd"
+            telegram_digest.DIGEST_LAST_ATTEMPT_LOG = telegram_digest.LAUNCHD_LOG_DIR / "digest.last_attempt.json"
+            telegram_digest.history_client.resolve_runtime = lambda: type("Runtime", (), {"default_auth_mode": "user"})()
+            telegram_digest.history_client.load_runtime_config = lambda: {
+                "telegram": {"default_chat_id": "1"},
+                "processing": {"model": "test-model"},
+                "digest_prompts": {"file": str(prompt_file)},
+                "digest_ai": {
+                    "messages_per_ai_pass": "111",
+                    "message_text_max_chars": "450",
+                    "message_ocr_max_chars": "300",
+                    "message_block_max_chars": "100000",
+                },
+                "digest_limits": {"day": {"sync_limit": "6100"}},
+            }
+            telegram_digest.history_client.connect_db = lambda runtime: sqlite3.connect(":memory:")
+            telegram_digest.history_client.init_db = lambda conn: None
+            telegram_digest.history_client.resolve_channels_argument = lambda runtime, channel: ["@a"]
+
+            async def fake_run_sync(runtime, **kwargs):
+                return [{"channel": "@a"}]
+
+            telegram_digest.run_sync = fake_run_sync
+            telegram_digest.iter_channel_messages = lambda conn, channel, since, until, max_messages=None: iter(
+                [{"title": "@a", "username": "a"}]
+            )
+            telegram_digest.count_channel_messages = lambda conn, channel, since, until: 0
+            telegram_digest.bridge.require_token = lambda: "token"
+
+            def fake_send_text_chunks(token, chat_id, message, chunk_size=None, parse_mode=None):
+                raise SystemExit("Telegram API HTTP 400 while calling sendMessage.")
+
+            telegram_digest.bridge.send_text_chunks = fake_send_text_chunks
+
+            args = type("Args", (), {"channel": None, "since": None, "until": None, "auth_mode": None})()
+            try:
+                telegram_digest.cmd_run(args)
+            except SystemExit as exc:
+                raised_error = str(exc)
+            payload = json.loads(telegram_digest.DIGEST_LAST_ATTEMPT_LOG.read_text(encoding="utf-8"))
+        finally:
+            telegram_digest.history_client.resolve_runtime = original_resolve_runtime
+            telegram_digest.history_client.load_runtime_config = original_load_runtime_config
+            telegram_digest.history_client.connect_db = original_connect_db
+            telegram_digest.history_client.init_db = original_init_db
+            telegram_digest.history_client.resolve_channels_argument = original_resolve_channels_argument
+            telegram_digest.run_sync = original_run_sync
+            telegram_digest.iter_channel_messages = original_iter_channel_messages
+            telegram_digest.count_channel_messages = original_count_channel_messages
+            telegram_digest.bridge.require_token = original_require_token
+            telegram_digest.bridge.send_text_chunks = original_send_text_chunks
+            telegram_digest.PROJECT_ROOT = original_project_root
+            telegram_digest.LAUNCHD_LOG_DIR = original_launchd_log_dir
+            telegram_digest.DIGEST_LAST_ATTEMPT_LOG = original_digest_last_attempt_log
+            temp_dir.cleanup()
+
+        self.assertEqual(raised_error, "Telegram API HTTP 400 while calling sendMessage.")
+        self.assertEqual(payload["status"], "failed")
+        self.assertEqual(payload["error"], "Telegram API HTTP 400 while calling sendMessage.")
+        self.assertEqual(payload["sent_channel_messages"], 0)
+
     def test_cmd_run_skips_ai_when_channel_has_too_few_messages(self) -> None:
         temp_dir = tempfile.TemporaryDirectory()
         prompt_file = self.write_prompt_bundle(Path(temp_dir.name))

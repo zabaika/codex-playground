@@ -30,6 +30,7 @@ from telegram_shared.openai_usage import common_prefix_length as shared_common_p
 from telegram_shared.openai_usage import extract_usage as shared_extract_usage
 from telegram_shared.openai_usage import hash_cache_key as shared_hash_cache_key
 from telegram_shared.openai_usage import log_openai_usage as shared_log_openai_usage
+from telegram_shared.bot_api import is_retryable_bot_api_error as shared_is_retryable_bot_api_error
 
 
 APP_DIR = MODULE_DIR
@@ -1359,6 +1360,10 @@ def send_digest_message(token: str, chat_id: str | int, text: str) -> None:
     bridge.send_text_chunks(token, chat_id, text, parse_mode="HTML")
 
 
+def format_digest_delivery_error(channel_name: str, exc: BaseException) -> str:
+    return f"{channel_name}: delivery failed: {str(exc) or exc.__class__.__name__}"
+
+
 def summarize_channel_batches(
     log_conn: Any,
     *,
@@ -1715,6 +1720,27 @@ def cmd_run(args: argparse.Namespace) -> int:
 
         sync_result_by_channel = {item.get("channel"): item for item in sync_results}
         api_key: str | None = None
+
+        def send_channel_digest(channel_name: str, message: str) -> bool:
+            nonlocal sent_channel_messages
+            persist_attempt(
+                phase="sending_channel",
+                current_channel=channel,
+                sent_channel_messages=sent_channel_messages,
+                errors=errors,
+            )
+            try:
+                send_digest_message(token, chat_id, message)
+            except (Exception, SystemExit) as exc:
+                if not shared_is_retryable_bot_api_error(exc, method="sendMessage"):
+                    raise
+                errors.append(format_digest_delivery_error(channel_name, exc))
+                persist_attempt(current_channel=channel, errors=errors, sent_channel_messages=sent_channel_messages)
+                return False
+            sent_channel_messages += 1
+            persist_attempt(current_channel=channel, sent_channel_messages=sent_channel_messages)
+            return True
+
         for channel in channels:
             persist_attempt(
                 phase="analyzing_channel",
@@ -1761,9 +1787,8 @@ def cmd_run(args: argparse.Namespace) -> int:
             channel_name = resolve_display_channel_name(conn, channel, preview_channel_name)
             sync_limit_reached = bool(sync_result.get("sync_limit_reached"))
             if not total_message_count:
-                send_digest_message(
-                    token,
-                    chat_id,
+                send_channel_digest(
+                    channel_name,
                     build_channel_digest_message(
                         channel_name,
                         since=since,
@@ -1774,13 +1799,10 @@ def cmd_run(args: argparse.Namespace) -> int:
                         separator_text=digest_config.separator_text,
                     ),
                 )
-                sent_channel_messages += 1
-                persist_attempt(current_channel=channel, sent_channel_messages=sent_channel_messages)
                 continue
             if total_message_count < digest_config.min_messages_for_ai:
-                send_digest_message(
-                    token,
-                    chat_id,
+                send_channel_digest(
+                    channel_name,
                     build_channel_digest_skip_message(
                         channel_name,
                         since=since,
@@ -1791,8 +1813,6 @@ def cmd_run(args: argparse.Namespace) -> int:
                         separator_text=digest_config.separator_text,
                     ),
                 )
-                sent_channel_messages += 1
-                persist_attempt(current_channel=channel, sent_channel_messages=sent_channel_messages)
                 continue
             if api_key is None:
                 api_key = require_openai_api_key(digest_config)
@@ -1838,9 +1858,8 @@ def cmd_run(args: argparse.Namespace) -> int:
                 errors.append(f"{channel_name}: analysis failed: {str(exc) or exc.__class__.__name__}")
                 persist_attempt(current_channel=channel, errors=errors)
                 continue
-            send_digest_message(
-                token,
-                chat_id,
+            send_channel_digest(
+                channel_name,
                 build_channel_digest_message(
                     channel_name,
                     since=since,
@@ -1852,16 +1871,20 @@ def cmd_run(args: argparse.Namespace) -> int:
                     separator_text=digest_config.separator_text,
                 ),
             )
-            sent_channel_messages += 1
-            persist_attempt(current_channel=channel, sent_channel_messages=sent_channel_messages)
 
         if errors:
             persist_attempt(phase="sending_error_summary", errors=errors, sent_channel_messages=sent_channel_messages)
-            send_digest_message(
-                token,
-                chat_id,
-                build_digest_error_message(since=since, until=until, errors=errors, separator_text=digest_config.separator_text),
-            )
+            try:
+                send_digest_message(
+                    token,
+                    chat_id,
+                    build_digest_error_message(since=since, until=until, errors=errors, separator_text=digest_config.separator_text),
+                )
+            except (Exception, SystemExit) as exc:
+                if not shared_is_retryable_bot_api_error(exc, method="sendMessage"):
+                    raise
+                errors.append(f"Digest error summary delivery failed: {str(exc) or exc.__class__.__name__}")
+                persist_attempt(phase="sending_error_summary", errors=errors, sent_channel_messages=sent_channel_messages)
         payload = {
             "status": "partial" if errors else "sent",
             "channels": len(channels),

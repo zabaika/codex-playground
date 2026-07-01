@@ -115,6 +115,85 @@ class SharedBotApiTests(unittest.TestCase):
             "Telegram API error while calling sendMessage: request failed",
         )
 
+    def test_call_bot_api_with_retry_retries_transient_method_error(self) -> None:
+        attempts: list[int] = []
+        failures: list[tuple[int, str]] = []
+        sleeps: list[float] = []
+
+        def fake_call() -> dict[str, object]:
+            attempts.append(len(attempts) + 1)
+            if len(attempts) < 3:
+                raise TelegramApiError("Telegram API request failed while calling sendMessage: connection reset by peer.")
+            return {"ok": True}
+
+        result = bot_api.call_bot_api_with_retry(
+            fake_call,
+            method="sendMessage",
+            attempts=3,
+            backoff_seconds=2,
+            sleep_func=lambda seconds: sleeps.append(seconds),
+            on_failed_attempt=lambda attempt, exc: failures.append((attempt, str(exc))),
+        )
+
+        self.assertEqual(result, {"ok": True})
+        self.assertEqual(attempts, [1, 2, 3])
+        self.assertEqual([item[0] for item in failures], [1, 2])
+        self.assertEqual(sleeps, [2, 4])
+
+    def test_call_bot_api_with_retry_retries_http_5xx_method_error(self) -> None:
+        attempts: list[int] = []
+
+        def fake_call() -> dict[str, object]:
+            attempts.append(len(attempts) + 1)
+            if len(attempts) == 1:
+                raise TelegramApiError("Telegram API HTTP 502 while calling sendMessage.")
+            return {"ok": True}
+
+        result = bot_api.call_bot_api_with_retry(
+            fake_call,
+            method="sendMessage",
+            attempts=2,
+            backoff_seconds=0,
+        )
+
+        self.assertEqual(result, {"ok": True})
+        self.assertEqual(attempts, [1, 2])
+
+    def test_call_bot_api_with_retry_does_not_retry_permanent_method_error(self) -> None:
+        attempts: list[int] = []
+
+        def fake_call() -> None:
+            attempts.append(len(attempts) + 1)
+            raise TelegramApiError("Telegram API error while calling sendMessage: chat not found")
+
+        with self.assertRaises(TelegramApiError):
+            bot_api.call_bot_api_with_retry(
+                fake_call,
+                method="sendMessage",
+                attempts=3,
+                backoff_seconds=2,
+                sleep_func=lambda seconds: None,
+            )
+
+        self.assertEqual(attempts, [1])
+
+    def test_call_bot_api_with_retry_does_not_retry_http_4xx_method_error(self) -> None:
+        attempts: list[int] = []
+
+        def fake_call() -> None:
+            attempts.append(len(attempts) + 1)
+            raise TelegramApiError("Telegram API HTTP 400 while calling sendMessage.")
+
+        with self.assertRaises(TelegramApiError):
+            bot_api.call_bot_api_with_retry(
+                fake_call,
+                method="sendMessage",
+                attempts=3,
+                backoff_seconds=0,
+            )
+
+        self.assertEqual(attempts, [1])
+
     def test_split_text_chunks_never_exceeds_telegram_limit(self) -> None:
         chunks = bot_api.split_text_chunks("x" * 5000, 5000)
 

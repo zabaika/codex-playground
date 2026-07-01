@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import re
+import time
 from pathlib import Path
 from typing import Any, Callable
 from urllib import error, request
@@ -46,6 +48,40 @@ def api_call(
         description = response.get("description") or "request failed"
         raise TelegramApiError(f"Telegram API error while calling {method}: {description}")
     return response["result"]
+
+
+def is_retryable_bot_api_error(exc: BaseException, *, method: str) -> bool:
+    message = str(exc)
+    if (
+        f"Telegram API request failed while calling {method}" in message
+        or f"Telegram API request timed out while calling {method}" in message
+    ):
+        return True
+    http_match = re.search(rf"Telegram API HTTP (\d+) while calling {re.escape(method)}\.", message)
+    return bool(http_match and 500 <= int(http_match.group(1)) <= 599)
+
+
+def call_bot_api_with_retry(
+    call_func: Callable[[], Any],
+    *,
+    method: str,
+    attempts: int,
+    backoff_seconds: int,
+    sleep_func: Callable[[float], None] = time.sleep,
+    on_failed_attempt: Callable[[int, BaseException], None] | None = None,
+) -> Any:
+    active_attempts = max(1, attempts)
+    for attempt in range(1, active_attempts + 1):
+        try:
+            return call_func()
+        except (Exception, SystemExit) as exc:
+            if on_failed_attempt is not None:
+                on_failed_attempt(attempt, exc)
+            if attempt >= active_attempts or not is_retryable_bot_api_error(exc, method=method):
+                raise
+            if backoff_seconds > 0:
+                sleep_func(backoff_seconds * attempt)
+    raise RuntimeError("unreachable retry state")
 
 
 def fetch_updates(
