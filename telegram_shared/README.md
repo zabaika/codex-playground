@@ -16,6 +16,14 @@ This package is intentionally domain-light. It owns reusable runtime mechanics s
 
 Product behavior stays in the owning app. For example, retry limits are read from each app's runtime config, not from `telegram_shared`.
 
+## Maintenance Scripts
+
+Clear persisted full OpenAI prompt text from the Telegram SQLite usage logs:
+
+```bash
+python3 telegram_shared/scripts/purge_openai_prompt_text.py
+```
+
 ## Retry Boundary
 
 `telegram_shared.bot_api.call_bot_api_with_retry` accepts explicit `attempts` and `backoff_seconds` from the caller. It does not define operator-facing defaults.

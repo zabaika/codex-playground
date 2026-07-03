@@ -19,7 +19,7 @@ Standalone Telegram task agent with a Bot API bridge and an OpenAI-backed worker
 - runs `/agent` tasks through the OpenAI worker
 - lets the worker inspect only configured local roots and public web pages
 - keeps one conversation thread per Telegram chat until `/reset`
-- exposes `/agent-stats` from local usage logs without spending OpenAI tokens
+- exposes `/agent-stats` from local Agent AI usage logs without spending OpenAI tokens
 
 ## Runtime Config
 
@@ -89,7 +89,7 @@ Bot command quick reference:
 
 - `/help`: show command help
 - `/agent <task>`: run the task agent and answer back into Telegram
-- `/agent-stats`: show local OpenAI usage and prompt-cache summary
+- `/agent-stats`: show local Agent AI usage and prompt-cache summary
 - `/reset`: clear saved conversation context for the current chat
 
 Command notes:

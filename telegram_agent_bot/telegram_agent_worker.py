@@ -160,6 +160,13 @@ def parse_int(value: str, default: int, *, min_value: int = 1, max_value: int | 
     return parsed
 
 
+def parse_bool(value: str, default: bool = False) -> bool:
+    raw_value = str(value).strip().lower()
+    if not raw_value:
+        return default
+    return raw_value in {"1", "true", "yes", "on"}
+
+
 def parse_allowed_roots(config: dict[str, Any]) -> list[Path]:
     section = config.get("agent", {})
     raw_value = section.get("allowed_roots", []) if isinstance(section, dict) else []
@@ -263,6 +270,7 @@ def resolve_runtime() -> dict[str, Any]:
             max_value=200000,
         ),
         "prompt_cache_scope": (get_config_value(config, "agent", "prompt_cache_scope") or "global").strip().lower(),
+        "store_prompt_text": parse_bool(get_config_value(config, "agent", "store_prompt_text"), default=False),
         "allowed_roots": parse_allowed_roots(config),
     }
 
@@ -824,6 +832,7 @@ def log_openai_usage(
     usage: OpenAIUsage | None = None,
     response_id: str | None = None,
     error: str | None = None,
+    store_prompt_text: bool = False,
 ) -> None:
     shared_log_openai_usage(
         conn,
@@ -842,6 +851,7 @@ def log_openai_usage(
         usage=usage,
         response_id=response_id,
         error=optional_text(error),
+        store_prompt_text=store_prompt_text,
     )
 
 
@@ -988,6 +998,7 @@ def run_agent(prompt: str, chat_id: str, username: str) -> dict[str, Any]:
                     cache_info=cache_info,
                     prompt_text=prompt_log_text,
                     error=str(exc),
+                    store_prompt_text=runtime["store_prompt_text"],
                 )
                 raise
             usage = extract_usage(response)
@@ -1004,6 +1015,7 @@ def run_agent(prompt: str, chat_id: str, username: str) -> dict[str, Any]:
                 prompt_text=prompt_log_text,
                 usage=usage,
                 response_id=optional_text(response.get("id")),
+                store_prompt_text=runtime["store_prompt_text"],
             )
             calls = extract_function_calls(response)
             if not calls:

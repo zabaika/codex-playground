@@ -801,7 +801,7 @@ class TelegramConnectorTests(unittest.TestCase):
                 "row_limit": 200,
             }
         )
-        self.assertIn("Digest stats:", text)
+        self.assertIn("Digest AI usage:", text)
         self.assertIn("cached input tokens: 50", text)
         self.assertIn("cached share of input tokens: 25.0%", text)
         self.assertIn("single-pass requests: 1 (33.3%)", text)
@@ -1039,7 +1039,9 @@ class TelegramConnectorTests(unittest.TestCase):
             "row_limit": row_limit,
         }
         telegram_connector.send_text_chunks = (
-            lambda token, chat_id, text, chunk_size=3500, parse_mode=None: captured.update({"chat_id": chat_id, "text": text})
+            lambda token, chat_id, text, chunk_size=3500, parse_mode=None: captured.update(
+                {"chat_id": chat_id, "text": text, "parse_mode": parse_mode}
+            )
         )
 
         def fail_run(*args, **kwargs):
@@ -1053,7 +1055,8 @@ class TelegramConnectorTests(unittest.TestCase):
             telegram_connector.send_text_chunks = original_send_chunks
             telegram_connector.subprocess.run = original_run
         self.assertEqual(captured["chat_id"], 42)
-        self.assertIn("Digest stats:", str(captured["text"]))
+        self.assertEqual(captured["parse_mode"], "HTML")
+        self.assertIn("<b>Digest AI usage:</b>", str(captured["text"]))
         self.assertIn("single-pass requests: 1 (100.0%)", str(captured["text"]))
 
     def test_handle_history_command_serves_top_models_without_subprocess(self) -> None:
@@ -1118,7 +1121,9 @@ class TelegramConnectorTests(unittest.TestCase):
             ],
         }
         telegram_connector.send_text_chunks = (
-            lambda token, chat_id, text, chunk_size=3500, parse_mode=None: captured.update({"chat_id": chat_id, "text": text})
+            lambda token, chat_id, text, chunk_size=3500, parse_mode=None: captured.update(
+                {"chat_id": chat_id, "text": text, "parse_mode": parse_mode}
+            )
         )
 
         def fail_run(*args, **kwargs):
@@ -1133,9 +1138,10 @@ class TelegramConnectorTests(unittest.TestCase):
             telegram_connector.subprocess.run = original_run
 
         self.assertEqual(captured["chat_id"], 42)
-        self.assertIn("Top free LLM models", str(captured["text"]))
-        self.assertIn("1. Model One", str(captured["text"]))
-        self.assertIn("2. Model Two", str(captured["text"]))
+        self.assertEqual(captured["parse_mode"], "HTML")
+        self.assertIn("<b>Top free LLM models</b>", str(captured["text"]))
+        self.assertIn("<b>1. Model One</b>", str(captured["text"]))
+        self.assertIn("<b>2. Model Two</b>", str(captured["text"]))
 
     def test_resolve_top_models_api_url_rejects_non_http_scheme(self) -> None:
         with self.assertRaisesRegex(ValueError, "http or https"):
@@ -1203,7 +1209,9 @@ class TelegramConnectorTests(unittest.TestCase):
             ],
         }
         telegram_connector.send_text_chunks = (
-            lambda token, chat_id, text, chunk_size=3500, parse_mode=None: captured.update({"chat_id": chat_id, "text": text})
+            lambda token, chat_id, text, chunk_size=3500, parse_mode=None: captured.update(
+                {"chat_id": chat_id, "text": text, "parse_mode": parse_mode}
+            )
         )
 
         def fail_run(*args, **kwargs):
@@ -1218,6 +1226,8 @@ class TelegramConnectorTests(unittest.TestCase):
             telegram_connector.subprocess.run = original_run
 
         self.assertEqual(captured["chat_id"], 42)
+        self.assertEqual(captured["parse_mode"], "HTML")
+        self.assertIn("<b>1. Model One</b>", str(captured["text"]))
         self.assertIn("id: test/model:free", str(captured["text"]))
         self.assertIn("metadataScore: 600", str(captured["text"]))
         self.assertIn("evalSummary:", str(captured["text"]))

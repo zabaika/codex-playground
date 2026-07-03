@@ -185,7 +185,7 @@ class TelegramAgentWorkerTests(unittest.TestCase):
         self.assertEqual(usage.total_tokens, 125)
         self.assertEqual(usage.latency_ms, 345)
 
-    def test_log_openai_usage_writes_previous_prompt_metadata(self) -> None:
+    def test_log_openai_usage_skips_prompt_text_by_default_but_keeps_metadata(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             original_db_file = telegram_agent_worker.DB_FILE
             telegram_agent_worker.DB_FILE = Path(tmp_dir) / "telegram_agent.sqlite3"
@@ -235,7 +235,7 @@ class TelegramAgentWorkerTests(unittest.TestCase):
                 row = conn.execute(
                     """
                     SELECT previous_response_id, previous_prompt_hash, prefix_match_chars_with_previous,
-                           cached_input_tokens, prompt_cache_key, feature
+                           cached_input_tokens, prompt_cache_key, feature, prompt_text
                     FROM ai_usage_log
                     WHERE response_id = 'resp_2'
                     """
@@ -246,7 +246,8 @@ class TelegramAgentWorkerTests(unittest.TestCase):
         assert row is not None
         self.assertEqual(row["previous_response_id"], "resp_1")
         self.assertIsNotNone(row["previous_prompt_hash"])
-        self.assertGreater(row["prefix_match_chars_with_previous"], 0)
+        self.assertEqual(row["prefix_match_chars_with_previous"], 0)
+        self.assertIsNone(row["prompt_text"])
         self.assertEqual(row["cached_input_tokens"], 8)
         self.assertEqual(row["prompt_cache_key"], "agent:test-cache")
         self.assertEqual(row["feature"], "agent")
@@ -276,6 +277,7 @@ class TelegramAgentWorkerTests(unittest.TestCase):
                 "max_file_lines": "250",
                 "max_directory_entries": "80",
                 "max_tool_output_chars": "42000",
+                "store_prompt_text": "true",
                 "allowed_roots": ["."],
             },
             "secrets": {"openai_api_key": "dummy-key"},
@@ -297,6 +299,7 @@ class TelegramAgentWorkerTests(unittest.TestCase):
         self.assertEqual(runtime["max_file_lines"], 250)
         self.assertEqual(runtime["max_directory_entries"], 80)
         self.assertEqual(runtime["max_tool_output_chars"], 42000)
+        self.assertTrue(runtime["store_prompt_text"])
 
     def test_api_request_without_http_body_keeps_base_error_message(self) -> None:
         def fake_urlopen(_req: object, timeout: int = 180) -> object:

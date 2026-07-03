@@ -111,6 +111,7 @@ class TelegramDigestTests(unittest.TestCase):
                     "max_output_tokens": "900",
                     "openai_timeout_seconds": "45",
                     "openai_retry_attempts": "2",
+                    "store_prompt_text": "true",
                 },
                 "digest_prompts": {
                     "file": str(prompt_file),
@@ -133,6 +134,7 @@ class TelegramDigestTests(unittest.TestCase):
         self.assertEqual(result.openai_max_output_tokens, 900)
         self.assertEqual(result.openai_timeout_seconds, 45)
         self.assertEqual(result.openai_retry_attempts, 2)
+        self.assertTrue(result.store_prompt_text)
         self.assertEqual(result.separator_text, "────────")
         self.assertTrue(result.mark_read)
         self.assertFalse(result.use_ocr)

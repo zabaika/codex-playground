@@ -35,6 +35,15 @@ Keep documentation split by responsibility:
 - when a repository-managed tool or skill is installed or copied into a runtime location such as `~/.codex/skills`, treat the repository copy as the only editable owner and the installed/runtime copy as a derived artifact
 - do not edit the installed/runtime copy directly; change the repository copy and then refresh the installed copy through the canonical install or sync path
 
+### README Config Discipline
+
+- do not turn project README files into config-key catalogs
+- keep the complete runtime config schema, defaults, comments, and clamped ranges in `config/runtime.example.toml`
+- in project README files, mention only config groups or operator workflows that are commonly changed or needed for setup/troubleshooting
+- do not document one-off debug flags, maintenance toggles, hidden compatibility fallbacks, or rarely changed config keys in project README files unless they are part of a normal operator workflow
+- if a maintenance script lives in a shared package, document the script in that shared package README and link to it only when the app README has a specific operator workflow that requires it
+- avoid repeating the same command, config key, or behavior explanation across shared and app README files; choose one canonical owner and keep other docs as short pointers only when needed
+
 ### Wrapper and Orchestration Inheritance
 
 - if a wrapper or orchestration layer needs to expose upstream metadata, pass through or parse the canonical upstream artifact instead of reconstructing it with local placeholders or guessed values

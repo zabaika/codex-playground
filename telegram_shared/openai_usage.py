@@ -96,6 +96,7 @@ def log_openai_usage(
     usage: OpenAIUsage | None = None,
     response_id: str | None = None,
     error: str | None = None,
+    store_prompt_text: bool = False,
 ) -> None:
     previous = conn.execute(
         """
@@ -146,7 +147,7 @@ def log_openai_usage(
             previous_prompt_hash,
             previous_response_id,
             prefix_match_chars_with_previous,
-            prompt_text,
+            prompt_text if store_prompt_text else None,
             usage.input_tokens if usage else None,
             usage.cached_input_tokens if usage else None,
             usage.output_tokens if usage else None,

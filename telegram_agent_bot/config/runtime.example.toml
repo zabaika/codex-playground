@@ -62,6 +62,9 @@ max_tool_output_chars = "50000"
 # Prompt-cache scope for OpenAI requests: "global" reuses cache across all chats on this bot,
 # "chat" isolates cache keys per Telegram chat_id.
 prompt_cache_scope = "global"
+# Store full OpenAI agent prompt/tool-round text in ai_usage_log.prompt_text for temporary debugging.
+# Keep false by default to avoid persisting user prompts and tool outputs in SQLite.
+store_prompt_text = "false"
 # Local roots the agent may inspect. Relative paths are resolved from telegram_agent_bot/.
 allowed_roots = [
   ".",

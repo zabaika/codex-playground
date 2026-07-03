@@ -512,7 +512,7 @@ def command_help_text() -> str:
         "/agent <task>\n"
         "  run the local+web task agent and answer back into Telegram\n"
         "/agent-stats\n"
-        "  show local OpenAI usage and prompt-cache summary for this bot\n"
+        "  show local Agent AI usage and prompt-cache summary for this bot\n"
         "/reset\n"
         "  clear saved conversation context for this chat\n"
         "\nNotes:\n"
@@ -552,33 +552,25 @@ def build_worker_command(text: str) -> list[str] | None:
 
 
 def fetch_agent_usage_summary(*, chat_id: str, row_limit: int, recent_rounds_limit: int = 3) -> dict[str, Any] | None:
-    summary = shared_fetch_ai_usage_summary(
+    return shared_fetch_ai_usage_summary(
         AGENT_DB_FILE,
         feature="agent",
         row_limit=row_limit,
         filter_channel=chat_id,
         recent_rows_limit=recent_rounds_limit,
     )
-    if summary is None:
-        return None
-    return {
-        "global": summary["global"],
-        "chat": summary.get("filtered"),
-        "recent_rows": summary["recent_rows"],
-        "row_limit": summary["row_limit"],
-    }
 
 
-def format_agent_usage_summary(summary: dict[str, Any], *, chat_id: str) -> str:
+def format_agent_usage_summary(summary: dict[str, Any], *, chat_id: str, show_current_chat: bool = False) -> str:
     return shared_format_ai_usage_summary(
         {
             "global": summary["global"],
-            "filtered": summary.get("chat"),
+            "filtered": summary.get("filtered") if show_current_chat else None,
             "recent_rows": summary.get("recent_rows") or [],
             "row_limit": summary.get("row_limit"),
         },
-        title="Agent stats",
-        subject_label="This chat",
+        title="Agent AI usage",
+        subject_label="Current Telegram chat",
         subject_value=chat_id,
     )
 
@@ -605,7 +597,7 @@ def handle_agent_command(runtime: BridgeRuntime, update: dict[str, Any]) -> None
     if text == "/agent-stats":
         summary = fetch_agent_usage_summary(chat_id=str(chat_id), row_limit=runtime.agent_stats_row_limit)
         if summary is None:
-            send_text_message(runtime.bot_token, chat_id, "Agent stats are not available yet. Run at least one /agent request first.")
+            send_text_message(runtime.bot_token, chat_id, "Agent AI usage is not available yet. Run at least one /agent request first.")
             return
         send_text_chunks(
             runtime.bot_token,

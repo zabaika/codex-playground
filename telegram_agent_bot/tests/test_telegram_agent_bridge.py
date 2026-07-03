@@ -599,7 +599,7 @@ class TelegramAgentBridgeTests(unittest.TestCase):
         self.assertEqual(captured["chat_id"], 42)
         self.assertIn("not allowed", str(captured["text"]))
 
-    def test_fetch_agent_usage_summary_reads_global_and_chat_stats(self) -> None:
+    def test_fetch_agent_usage_summary_reads_global_and_filtered_stats(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             original_db_file = telegram_agent_bridge.AGENT_DB_FILE
             telegram_agent_bridge.AGENT_DB_FILE = Path(tmp_dir) / "telegram_agent.sqlite3"
@@ -664,8 +664,8 @@ class TelegramAgentBridgeTests(unittest.TestCase):
         assert summary is not None
         self.assertEqual(summary["global"]["total_requests"], 2)
         self.assertEqual(summary["global"]["cached_input_tokens"], 40)
-        self.assertEqual(summary["chat"]["total_requests"], 1)
-        self.assertEqual(summary["chat"]["cached_input_tokens"], 40)
+        self.assertEqual(summary["filtered"]["total_requests"], 1)
+        self.assertEqual(summary["filtered"]["cached_input_tokens"], 40)
         self.assertEqual(summary["row_limit"], 50)
         self.assertEqual(len(summary["recent_rows"]), 2)
 
@@ -750,7 +750,7 @@ class TelegramAgentBridgeTests(unittest.TestCase):
                     "cached_input_tokens": 50,
                     "output_tokens": 40,
                 },
-                "chat": {
+                "filtered": {
                     "total_requests": 2,
                     "input_tokens": 80,
                     "cached_input_tokens": 20,
@@ -770,10 +770,38 @@ class TelegramAgentBridgeTests(unittest.TestCase):
         )
         self.assertIn("cached input tokens: 50", text)
         self.assertIn("cached share of input tokens: 25.0%", text)
-        self.assertIn("This chat (42):", text)
+        self.assertIn("Agent AI usage:", text)
+        self.assertNotIn("Current Telegram chat (42):", text)
         self.assertIn("analysis window: latest 200 requests", text)
         self.assertIn("Latest rounds:", text)
         self.assertIn("round_2: ok, input=100, cached=25 (25.0%), output=15", text)
+
+    def test_format_agent_usage_summary_can_include_current_chat_section(self) -> None:
+        text = telegram_agent_bridge.format_agent_usage_summary(
+            {
+                "global": {
+                    "total_requests": 3,
+                    "ok_requests": 3,
+                    "error_requests": 0,
+                    "cached_requests": 1,
+                    "cache_keys": 1,
+                    "input_tokens": 200,
+                    "cached_input_tokens": 50,
+                    "output_tokens": 40,
+                },
+                "filtered": {
+                    "total_requests": 2,
+                    "input_tokens": 80,
+                    "cached_input_tokens": 20,
+                },
+                "recent_rows": [],
+                "row_limit": 200,
+            },
+            chat_id="42",
+            show_current_chat=True,
+        )
+        self.assertIn("Current Telegram chat (42):", text)
+        self.assertIn("cached share of input tokens: 25.0%", text)
 
     def test_handle_agent_command_serves_agent_stats_without_worker(self) -> None:
         update = {
@@ -834,7 +862,8 @@ class TelegramAgentBridgeTests(unittest.TestCase):
             telegram_agent_bridge.send_text_chunks = original_send_chunks
             telegram_agent_bridge.subprocess.run = original_run
         self.assertEqual(captured["chat_id"], 42)
-        self.assertIn("Agent stats:", str(captured["text"]))
+        self.assertIn("Agent AI usage:", str(captured["text"]))
+        self.assertNotIn("Current Telegram chat", str(captured["text"]))
 
 
 if __name__ == "__main__":

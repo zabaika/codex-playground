@@ -105,6 +105,9 @@ max_output_tokens = "1200"
 openai_timeout_seconds = "120"
 # Number of OpenAI digest retry attempts for transient network failures.
 openai_retry_attempts = "3"
+# Store full OpenAI digest prompt text in ai_usage_log.prompt_text for temporary debugging.
+# Keep false by default to avoid persisting channel/message content in SQLite.
+store_prompt_text = "false"
 
 [digest_limits.day]
 # Recommended defaults for a daily window when the total traffic across all channels is about 5000 messages/day.

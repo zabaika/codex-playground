@@ -91,6 +91,7 @@ class DigestConfig:
     openai_max_output_tokens: int = DEFAULT_OPENAI_DIGEST_MAX_OUTPUT_TOKENS
     openai_timeout_seconds: int = DEFAULT_OPENAI_DIGEST_TIMEOUT_SECONDS
     openai_retry_attempts: int = DEFAULT_OPENAI_DIGEST_RETRY_ATTEMPTS
+    store_prompt_text: bool = False
 
 
 @dataclass
@@ -317,6 +318,7 @@ def resolve_digest_config(config: dict[str, Any]) -> DigestConfig:
         openai_max_output_tokens=openai_max_output_tokens,
         openai_timeout_seconds=openai_timeout_seconds,
         openai_retry_attempts=openai_retry_attempts,
+        store_prompt_text=parse_bool(str(shared_ai_section.get("store_prompt_text", "")).strip(), default=False),
     )
 
 
@@ -1048,6 +1050,7 @@ def log_openai_usage(
     usage: OpenAIUsage | None = None,
     response_id: str | None = None,
     error: str | None = None,
+    store_prompt_text: bool = False,
 ) -> None:
     shared_log_openai_usage(
         conn,
@@ -1066,6 +1069,7 @@ def log_openai_usage(
         usage=usage,
         response_id=response_id,
         error=history_client.optional_text(error),
+        store_prompt_text=store_prompt_text,
     )
 
 
@@ -1438,6 +1442,7 @@ def summarize_channel_batches(
                     cache_info=cache_info,
                     prompt_text=prompt,
                     error=str(exc) or exc.__class__.__name__,
+                    store_prompt_text=config.store_prompt_text,
                 )
                 raise
             log_openai_usage(
@@ -1454,6 +1459,7 @@ def summarize_channel_batches(
                 prompt_text=prompt,
                 usage=result.usage,
                 response_id=result.response_id,
+                store_prompt_text=config.store_prompt_text,
             )
             return len(unique_message_ids), repair_popular_links_in_summary(result.text, all_messages), False
         char_limit_reached = True
@@ -1514,6 +1520,7 @@ def summarize_channel_batches(
                 cache_info=cache_info,
                 prompt_text=prompt,
                 error=str(exc) or exc.__class__.__name__,
+                store_prompt_text=config.store_prompt_text,
             )
             raise
         log_openai_usage(
@@ -1530,6 +1537,7 @@ def summarize_channel_batches(
             prompt_text=prompt,
             usage=batch_result.usage,
             response_id=batch_result.response_id,
+            store_prompt_text=config.store_prompt_text,
         )
         batch_summaries.append(f"Батч {batch_index}\n{batch_result.text}")
         previous_batch_summary = batch_result.text[:2000]
@@ -1590,6 +1598,7 @@ def summarize_channel_batches(
             cache_info=final_cache_info,
             prompt_text=final_prompt,
             error=str(exc) or exc.__class__.__name__,
+            store_prompt_text=config.store_prompt_text,
         )
         raise
     log_openai_usage(
@@ -1606,6 +1615,7 @@ def summarize_channel_batches(
         prompt_text=final_prompt,
         usage=final_result.usage,
         response_id=final_result.response_id,
+        store_prompt_text=config.store_prompt_text,
     )
     return len(unique_message_ids), repair_popular_links_in_summary(final_result.text, all_messages), char_limit_reached
 
@@ -1846,6 +1856,7 @@ def cmd_run(args: argparse.Namespace) -> int:
                         openai_max_output_tokens=digest_config.openai_max_output_tokens,
                         openai_timeout_seconds=digest_config.openai_timeout_seconds,
                         openai_retry_attempts=digest_config.openai_retry_attempts,
+                        store_prompt_text=digest_config.store_prompt_text,
                     ),
                     channel=channel,
                     channel_name=channel_name,

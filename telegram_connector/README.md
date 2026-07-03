@@ -91,7 +91,7 @@ Launchd logs:
 
 Bot command quick reference:
 
-- `/agent-stats`: recent local OpenAI usage and prompt-cache summary
+- `/agent-stats`: recent local Digest AI usage and prompt-cache summary
 - `/top-models [limit] [debug]`: configured external free-model ranking
 - `/backfill [channel] [limit] [since=...] [until=...] [media] [bot|user|auto]`: historical load into SQLite
 - `/tail [channel] [limit] [since=...] [until=...] [media|ocr|read] [bot|user|auto]`: latest window sync

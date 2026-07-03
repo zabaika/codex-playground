@@ -47,6 +47,7 @@ from telegram_shared.config import resolve_bridge_text_chunk_size as shared_reso
 from telegram_shared.config import resolve_bridge_worker_process_timeout_seconds as shared_resolve_bridge_worker_process_timeout_seconds
 from telegram_shared.errors import SecretResolutionError
 from telegram_shared.errors import TelegramApiError
+from telegram_shared.formatting import format_telegram_html as shared_format_telegram_html
 from telegram_shared.paths import resolve_app_paths as shared_resolve_app_paths
 from telegram_shared.redaction import redact_sensitive_text as shared_redact_sensitive_text
 
@@ -667,7 +668,7 @@ def command_help_text() -> str:
         "Bot commands:\n"
         "/help\n"
         "/agent-stats\n"
-        "  show local OpenAI usage and prompt-cache summary for digest runs\n"
+        "  show local Digest AI usage and prompt-cache summary for digest runs\n"
         "/top-models [limit] [debug]\n"
         "  show the current top free models from the configured external ranking API\n"
         "/backfill [channel] [limit] [since=YYYY-MM-DD] [until=YYYY-MM-DD] [media] [bot|user|auto]\n"
@@ -832,6 +833,20 @@ def format_top_models_message(payload: dict[str, Any], *, limit: int, debug: boo
     return "\n".join(lines)
 
 
+def format_top_models_html_message(message: str) -> str:
+    lines: list[str] = []
+    for index, line in enumerate(message.splitlines()):
+        stripped = line.strip()
+        if index == 0 and stripped:
+            lines.append(f"**{stripped}**")
+            continue
+        if re.match(r"^\d+\.\s+\S", stripped):
+            lines.append(f"**{stripped}**")
+            continue
+        lines.append(line)
+    return shared_format_telegram_html("\n".join(lines))
+
+
 def fetch_top_models_payload(
     *,
     url: str,
@@ -894,7 +909,7 @@ def fetch_digest_usage_summary(config: dict[str, Any], *, row_limit: int, recent
 
 
 def format_digest_usage_summary(summary: dict[str, Any]) -> str:
-    return shared_format_ai_usage_summary(summary, title="Digest stats")
+    return shared_format_ai_usage_summary(summary, title="Digest AI usage")
 
 
 def append_period_option(argv: list[str], part: str) -> bool:
@@ -1083,9 +1098,15 @@ def handle_history_command(token: str, config: dict[str, Any], update: dict[str,
     if text == "/agent-stats":
         summary = fetch_digest_usage_summary(config, row_limit=resolve_agent_stats_row_limit(config))
         if summary is None:
-            send_text_message(token, chat_id, "Digest stats are not available yet. Run at least one /digest request first.")
+            send_text_message(token, chat_id, "Digest AI usage is not available yet. Run at least one /digest request first.")
             return
-        send_text_chunks(token, chat_id, format_digest_usage_summary(summary), chunk_size=resolve_text_chunk_size(config))
+        send_text_chunks(
+            token,
+            chat_id,
+            shared_format_telegram_html(format_digest_usage_summary(summary)),
+            chunk_size=resolve_text_chunk_size(config),
+            parse_mode="HTML",
+        )
         return
     if text.startswith("/top-models"):
         try:
@@ -1104,7 +1125,13 @@ def handle_history_command(token: str, config: dict[str, Any], update: dict[str,
         except SystemExit as exc:
             send_text_message(token, chat_id, redact_sensitive_text(str(exc)))
             return
-        send_text_chunks(token, chat_id, formatted, chunk_size=resolve_text_chunk_size(config))
+        send_text_chunks(
+            token,
+            chat_id,
+            format_top_models_html_message(formatted),
+            chunk_size=resolve_text_chunk_size(config),
+            parse_mode="HTML",
+        )
         return
 
     try:
