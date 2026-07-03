@@ -365,6 +365,7 @@ PYTHONPATH=skills/article-to-obsidian-kb/scripts python3 -m unittest discover -s
   - list the current body sections
   - name the unique informational role of each section
   - merge or delete any section whose role substantially overlaps with another section
+  - apply the cross-section dedup and checklist-format rules from [references/vault-conventions.md](references/vault-conventions.md)
 - Run a section-eligibility pass before finalizing the body:
   - keep a section only if the source gives enough independent material for that section family
   - do not create `headings.key_lessons` unless it adds net-new synthesis beyond nearby thesis or applied sections
@@ -374,6 +375,7 @@ PYTHONPATH=skills/article-to-obsidian-kb/scripts python3 -m unittest discover -s
   - do not create `headings.practice` unless the source yields reusable moves, heuristics, or decisions that a reader could plausibly adopt
 - If an update to an existing note turns into a `scope fork` because unrelated legacy cleanup is uncovered, stop and ask the user which path to take instead of silently choosing between full cleanup, rollback, or rerouting the new material.
 - If the chosen path is `full cleanup`, show a short cleanup plan for that note and wait for explicit agreement before rewriting the whole note.
+- If deduplication, cleanup, or normalization would remove, relocate, or reformat old checklists, archived lists, reusable templates, or procedural reference blocks, apply the preserve-by-default rules from [references/update-patterns.md](references/update-patterns.md) and ask for explicit user direction before changing those blocks.
 - Treat verbs like `append`, `merge`, `normalize`, `clean up`, and `update` as insufficient on their own when the operation has more than one plausible interpretation.
 - When the intended behavior depends on exact position or ordering, define the insertion point and order explicitly and follow the stricter rule from the references instead of improvising.
 - When migrating a legacy note into the current schema, preserve surviving frontmatter provenance such as `source` across the rewrite regardless of whether the final note is source-derived or `concept`.
@@ -411,6 +413,8 @@ PYTHONPATH=skills/article-to-obsidian-kb/scripts python3 -m unittest discover -s
   - re-run the source-supported practicality gate from [references/vault-conventions.md](references/vault-conventions.md) against the final saved body
   - for any non-`concept` note, re-run the section-role pass against the final structure and remove any block that now mostly repeats another section after late rewrites
   - compare `headings.key_theses`, `headings.practice`, and `headings.pitfalls` for cross-section duplication; if an anti-pattern only mirrors an earlier recommendation, rewrite it into a concrete failure mode or remove it
+  - verify that nested checklist or algorithm bullets use bold lead-ins and do not duplicate surrounding practice bullets
+  - for existing notes, verify that older checklists and procedural reference blocks were not changed without the explicit approval required by [references/update-patterns.md](references/update-patterns.md)
   - if the final note has `headings.key_lessons` or a lessons-style numbered block, re-check that the lessons are not reduced to one-line headlines; expand any lesson that lacks a short explanatory second sentence
   - if the final note still has both `headings.practice` and `headings.key_lessons`, make sure the latter adds net-new synthesis rather than restating applied advice
   - if the final note contains multiple related percentages, rates, or metric values, re-check that the cadence, denominator, comparison group, or baseline is explicit wherever those numbers could otherwise be confused

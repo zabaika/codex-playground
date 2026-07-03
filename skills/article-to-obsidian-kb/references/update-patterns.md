@@ -31,6 +31,14 @@ Canonical section-heading strings live in [config/note_schema.yaml](../config/no
   - rollback of the new fragment
   - or preserving the new signal elsewhere while leaving the touched note for a separate cleanup pass
 - If the user chooses `full cleanup`, first show a brief cleanup plan for that note and get explicit confirmation before rewriting the whole note.
+- Treat old checklists, archived lists, reusable templates, and procedural reference blocks as preserve-by-default material during existing-note updates.
+- Do not delete, strongly compress, move to another file, or convert those older blocks into a new format without explicitly asking the user first.
+- If an older reference block conflicts with newer source signal, stop and offer concrete options instead of silently choosing one:
+  - keep the old block as an archival or historical reference with a clear note
+  - update the old block to match the newer practice
+  - move the old block lower in the note as a reference block
+  - delete or replace it only after explicit approval
+- When the user asks to clean duplicates, treat newer analytical sections as the default cleanup surface and leave older checklists or reference blocks unchanged unless the user explicitly includes them.
 - Append a dated entry that links the touched note to the new article and related concepts.
 - Use the current insertion date in `YYYY-MM-DD` format.
 - Treat dated update sections as chronological append-only logs by default.

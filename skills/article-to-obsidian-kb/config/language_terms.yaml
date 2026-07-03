@@ -20,7 +20,8 @@
       "guardrails",
       "compliance",
       "backlog",
-      "fallback"
+      "fallback",
+      "autonomo"
     ],
     "phrases": [
       "code review",
@@ -35,7 +36,8 @@
       "AI adoption",
       "open source",
       "off-by-one",
-      "high-cardinality"
+      "high-cardinality",
+      "vida laboral"
     ]
   },
   "inline_code_literals": {

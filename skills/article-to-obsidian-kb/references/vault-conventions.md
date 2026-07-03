@@ -231,6 +231,14 @@ Frontmatter is part of the note schema, not optional decoration.
   - `headings.workflows` captures loops, handoffs, sequences, and operating cycles
   - `headings.metrics_effect` captures concrete numbers, before/after signals, impact, and trade-offs
 - If a note would mostly restate the same material under both `headings.practice` and `headings.key_lessons`, keep only the stronger section and drop the other one.
+- Run a cross-section dedup pass before finalizing source-derived notes:
+  - `headings.key_theses` should explain principles, risks, distinctions, and cause-and-effect logic
+  - `headings.practice` should contain actions, documents, criteria, algorithms, and source-supported operational choices
+  - nested checklist or algorithm blocks under `headings.practice` should be short final checks or route-selection steps, not a second explanation of the surrounding practice bullets
+  - `headings.pitfalls` should name failure modes, false shortcuts, and consequences, not repeat practice bullets in negative form
+  - `headings.evidence` should record the dated source of the signal, not retell the stable-body conclusions
+- When a nested checklist or algorithm block is warranted, every bullet in that block must start with a short bold lead-in in the form `- **Short label.** Action or criterion.`
+- If a nested checklist or algorithm repeats the surrounding practice section, keep the concise check in the nested block and move the explanation, caveat, or example into the surrounding practice bullet.
 - In `lessons` notes, merge overlapping lessons instead of keeping two nearby principles with different wording.
 - In `lessons` notes, do not let the lessons collapse into headline-only bullets.
 - Each lesson must contain not only the reusable principle or recommendation itself, but also at least one short explanatory sentence that makes the lesson understandable without relying on the surrounding sections.
@@ -386,6 +394,7 @@ For checklist materialization:
   - use a short heading like `### Чеклист ...`
   - size the checklist by the amount of real decision structure in the source
   - make each item one complete and important action, criterion, or diagnostic question
+  - start every item with a short bold lead-in in the form `- **Short label.** Action or criterion.`
   - preserve decision logic and specificity instead of replacing concrete trade-offs with generic advice
   - avoid duplication between the checklist and the surrounding applied prose; keep framing, edge cases, and advice that do not fit checklist form, but do not restate the same actions or criteria in both places
   - split into multiple short checklists if one list starts mixing different decision surfaces

@@ -33,6 +33,7 @@ Those remain judgment tasks for the skill itself and for human review.
 | Inline wikilink audit set | `vault-conventions.md`, `language-normalization.md` | `audit_plain_wikilink_mentions.py`: `plain-wikilink-missing:*`, `backticked-concept:*` | generated in `test_audit_plain_wikilink_mentions.py` | generated in `test_audit_plain_wikilink_mentions.py` |
 | Required examples retained | `vault-conventions.md` | `examples.missing:*` | `after-first-pass-regression.md` | `clean-general-note.md` |
 | Source-supported practicality gate | `vault-conventions.md` | semantic workflow gate only; partial adjacent coverage through required examples, section shape, leading bold, source-scaffolding, and language checks | not fully mechanized | not fully mechanized |
+| Cross-section dedup and legacy block preservation | `vault-conventions.md`, `update-patterns.md` | semantic workflow gate only; no dedicated checker because meaningful duplication and old-block conflicts require editorial judgment | not fully mechanized | not fully mechanized |
 | Bold-leading scanability | `vault-conventions.md` | `emphasis.missing-leading-bold:*` | `after-first-pass-regression.md` | `clean-general-note.md` |
 | Partial source-scaffolding residue coverage | `vault-conventions.md` | `prose.source-scaffolding:*` | `source-scaffolding-regression.md` | `clean-general-note.md` |
 | Partial de-meta intro/source-reporting coverage | `vault-conventions.md` | `prose.de-meta:*`, plus representative `prose.source-scaffolding:*` hits for source-artifact reporting | generated in `test_note_contract_regression.py` | generated in `test_note_contract_regression.py` |
@@ -45,6 +46,7 @@ Those remain judgment tasks for the skill itself and for human review.
 
 - The checker does not prove that the chosen examples are the best examples, only that explicitly required examples were not dropped.
 - The checker does not prove that the source-supported practicality gate was semantically exhausted. That gate remains a mandatory editorial pass because fully mechanizing it would risk fake checklists, invented examples, or over-expansion of conceptual sources.
+- The checker does not prove that cross-section deduplication or old-block conflict handling was semantically correct. Those remain mandatory editorial and update-contract passes because the right action may be to preserve, ask, annotate, rewrite, or relocate material depending on user intent.
 - The checker does not prove that a concept should exist, only that once a rule requires a link or section shape, the saved note respects it.
 - The checker does not replace manual review for routing, semantic deduplication quality, or concept selection.
 - The checker does not prove that an existing-note update was evidence-only reinforcement. That decision depends on the before/after update intent and remains a mandatory update-contract pass from `update-patterns.md`.
