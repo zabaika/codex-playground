@@ -656,6 +656,67 @@ date: 2026
         self.assertIn("language.translate-term:prompt", codes)
         self.assertIn("language.translate-term:evaluation", codes)
 
+    def test_allows_eval_parenthetical_after_russian_first_mention(self) -> None:
+        content = f"""---
+title: Тест evals
+source:
+  - https://example.com
+type: general
+tags:
+  - ai-governance
+date: 2026
+---
+Короткое вступление.
+{KEY_THESES_HEADING}
+- **Тезис.** Оценочные прогоны (evals) проверяют качество, безопасность и надежность AI-агента.
+{PRACTICE_HEADING}
+- **Практика.** После первого упоминания используйте русскую форму: оценочные прогоны.
+{RELATED_NOTES_HEADING}
+[[Социотехническая продуктивность]]
+"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            fixture = Path(tmpdir) / "Тест evals.md"
+            fixture.write_text(content, encoding="utf-8")
+            violations = collect_violations(
+                fixture,
+                expect="source",
+                required_headings=[KEY_THESES_HEADING, PRACTICE_HEADING],
+                enforce_leading_bold_under=[KEY_THESES_HEADING, PRACTICE_HEADING],
+            )
+        codes = {violation.code for violation in violations}
+        self.assertNotIn("language.translate-term:evals", codes)
+        self.assertNotIn("language.unexpected-latin:evals", codes)
+
+    def test_flags_bare_evals_without_russian_first_mention(self) -> None:
+        content = f"""---
+title: Тест bare evals
+source:
+  - https://example.com
+type: general
+tags:
+  - ai-governance
+date: 2026
+---
+Короткое вступление.
+{KEY_THESES_HEADING}
+- **Тезис.** Evals проверяют качество, безопасность и надежность AI-агента.
+{PRACTICE_HEADING}
+- **Практика.** Замените термин на русскую форму.
+{RELATED_NOTES_HEADING}
+[[Социотехническая продуктивность]]
+"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            fixture = Path(tmpdir) / "Тест bare evals.md"
+            fixture.write_text(content, encoding="utf-8")
+            violations = collect_violations(
+                fixture,
+                expect="source",
+                required_headings=[KEY_THESES_HEADING, PRACTICE_HEADING],
+                enforce_leading_bold_under=[KEY_THESES_HEADING, PRACTICE_HEADING],
+            )
+        codes = {violation.code for violation in violations}
+        self.assertIn("language.translate-term:evals", codes)
+
     def test_technical_inline_code_literals_do_not_need_language_registry_entries(self) -> None:
         content = f"""---
 title: Тест inline code literals

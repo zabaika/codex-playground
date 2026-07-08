@@ -291,6 +291,32 @@ def _find_single_term_line(body: str, term: str, *, include_inline_code: bool = 
     return None
 
 
+def _is_allowed_translated_parenthetical(visible: str, term: str, start: int, end: int) -> bool:
+    translation = DISCOURAGED_TRANSLATIONS.get(term, "").strip()
+    if not translation:
+        return False
+    pattern = re.compile(
+        rf"{re.escape(translation)}\s*\(\s*{re.escape(term)}\s*\)",
+        re.IGNORECASE,
+    )
+    return any(match.start() <= start and end <= match.end() for match in pattern.finditer(visible))
+
+
+def _find_discouraged_term_line(body: str, term: str, *, include_inline_code: bool = False) -> int | None:
+    pattern = _phrase_pattern(term)
+    for idx, line in enumerate(body.splitlines(), start=1):
+        if line.strip() in CANONICAL_HEADINGS:
+            continue
+        line_without_wikilinks = _strip_technical_inline_code(WIKILINK_RE.sub("", line))
+        visible = _visible_text(line_without_wikilinks, keep_inline_code=include_inline_code)
+        visible = _strip_allowed_latin_phrases(visible, CANONICAL_LATIN_PHRASES)
+        for match in pattern.finditer(visible):
+            if _is_allowed_translated_parenthetical(visible, term, match.start(), match.end()):
+                continue
+            return idx
+    return None
+
+
 def _strip_allowed_latin_phrases(line: str, allow_phrases: set[str]) -> str:
     stripped = line
     for phrase in sorted(allow_phrases, key=len, reverse=True):
@@ -971,7 +997,7 @@ def _check_forbidden_terms(body: str, forbidden_terms: list[str]) -> list[Violat
 def _check_discouraged_latin_phrases(body: str) -> list[Violation]:
     violations: list[Violation] = []
     for phrase in sorted(DISCOURAGED_LATIN_PHRASES, key=len, reverse=True):
-        line = _find_phrase_line(body, phrase, include_inline_code=True)
+        line = _find_discouraged_term_line(body, phrase, include_inline_code=True)
         if line is not None:
             violations.append(
                 Violation(
@@ -981,7 +1007,7 @@ def _check_discouraged_latin_phrases(body: str) -> list[Violation]:
                 )
             )
     for token in sorted(DISCOURAGED_LATIN_SINGLE_TERMS):
-        line = _find_single_term_line(body, token, include_inline_code=True)
+        line = _find_discouraged_term_line(body, token, include_inline_code=True)
         if line is not None:
             violations.append(
                 Violation(

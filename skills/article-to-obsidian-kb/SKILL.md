@@ -171,6 +171,7 @@ python3 scripts/detect_source_route.py --source-file "[SOURCE_FILE]"
 9. Before saving, run the canonical tag pass from [references/vault-conventions.md](references/vault-conventions.md).
 10. Re-check final titles, tags, links, duplicate risk, and chronology against the canonical contracts before saving.
    - Re-run the canonical closing-section deduplication pass after inline wikilinks are finalized.
+   - Before creating or keeping `headings.related_notes`, apply the inline-link placement and closing-section dedup rules from [references/vault-conventions.md](references/vault-conventions.md).
    - Treat existing note titles inside wikilinks as canonical identifiers; do not translate, prune, or de-anglicize links just because their titles contain English terms.
 11. Before any destination write, run the canonical pre-write approval pass from [references/update-patterns.md](references/update-patterns.md).
 12. After each destination write, run the canonical post-write verification pass from [references/update-patterns.md](references/update-patterns.md) before continuing with more checks, searches, or reporting.

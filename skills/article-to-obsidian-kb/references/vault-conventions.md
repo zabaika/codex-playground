@@ -426,6 +426,7 @@ If the gate cannot produce more practical material without unsupported invention
 - Treat inline wikilinks as the primary graph edges.
 - Do not mechanically repeat the same note in `headings.related_notes` when it was already linked in the body.
 - Use the closing section for net-new navigation links, not as a duplicate dump of all inline references.
+- Before creating or keeping `headings.related_notes`, first try to place strong related-note links inline where the stable body already uses the related concept, method, metric, risk, or source-derived topic. Use aliases when the visible phrase should stay grammatical or shorter than the target title. Link only natural, substantive mentions; do not force links into generic words or loosely thematic phrases.
 
 ### Inline Wikilink Audit
 

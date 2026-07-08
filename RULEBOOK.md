@@ -54,6 +54,19 @@ Keep documentation split by responsibility:
 
 ### Contract and Documentation Discipline
 
+#### Skill Rule Context Loading
+
+- at the start of each new skill workflow run, load the full applicable rule context before acting; a new skill workflow run starts when a user request invokes a skill for a new substantive task, source, artifact, workflow, or external target
+- for that run, read `RULEBOOK.md`, the invoked skill's `SKILL.md`, every directly referenced rule, config, convention, template, or route file required by the selected workflow path, and any delegated skill rules when the selected skill explicitly delegates part of the workflow to another skill
+- do not treat truncated tool output as a completed rule-context read; if output is truncated, continue reading the missing ranges until the relevant file is read to EOF before proceeding
+- after the rule context is fully loaded, reuse it for follow-up turns inside the same workflow run instead of reloading everything for review, rename, rewrite, quality-check, approved-write, or final-verification requests
+- if chat context was compacted or summarized during an active skill workflow run, treat the summary as usable for rule-context continuity only when it explicitly states that the full required rule context was loaded successfully for this run and lists the relevant skill/rule files; otherwise reload the missing or uncertain rule context before continuing
+- when summarizing an active skill workflow run, include whether the full required rule context was loaded, which skill/rule files were included, and whether any required read was truncated or uncertain
+- only report rule-context loading status when there is a problem; do not announce successful rule loading or normal reuse of already loaded rules
+- if an earlier rule-context read was incomplete, truncated, uncertain, or a newly required rule file appears, state that the rule context is incomplete and load the missing rule context before continuing
+
+#### Contract Ownership and Validation
+
 - if behavior changes, update code, tests, and the relevant source-of-truth document in the same change
 - when a top-level project, tool, or workflow becomes a meaningful navigation anchor, update both the root `README.md` project index and the root `AGENTS.md` repo layout in the same change
 - when a workflow grows beyond a few pages of rules, split it into one thin entrypoint plus canonical reference docs; keep the entrypoint focused on sequencing and keep detailed policy in the deepest owning reference file
