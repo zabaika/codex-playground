@@ -11,7 +11,7 @@ The skill:
 - accepts a YouTube or Vimeo URL
 - reuses `video-transcribe-skill` to fetch subtitles or transcripts locally
 - stages a cleaned markdown transcript under project-local `scratch/`
-- detects the shared `article-to-obsidian-kb` route before note generation
+- leaves source understanding, vault search, and final route/output-shape selection to `article-to-obsidian-kb`
 - reuses the sibling note workflow for search, update-vs-create, tags, validation, and final note writing
 - stops honestly when no usable transcript can be fetched
 
@@ -49,4 +49,4 @@ Treat this skill's `config/runtime.local.toml` as optional and wrapper-only. Whe
 ## Notes
 
 - Keep this README operator-facing and brief.
-- Keep transcript, routing, and final validation rules in `SKILL.md` and inherited sibling references.
+- Keep transcript-preparation rules in this skill, and keep source understanding, routing, note writing, and final validation rules in the inherited `article-to-obsidian-kb` workflow.

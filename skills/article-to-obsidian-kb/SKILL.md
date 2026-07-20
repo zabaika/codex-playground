@@ -13,10 +13,11 @@ Turn a source article, transcript, or other long-form text into compact, Russian
 
 | File | Canonical responsibility |
 | --- | --- |
-| [SKILL.md](SKILL.md) | Workflow entrypoint: load config, choose route, search vault, decide `update vs create`, apply canonical contracts, run final passes, and format the final user-facing report. |
+| [SKILL.md](SKILL.md) | Workflow entrypoint: load config, understand the source, search vault, decide `update vs create`, choose final route/output shape, apply canonical contracts, run final passes, and format the final user-facing report. |
 | [config/note_schema.yaml](config/note_schema.yaml) | Single source of truth for canonical section-heading strings and note-shape heading identifiers used by the checker, writer, tests, and docs. |
 | [references/vault-conventions.md](references/vault-conventions.md) | Single source of truth for final note contract: frontmatter, titles, tags, language, links, spacing, closing section, and final note-shape rules. |
 | [references/update-patterns.md](references/update-patterns.md) | Single source of truth for update behavior: `update vs create`, merge rules, chronology, dated logs, and provenance preservation during rewrites. |
+| [references/source-understanding.md](references/source-understanding.md) | Route-agnostic source-understanding pass used before vault search and final route/output-shape decisions. |
 | [references/source-analysis-engineering.md](references/source-analysis-engineering.md) | Extraction contract for engineering-heavy sources. |
 | [references/source-analysis-general.md](references/source-analysis-general.md) | Extraction contract for general sources. |
 | [references/structured-note-types.md](references/structured-note-types.md) | Canonical contract for explicitly selected structured-note routes and their placement rules. |
@@ -59,22 +60,12 @@ When `structured` mode is explicitly selected, route by [references/structured-n
 2. Read the source from the provided URL or supplied text.
    - Prefer the full article body, transcript, or detailed show notes when they are available.
    - Do not draft source-derived notes from a short teaser alone when the page contains more operational detail deeper in the page.
-3. Route the source before extracting notes.
-   - When a local source file already exists, prefer the local helper first:
-
-```bash
-python3 scripts/detect_source_route.py --source-file "[SOURCE_FILE]"
-```
-
-   - As soon as the route is chosen, print it to the screen in this exact format:
-     - `Route used: engineering`
-     - or `Route used: general`
-   - Immediately print one short reason line after that:
-     - `Route reason: ...`
-   - Load [references/source-analysis-engineering.md](references/source-analysis-engineering.md) when the source is primarily about an engineering organization, platform, delivery system, developer workflow, company operating model, or other material that can plausibly produce `operating-model` notes or engineering-heavy `lessons`.
-   - Load [references/source-analysis-general.md](references/source-analysis-general.md) when the source is primarily broad expert content, business analysis, management thinking, career advice, productivity discussion, or another article or transcript that does not naturally map to an engineering operating model.
-   - If the source is ambiguous, choose the closer path and do not load both references unless the source genuinely mixes both modes.
-4. Build an internal extraction from the chosen analysis path with:
+3. Understand the source before choosing the final route.
+   - Load [references/source-understanding.md](references/source-understanding.md) and apply it as the first semantic pass.
+   - Do not print `Route used` or treat any route as final at this stage.
+   - Build vault search queries from the source-understanding pass, not from isolated surface terms in the source.
+   - Treat [scripts/detect_source_route.py](scripts/detect_source_route.py) as diagnostic or fallback-only. Use it only when source understanding remains ambiguous after vault search, or when intentionally debugging route rules. Do not let its result override the source-understanding pass, vault shortlist, or update/create decision.
+4. Build a route-agnostic internal extraction with:
    - 5-12 reusable concepts, ideas, methods, or mechanisms
    - 3-6 non-obvious insights
    - likely company, system, speaker context, or domain
@@ -219,24 +210,19 @@ PYTHONPATH=skills/article-to-obsidian-kb/scripts python3 -m unittest discover -s
 
    - Do not skip this test run just because the change is "only documentation" if that documentation changes the executable note contract.
 
-## Content Routing
+## Final Route And Output Shape
 
 - Treat `source` as the default workflow mode of this skill.
 - Switch to `structured` only when the caller explicitly selected that mode.
 - In `structured` mode, load [references/structured-note-types.md](references/structured-note-types.md) and route by `type`.
 - Do not auto-detect `structured` mode just because an input looks like JSON.
-
-- Choose the engineering path when the source contains at least two of the following:
-  - a concrete company or system context
-  - real team, platform, process, metric, tooling, or infrastructure details
-  - portable engineering lessons
-  - reusable concepts for engineering or platform work
-- Choose the general transcript path when the source is mostly:
-  - expert commentary or teaching
-  - business, management, productivity, career, or communication advice
-  - examples, cases, and recommendations without a concrete operating model
-  - broad analysis where the most useful outputs are concepts, action points, anti-patterns, or lessons rather than an engineering system description
-- Routing changes only the extraction method. It does not change the Obsidian rules for title formation, English-only tags, language cleanup, vault search, deduplication, note updates, or final markdown structure.
+- Choose the final route only after source understanding, vault search, and update/create decision.
+- Treat the final route as report metadata and an analysis-reference selector, not as an early constraint on source understanding, vault search, or note shape.
+- Use `engineering` only when the retained note signal is primarily about an engineering organization, developer workflow, platform, infrastructure, tooling, delivery system, or concrete operating model of an engineering or product-development system.
+- Use `general` when the retained note signal is primarily about a method, framework, facilitation practice, TOC thinking tool, communication or decision technique, management material, career advice, productivity practice, or examples that illustrate a broader method.
+- Engineering vocabulary inside examples does not make the source `engineering`. A transcript can mention backlog, deploy, developers, product, customers, or code and still be `general` when those terms are examples inside a broader method.
+- After the final route/output shape is clear, load [references/source-analysis-engineering.md](references/source-analysis-engineering.md) or [references/source-analysis-general.md](references/source-analysis-general.md) only if that reference still helps draft or merge the selected notes.
+- The final route does not change the Obsidian rules for title formation, English-only tags, language cleanup, vault search, deduplication, note updates, or final markdown structure.
 - Do not force an `operating-model` note when the source does not actually explain how a company or system works.
 - Do not mirror the general-analysis sections one to one in the saved note. Use them to decide whether the vault needs:
   - a `lessons` note
@@ -380,7 +366,7 @@ PYTHONPATH=skills/article-to-obsidian-kb/scripts python3 -m unittest discover -s
 - Treat verbs like `append`, `merge`, `normalize`, `clean up`, and `update` as insufficient on their own when the operation has more than one plausible interpretation.
 - When the intended behavior depends on exact position or ordering, define the insertion point and order explicitly and follow the stricter rule from the references instead of improvising.
 - When migrating a legacy note into the current schema, preserve surviving frontmatter provenance such as `source` across the rewrite regardless of whether the final note is source-derived or `concept`.
-- Use the chosen analysis reference only to extract signal from the source:
+- Use the chosen analysis reference only after source understanding, vault search, update/create decision, and final route/output-shape choice:
   - [references/source-analysis-engineering.md](references/source-analysis-engineering.md)
   - [references/source-analysis-general.md](references/source-analysis-general.md)
 - Before finalizing the note structure, run a specificity pass on the draft:
@@ -451,7 +437,8 @@ PYTHONPATH=skills/article-to-obsidian-kb/scripts python3 -m unittest discover -s
 - Before listing touched files, report the chosen route in one short line:
   - `Route used: engineering`
   - or `Route used: general`
-- Add one short reason sentence after the route so the user can understand why that path was chosen.
+- Add one short reason sentence after the route so the user can understand why that final route/output shape was chosen.
+- Derive this route from the final retained note signal and actual touched-file ledger, not from an early helper guess.
 - Do not write the route or the reason into any Obsidian note.
 - Structure the final response in separate blocks in this order:
   - `Созданы` for all new source-derived notes

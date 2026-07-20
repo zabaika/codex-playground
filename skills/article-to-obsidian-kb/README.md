@@ -10,7 +10,7 @@ The skill:
 
 - reads a source URL or provided long-form text
 - defaults to `source` mode unless a structured mode is explicitly requested
-- routes the source through an engineering or general analysis path
+- understands the source before choosing the final engineering/general route and output shape
 - searches existing note roots before drafting anything
 - prefers updating matching notes over creating duplicates
 - writes source-derived notes and concept notes with shared title, tag, link, and update rules
@@ -54,17 +54,18 @@ Treat the repository copy of `config/runtime.local.toml` as the single editable 
 - `scripts/note_schema.py`: shared schema accessor for local Python consumers
 - `scripts/language_terms.py`: shared language-term registry accessor for local Python consumers
 - `scripts/check_note_contract.py`: mechanical note-contract checker
-- `scripts/detect_source_route.py`: source routing helper
+- `scripts/detect_source_route.py`: diagnostic or fallback helper for route checks, not the normal workflow owner
 - `scripts/write_structured_note.py`: explicit structured-note writer for non-source payloads such as `council-verdict`
 - `templates/council-verdict.md.tmpl`: mechanical render-layout for the `council-verdict` structured note
 
 ## References
 
 - `references/structured-note-types.md`: defines explicit structured-note modes and the current `council-verdict` route
+- `references/source-understanding.md`: defines the route-agnostic source-understanding pass before vault search and final route/output-shape choice
 - `references/vault-conventions.md`: defines the canonical final note contract for frontmatter, titles, tags, links, spacing, and closing sections
 - `references/update-patterns.md`: defines update-vs-create behavior, merge rules, chronology, and post-write verification
-- `references/source-analysis-engineering.md`: defines the extraction path for engineering-heavy sources
-- `references/source-analysis-general.md`: defines the extraction path for general sources
+- `references/source-analysis-engineering.md`: defines the extraction reference for engineering-heavy sources after final route/output-shape choice
+- `references/source-analysis-general.md`: defines the extraction reference for general sources after final route/output-shape choice
 - `references/language-normalization.md`: defines language cleanup and normalization rules for final note text
 - `references/test-matrix.md`: explains which note-contract rule families are expected to stay mechanically test-covered
 

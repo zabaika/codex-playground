@@ -48,21 +48,21 @@ python3 scripts/prepare_video_transcript.py --url "[VIDEO_URL]"
    - reuse the sibling local config for transcript settings unless this skill explicitly overrides the path
    - save or reuse the subtitle file produced by the transcript skill
    - create a cleaned markdown transcript under a project-local `scratch/` path
-   - detect the `article-to-obsidian-kb` route for the prepared transcript
-   - let `detect_source_route.py` print the chosen route immediately when it is detected
-   - print the prepared transcript path, subtitle path, engine used, and selected subtitle language without repeating the route block
+   - print only transcript-preparation diagnostics: prepared transcript path, subtitle path, engine, selected subtitle language, configs/logs; do not detect, choose, or print the `article-to-obsidian-kb` route
 4. If transcript extraction fails or no subtitle file path is reported, stop.
 5. Do not retry with browser cookies unless the user explicitly approves that path for this task.
 6. After the helper succeeds, read the prepared markdown transcript as the source text.
 7. Then load the sibling article workflow in this order:
    - `../article-to-obsidian-kb/SKILL.md`
    - `../article-to-obsidian-kb/config/runtime.example.toml`
-   - `../article-to-obsidian-kb/scripts/detect_source_route.py`
+   - `../article-to-obsidian-kb/references/source-understanding.md`
    - `../article-to-obsidian-kb/references/vault-conventions.md`
    - `../article-to-obsidian-kb/references/language-normalization.md`
    - `../article-to-obsidian-kb/references/update-patterns.md`
+   - any `../article-to-obsidian-kb/references/source-analysis-*.md` file that the sibling workflow selects after source understanding, vault search, and update/create decision
 8. Apply the `article-to-obsidian-kb` workflow to the prepared transcript, not to the raw subtitle file.
    - inherit the sibling workflow completely, not partially
+   - let `article-to-obsidian-kb` own source understanding, vault search, update/create decision, final route/output shape, validation, and final report
    - do not stop after note drafting or note updates if the sibling workflow still requires final validation passes
    - when `article-to-obsidian-kb` requires `note-compliance pass` and `regression-sweep pass`, execute both of them for every touched note in this wrapper flow too
    - do not treat the video wrapper as a shortcut path that may skip final contract validation because the source came from a transcript

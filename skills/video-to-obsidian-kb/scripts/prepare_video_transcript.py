@@ -24,8 +24,6 @@ DEFAULT_TRANSCRIBE_CONFIG_FROM_SKILL = "../../video-transcribe-skill/config/runt
 DEFAULT_TRANSCRIBE_CONFIG_FROM_PROJECT = "skills/video-transcribe-skill/config/runtime.local.toml"
 DEFAULT_ARTICLE_CONFIG_FROM_SKILL = "../../article-to-obsidian-kb/config/runtime.local.toml"
 DEFAULT_ARTICLE_CONFIG_FROM_PROJECT = "skills/article-to-obsidian-kb/config/runtime.local.toml"
-DEFAULT_ARTICLE_ROUTER_FROM_SKILL = "../../article-to-obsidian-kb/scripts/detect_source_route.py"
-DEFAULT_ARTICLE_ROUTER_FROM_PROJECT = "skills/article-to-obsidian-kb/scripts/detect_source_route.py"
 DEFAULT_PREPARED_DIR = "scratch/video-to-obsidian-kb"
 DEFAULT_LOG_FILE = "scratch/video-to-obsidian-kb.log"
 DEFAULT_TRANSCRIBE_LOG_FILE = "scratch/video-transcribe.log"
@@ -259,16 +257,6 @@ def lookup_transcribe_metadata_for_subtitle(subtitle_path: Path, transcribe_log_
     return {}
 
 
-def parse_json_output(text: str) -> dict:
-    stripped = text.strip()
-    if not stripped:
-        return {}
-    try:
-        return json.loads(stripped)
-    except json.JSONDecodeError as exc:
-        raise SystemExit(f"Could not parse JSON output from helper: {exc}") from exc
-
-
 def infer_title(subtitle_path: Path, video_id: str) -> str:
     name = subtitle_path.name
     suffixes = "".join(subtitle_path.suffixes)
@@ -364,11 +352,6 @@ def build_transcript_markdown(
     return "\n".join(lines)
 
 
-def print_route_block(route_used: str, route_reason: str) -> None:
-    print(f"Route used: {route_used}")
-    print(f"Route reason: {route_reason}")
-
-
 def ensure_article_config_is_ready(article_config_path: Path) -> None:
     if not article_config_path.exists():
         raise SystemExit(
@@ -442,18 +425,6 @@ def prepare_transcript_from_subtitle(
     return prepared_path
 
 
-def run_article_router(prepared_path: Path, router_path: Path, title: str) -> subprocess.CompletedProcess[str]:
-    if not router_path.exists():
-        raise SystemExit(f"Article route detector is missing: {router_path}")
-    return subprocess.run(
-        [sys.executable, str(router_path), "--source-file", str(prepared_path), "--title", title, "--json"],
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=120,
-    )
-
-
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Prepare a cleaned markdown transcript for video-to-obsidian-kb.",
@@ -505,13 +476,6 @@ def main() -> int:
     )
     ensure_article_config_is_ready(article_config_path)
     transcribe_runner = transcribe_config_path.parent.parent / "scripts" / "run_video_transcribe.py"
-    article_router_path = resolve_optional_config(
-        "",
-        config_dir,
-        DEFAULT_ARTICLE_ROUTER_FROM_SKILL,
-        DEFAULT_ARTICLE_ROUTER_FROM_PROJECT,
-        resolved_project_root,
-    )
 
     append_log(current_log_path, "")
     append_log(current_log_path, f"=== run started {datetime.now(timezone.utc).isoformat()} ===")
@@ -564,36 +528,12 @@ def main() -> int:
         append_log(current_log_path, f"Selected subtitle language: {selected_language or 'unknown'}")
         append_log(current_log_path, f"Engine used: {engine_used or 'unknown'}")
     append_log(current_log_path, f"Prepared transcript file: {prepared_path}")
-    prepared_title = infer_title(subtitle_path, video_id)
-
-    route_result = run_article_router(prepared_path, article_router_path, prepared_title)
-    route_stdout = route_result.stdout or ""
-    route_stderr = route_result.stderr or ""
-    route_json_log_output = route_stdout.strip()
-    route_log_output = route_stderr.strip()
-    if route_json_log_output:
-        append_log(current_log_path, route_json_log_output)
-    if route_log_output:
-        sys.stderr.write(route_stderr if route_stderr.endswith("\n") else f"{route_stderr}\n")
-        append_log(current_log_path, route_log_output)
-    elif not route_json_log_output:
-        append_log(current_log_path, "No route output.")
-    if route_result.returncode != 0:
-        raise SystemExit(
-            "Route detection failed before note generation.\n"
-            f"Route detector output:\n{(route_stdout + ('\n' if route_stdout and route_stderr else '') + route_stderr).strip() or 'No additional output.'}"
-        )
-    route_payload = parse_json_output(route_stdout)
-    route_used = str(route_payload.get("route_used", "")).strip() or "unknown"
-    route_reason = str(route_payload.get("route_reason", "")).strip() or "Route detector returned no reason"
 
     summary = {
         "prepared_transcript_file": str(prepared_path.resolve()),
         "subtitle_file": str(subtitle_path.resolve()),
         "engine_used": engine_used or "unknown",
         "selected_subtitle_language": selected_language or "unknown",
-        "route_used": route_used,
-        "route_reason": route_reason,
         "article_config": str(article_config_path.resolve()),
         "transcribe_config": str(transcribe_config_path.resolve()),
     }
@@ -602,7 +542,6 @@ def main() -> int:
         print(summary_json)
         return 0
 
-    print_route_block(route_used, route_reason)
     print(f"Prepared transcript file: {summary['prepared_transcript_file']}")
     print(f"Subtitle file: {summary['subtitle_file']}")
     print(f"Engine used: {summary['engine_used']}")
