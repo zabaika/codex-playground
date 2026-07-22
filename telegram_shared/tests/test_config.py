@@ -21,7 +21,8 @@ class SharedConfigTests(unittest.TestCase):
 
     def test_resolve_agent_stats_row_limit_reads_shared_bridge_config(self) -> None:
         self.assertEqual(resolve_agent_stats_row_limit({"bridge": {"agent_stats_row_limit": "150"}}), 150)
-        self.assertEqual(resolve_agent_stats_row_limit({"bridge": {"agent_stats_row_limit": "5"}}), 20)
+        self.assertEqual(resolve_agent_stats_row_limit({"bridge": {"agent_stats_row_limit": "14"}}), 14)
+        self.assertEqual(resolve_agent_stats_row_limit({"bridge": {"agent_stats_row_limit": "0"}}), 1)
 
     def test_resolve_bridge_worker_process_timeout_seconds_reads_shared_bridge_config(self) -> None:
         self.assertEqual(

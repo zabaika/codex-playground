@@ -8,7 +8,6 @@ import sqlite3
 import socket
 import subprocess
 import sys
-import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from html import unescape
@@ -26,6 +25,8 @@ from telegram_shared import secrets as shared_secrets
 from telegram_shared.config import get_config_value as shared_get_config_value
 from telegram_shared.config import load_runtime_config as shared_load_runtime_config
 from telegram_shared.errors import SecretResolutionError
+from telegram_shared.openai_api import OpenAIRequestError
+from telegram_shared.openai_api import post_responses
 from telegram_shared.openai_usage import OpenAIUsage
 from telegram_shared.openai_usage import PromptCacheInfo
 from telegram_shared.openai_usage import build_prompt_cache_info as shared_build_prompt_cache_info
@@ -44,7 +45,6 @@ RUNTIME_LOCAL_FILE = CONFIG_DIR / "runtime.local.toml"
 DATA_DIR = BASE_DIR / "data"
 STATE_FILE = DATA_DIR / "agent_sessions.local.json"
 DB_FILE = DATA_DIR / "telegram_agent.sqlite3"
-OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses"
 DEFAULT_AGENT_MODEL = "gpt-5.4-mini"
 DEFAULT_MAX_TOOL_ROUNDS = 8
 DEFAULT_WEB_SEARCH_LIMIT = 5
@@ -54,9 +54,19 @@ DEFAULT_MAX_FILE_LINES = 400
 DEFAULT_MAX_DIRECTORY_ENTRIES = 200
 DEFAULT_MAX_TOOL_OUTPUT_CHARS = 50000
 DEFAULT_OPENAI_TIMEOUT_SECONDS = 180
+DEFAULT_OPENAI_RETRY_ATTEMPTS = 3
+DEFAULT_OPENAI_RETRY_BACKOFF_SECONDS = 1
 DEFAULT_LOCAL_SEARCH_TIMEOUT_SECONDS = 30
 DEFAULT_WEB_SEARCH_TIMEOUT_SECONDS = 30
 DEFAULT_FETCH_URL_TIMEOUT_SECONDS = 30
+AGENT_PROMPT_PREFIX_TEMPLATE = (
+    "Telegram task context:\n"
+    "Telegram user: {username}\n"
+    "Allowed local roots:\n{roots}"
+)
+AGENT_USER_PROMPT_TEMPLATE = "{prefix}\n\nUser task:\n{prompt}"
+AGENT_USER_PROMPT_VERSION_TEMPLATE = f"{AGENT_PROMPT_PREFIX_TEMPLATE}\n\nUser task:\n{{prompt}}"
+AGENT_TOOL_OUTPUT_PROMPT_VERSION_TEMPLATE = "function_call_output JSON"
 OP_REFERENCE_PREFIX = shared_secrets.OP_REFERENCE_PREFIX
 _SECRET_CACHE = shared_secrets._SECRET_CACHE
 
@@ -75,6 +85,7 @@ CREATE TABLE IF NOT EXISTS ai_usage_log (
     response_id TEXT,
     prompt_cache_key TEXT,
     prompt_cache_retention TEXT,
+    prompt_version_hash TEXT,
     request_index INTEGER,
     message_count INTEGER,
     system_chars INTEGER,
@@ -88,9 +99,14 @@ CREATE TABLE IF NOT EXISTS ai_usage_log (
     prompt_text TEXT,
     input_tokens INTEGER,
     cached_input_tokens INTEGER,
+    cache_write_tokens INTEGER,
     output_tokens INTEGER,
+    reasoning_tokens INTEGER,
+    output_chars INTEGER,
     total_tokens INTEGER,
     latency_ms INTEGER,
+    response_status TEXT,
+    incomplete_reason TEXT,
     status TEXT NOT NULL,
     error TEXT
 );
@@ -225,6 +241,18 @@ def resolve_runtime() -> dict[str, Any]:
             min_value=30,
             max_value=600,
         ),
+        "openai_retry_attempts": parse_int(
+            get_config_value(config, "agent", "openai_retry_attempts"),
+            DEFAULT_OPENAI_RETRY_ATTEMPTS,
+            min_value=1,
+            max_value=5,
+        ),
+        "openai_retry_backoff_seconds": parse_int(
+            get_config_value(config, "agent", "openai_retry_backoff_seconds"),
+            DEFAULT_OPENAI_RETRY_BACKOFF_SECONDS,
+            min_value=0,
+            max_value=60,
+        ),
         "web_search_limit": parse_int(get_config_value(config, "agent", "web_search_limit"), DEFAULT_WEB_SEARCH_LIMIT, min_value=1, max_value=10),
         "fetch_char_limit": parse_int(get_config_value(config, "agent", "fetch_char_limit"), DEFAULT_FETCH_CHAR_LIMIT, min_value=1000, max_value=30000),
         "local_search_timeout_seconds": parse_int(
@@ -299,6 +327,17 @@ def connect_db() -> sqlite3.Connection:
 
 def init_db(conn: sqlite3.Connection) -> None:
     conn.executescript(SCHEMA_SQL)
+    columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(ai_usage_log)")}
+    for column_name, column_type in {
+        "prompt_version_hash": "TEXT",
+        "cache_write_tokens": "INTEGER",
+        "reasoning_tokens": "INTEGER",
+        "output_chars": "INTEGER",
+        "response_status": "TEXT",
+        "incomplete_reason": "TEXT",
+    }.items():
+        if column_name not in columns:
+            conn.execute(f"ALTER TABLE ai_usage_log ADD COLUMN {column_name} {column_type}")
     conn.commit()
 
 
@@ -674,53 +713,28 @@ def api_request(
     api_key: str,
     *,
     timeout_seconds: int = DEFAULT_OPENAI_TIMEOUT_SECONDS,
+    retry_attempts: int = DEFAULT_OPENAI_RETRY_ATTEMPTS,
+    retry_backoff_seconds: int = DEFAULT_OPENAI_RETRY_BACKOFF_SECONDS,
     urlopen_func=request.urlopen,
 ) -> dict[str, Any]:
-    started_at = time.perf_counter()
-    req = request.Request(
-        OPENAI_RESPONSES_URL,
-        data=json.dumps(payload).encode("utf-8"),
-        headers={
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {api_key}",
-        },
-        method="POST",
-    )
     try:
-        # Fixed OpenAI HTTPS endpoint built in code.
-        with urlopen_func(req, timeout=timeout_seconds) as resp:
-            response = json.loads(resp.read().decode("utf-8"))
-    except error.HTTPError as exc:
-        detail = ""
-        try:
-            body = exc.read().decode("utf-8", errors="replace").strip()
-        except Exception:
-            body = ""
-        if body:
-            try:
-                parsed = json.loads(body)
-            except json.JSONDecodeError:
-                detail = truncate_text(body, 500)
-            else:
-                message = (
-                    parsed.get("error", {}).get("message")
-                    if isinstance(parsed, dict) and isinstance(parsed.get("error"), dict)
-                    else ""
-                )
-                if isinstance(message, str) and message.strip():
-                    detail = truncate_text(message.strip(), 500)
-                else:
-                    detail = truncate_text(body, 500)
-        suffix = f": {detail}" if detail else ""
-        raise SystemExit(f"OpenAI API HTTP {exc.code} while running telegram agent worker{suffix}") from exc
-    except error.URLError as exc:
-        raise SystemExit("OpenAI API request failed while running telegram agent worker.") from exc
-    response["_latency_ms"] = max(0, int((time.perf_counter() - started_at) * 1000))
+        openai_response = post_responses(
+            payload,
+            api_key,
+            timeout_seconds=timeout_seconds,
+            retry_attempts=retry_attempts,
+            retry_backoff_seconds=retry_backoff_seconds,
+            urlopen_func=urlopen_func,
+        )
+    except OpenAIRequestError as exc:
+        raise SystemExit(f"OpenAI API request failed while running telegram agent worker: {exc}") from exc
+    response = openai_response.response
+    response["_latency_ms"] = openai_response.latency_ms
     return response
 
 
-def extract_usage(response: dict[str, Any]) -> OpenAIUsage:
-    return shared_extract_usage(response)
+def extract_usage(response: dict[str, Any], *, output_chars: int | None = None) -> OpenAIUsage:
+    return shared_extract_usage(response, output_chars=output_chars)
 
 
 def common_prefix_length(left: str, right: str) -> int:
@@ -747,15 +761,17 @@ def build_prompt_cache_key(*, model: str, scope: str, chat_id: str, allowed_root
 
 def build_agent_prompt_prefix(username: str, allowed_roots: list[Path]) -> str:
     roots_block = "\n".join(f"- {root}" for root in allowed_roots)
-    return (
-        "Telegram task context:\n"
-        f"Telegram user: {username or 'unknown'}\n"
-        f"Allowed local roots:\n{roots_block}"
+    return AGENT_PROMPT_PREFIX_TEMPLATE.format(
+        username=username or "unknown",
+        roots=roots_block,
     )
 
 
 def build_agent_prompt_text(prompt: str, username: str, allowed_roots: list[Path]) -> str:
-    return f"{build_agent_prompt_prefix(username, allowed_roots)}\n\nUser task:\n{prompt.strip()}"
+    return AGENT_USER_PROMPT_TEMPLATE.format(
+        prefix=build_agent_prompt_prefix(username, allowed_roots),
+        prompt=prompt.strip(),
+    )
 
 
 def build_round_log_text(
@@ -809,12 +825,27 @@ def build_round_prompt_text(
     return prompt_text, "function_call_output", len(current_input)
 
 
-def build_prompt_cache_info(*, model: str, cache_key: str, system_instructions: str, prompt_text: str, shared_prefix: str) -> PromptCacheInfo:
+def build_round_prompt_version_text(round_index: int) -> str:
+    if round_index == 1:
+        return AGENT_USER_PROMPT_VERSION_TEMPLATE
+    return AGENT_TOOL_OUTPUT_PROMPT_VERSION_TEMPLATE
+
+
+def build_prompt_cache_info(
+    *,
+    model: str,
+    cache_key: str,
+    system_instructions: str,
+    prompt_text: str,
+    shared_prefix: str,
+    prompt_version_text: str,
+) -> PromptCacheInfo:
     return shared_build_prompt_cache_info(
         cache_key=cache_key,
         system_instructions=system_instructions,
         prompt_text=prompt_text,
         shared_prefix=shared_prefix,
+        prompt_version_text=prompt_version_text,
     )
 
 
@@ -969,6 +1000,7 @@ def run_agent(prompt: str, chat_id: str, username: str) -> dict[str, Any]:
                 system_instructions=runtime["system_instructions"],
                 prompt_text=prompt_text,
                 shared_prefix=shared_prefix,
+                prompt_version_text=build_round_prompt_version_text(round_index),
             )
             payload: dict[str, Any] = {
                 "model": runtime["model"],
@@ -985,6 +1017,8 @@ def run_agent(prompt: str, chat_id: str, username: str) -> dict[str, Any]:
                     payload,
                     runtime["openai_api_key"],
                     timeout_seconds=runtime["openai_timeout_seconds"],
+                    retry_attempts=runtime["openai_retry_attempts"],
+                    retry_backoff_seconds=runtime["openai_retry_backoff_seconds"],
                 )
             except SystemExit as exc:
                 log_openai_usage(
@@ -1001,7 +1035,8 @@ def run_agent(prompt: str, chat_id: str, username: str) -> dict[str, Any]:
                     store_prompt_text=runtime["store_prompt_text"],
                 )
                 raise
-            usage = extract_usage(response)
+            response_text = extract_output_text(response)
+            usage = extract_usage(response, output_chars=len(response_text))
             response_id_to_continue = str(response.get("id", "")).strip() or response_id_to_continue
             log_openai_usage(
                 log_conn,
@@ -1019,7 +1054,7 @@ def run_agent(prompt: str, chat_id: str, username: str) -> dict[str, Any]:
             )
             calls = extract_function_calls(response)
             if not calls:
-                reply_text = extract_output_text(response)
+                reply_text = response_text
                 if not reply_text:
                     raise SystemExit("OpenAI API returned an empty agent response.")
                 if chat_id and response_id_to_continue:

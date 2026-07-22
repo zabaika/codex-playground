@@ -619,6 +619,7 @@ class TelegramAgentBridgeTests(unittest.TestCase):
                         response_id TEXT,
                         prompt_cache_key TEXT,
                         prompt_cache_retention TEXT,
+                        prompt_version_hash TEXT,
                         request_index INTEGER,
                         message_count INTEGER,
                         system_chars INTEGER,
@@ -632,6 +633,11 @@ class TelegramAgentBridgeTests(unittest.TestCase):
                         prompt_text TEXT,
                         input_tokens INTEGER,
                         cached_input_tokens INTEGER,
+                        cache_write_tokens INTEGER,
+                        reasoning_tokens INTEGER,
+                        output_chars INTEGER,
+                        response_status TEXT,
+                        incomplete_reason TEXT,
                         output_tokens INTEGER,
                         total_tokens INTEGER,
                         latency_ms INTEGER,
@@ -689,6 +695,7 @@ class TelegramAgentBridgeTests(unittest.TestCase):
                         response_id TEXT,
                         prompt_cache_key TEXT,
                         prompt_cache_retention TEXT,
+                        prompt_version_hash TEXT,
                         request_index INTEGER,
                         message_count INTEGER,
                         system_chars INTEGER,
@@ -702,6 +709,11 @@ class TelegramAgentBridgeTests(unittest.TestCase):
                         prompt_text TEXT,
                         input_tokens INTEGER,
                         cached_input_tokens INTEGER,
+                        cache_write_tokens INTEGER,
+                        reasoning_tokens INTEGER,
+                        output_chars INTEGER,
+                        response_status TEXT,
+                        incomplete_reason TEXT,
                         output_tokens INTEGER,
                         total_tokens INTEGER,
                         latency_ms INTEGER,
@@ -734,6 +746,11 @@ class TelegramAgentBridgeTests(unittest.TestCase):
         self.assertEqual(summary["global"]["total_requests"], 2)
         self.assertEqual(summary["global"]["input_tokens"], 170)
         self.assertEqual(summary["global"]["cached_input_tokens"], 10)
+        self.assertIsNone(summary["global"]["prompt_versions"])
+        self.assertIsNone(summary["global"]["cache_write_tokens"])
+        self.assertIsNone(summary["global"]["reasoning_tokens"])
+        self.assertIsNone(summary["global"]["output_chars"])
+        self.assertIsNone(summary["global"]["incomplete_responses"])
 
     def test_format_agent_usage_summary_includes_cached_share(self) -> None:
         text = telegram_agent_bridge.format_agent_usage_summary(
@@ -744,10 +761,12 @@ class TelegramAgentBridgeTests(unittest.TestCase):
                     "error_requests": 1,
                     "cached_requests": 2,
                     "cache_keys": 1,
+                    "prompt_versions": 1,
                     "first_request_at": "2026-03-23T10:00:00+00:00",
                     "last_request_at": "2026-03-23T10:10:00+00:00",
                     "input_tokens": 200,
                     "cached_input_tokens": 50,
+                    "cache_write_tokens": 0,
                     "output_tokens": 40,
                 },
                 "filtered": {
@@ -761,6 +780,7 @@ class TelegramAgentBridgeTests(unittest.TestCase):
                         "status": "ok",
                         "input_tokens": 100,
                         "cached_input_tokens": 25,
+                        "cache_write_tokens": 0,
                         "output_tokens": 15,
                     }
                 ],
@@ -769,12 +789,15 @@ class TelegramAgentBridgeTests(unittest.TestCase):
             chat_id="42",
         )
         self.assertIn("cached input tokens: 50", text)
+        self.assertIn("cache write tokens: 0", text)
+        self.assertIn("prompt versions: 1", text)
         self.assertIn("cached share of input tokens: 25.0%", text)
         self.assertIn("Agent AI usage:", text)
         self.assertNotIn("Current Telegram chat (42):", text)
         self.assertIn("analysis window: latest 200 requests", text)
         self.assertIn("Latest rounds:", text)
-        self.assertIn("round_2: ok, input=100, cached=25 (25.0%), output=15", text)
+        self.assertIn("round_2: ok, input=100, cached=25 (25.0%), cache-writes=0, output=15", text)
+        self.assertNotIn("unavailable", text)
 
     def test_format_agent_usage_summary_can_include_current_chat_section(self) -> None:
         text = telegram_agent_bridge.format_agent_usage_summary(
@@ -802,6 +825,7 @@ class TelegramAgentBridgeTests(unittest.TestCase):
         )
         self.assertIn("Current Telegram chat (42):", text)
         self.assertIn("cached share of input tokens: 25.0%", text)
+        self.assertNotIn("unavailable", text)
 
     def test_handle_agent_command_serves_agent_stats_without_worker(self) -> None:
         update = {

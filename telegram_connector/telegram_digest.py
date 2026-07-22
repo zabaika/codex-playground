@@ -4,6 +4,7 @@ import contextlib
 import html
 import json
 import os
+import random
 import re
 import sys
 import tomllib
@@ -13,7 +14,7 @@ from pathlib import Path
 import time
 from types import SimpleNamespace
 from typing import Any, Callable
-from urllib import error, request
+from urllib import request
 
 MODULE_DIR = Path(__file__).resolve().parent
 REPO_ROOT = MODULE_DIR.parent
@@ -30,6 +31,8 @@ from telegram_shared.openai_usage import common_prefix_length as shared_common_p
 from telegram_shared.openai_usage import extract_usage as shared_extract_usage
 from telegram_shared.openai_usage import hash_cache_key as shared_hash_cache_key
 from telegram_shared.openai_usage import log_openai_usage as shared_log_openai_usage
+from telegram_shared.openai_api import OpenAIRequestError
+from telegram_shared.openai_api import post_responses
 from telegram_shared.bot_api import is_retryable_bot_api_error as shared_is_retryable_bot_api_error
 
 
@@ -41,12 +44,17 @@ DIGEST_LAST_ATTEMPT_LOG = LAUNCHD_LOG_DIR / "digest.last_attempt.json"
 DEFAULT_OPENAI_DIGEST_MAX_OUTPUT_TOKENS = 1200
 DEFAULT_OPENAI_DIGEST_TIMEOUT_SECONDS = 120
 DEFAULT_OPENAI_DIGEST_RETRY_ATTEMPTS = 3
+DEFAULT_OPENAI_DIGEST_RETRY_BACKOFF_SECONDS = 1.0
+VALID_OPENAI_REASONING_EFFORTS = frozenset({"none", "low", "medium", "high", "xhigh", "max"})
+VALID_OPENAI_REASONING_SUMMARIES = frozenset({"auto", "concise", "detailed", "none"})
 OPENAI_DIGEST_RETRY_ATTEMPTS = DEFAULT_OPENAI_DIGEST_RETRY_ATTEMPTS
 DEFAULT_PROCESS_CONFIG = common_process.load_process_config()
 DEFAULT_DIGEST_SYNC_TOTAL_TIMEOUT_SECONDS = 1800
+PROMPT_CACHE_BREAKPOINT_PLACEHOLDER = "{cache_breakpoint_marker}"
 DIGEST_PROMPT_REQUIRED_KEYS = (
     "system_instructions",
     "shared_prompt_prefix",
+    "cache_breakpoint_marker",
     "single_digest_template",
     "batch_digest_template",
     "final_digest_template",
@@ -55,6 +63,9 @@ MAIN_TOPICS_DAY_HEADING = "Главные темы дня"
 MOST_POPULAR_HEADING = "Наиболее популярное"
 OPEN_QUESTIONS_HEADING = "Незакрытые вопросы/продолжения"
 QUESTION_ANSWER_LINKS_HEADING = "Связки вопрос-ответ/развитие темы"
+OUTPUT_TOKEN_LIMIT_EMPTY_RESPONSE_TEXT = (
+    "ИИ не сформировал видимый текст до достижения лимита выходных токенов."
+)
 POPULAR_LINK_LINE_RE = re.compile(
     r"^(?P<prefix>(?:\d+\.\s+|[-•]\s+)?)"
     r"(?P<link><?https?://\S+>?)"
@@ -84,13 +95,17 @@ class DigestConfig:
     use_ocr: bool
     system_instructions: str
     shared_prompt_prefix: str
+    cache_breakpoint_marker: str
     single_prompt_template: str
     batch_prompt_template: str
     final_prompt_template: str
     openai_api_key: str
+    openai_reasoning_effort: str
+    openai_reasoning_summary: str
     openai_max_output_tokens: int = DEFAULT_OPENAI_DIGEST_MAX_OUTPUT_TOKENS
     openai_timeout_seconds: int = DEFAULT_OPENAI_DIGEST_TIMEOUT_SECONDS
     openai_retry_attempts: int = DEFAULT_OPENAI_DIGEST_RETRY_ATTEMPTS
+    openai_retry_backoff_seconds: float = DEFAULT_OPENAI_DIGEST_RETRY_BACKOFF_SECONDS
     store_prompt_text: bool = False
 
 
@@ -123,6 +138,9 @@ class OpenAIResult:
     response_id: str | None
     text: str
     usage: OpenAIUsage
+
+
+OpenAIDigestRequestError = OpenAIRequestError
 
 
 class TeeStream:
@@ -236,10 +254,16 @@ def load_digest_prompts(config: dict[str, Any], *, base_dir: Path | None = None)
     if missing:
         missing_keys = ", ".join(f"digest_prompts.{key}" for key in missing)
         raise SystemExit(f"Missing {missing_keys} in digest prompt file: {prompt_file}")
-    return {
+    prompts = {
         key: history_client.get_config_value(data, "digest_prompts", key)
         for key in DIGEST_PROMPT_REQUIRED_KEYS
     }
+    for template_key in ("single_digest_template", "batch_digest_template", "final_digest_template"):
+        if prompts[template_key].count(PROMPT_CACHE_BREAKPOINT_PLACEHOLDER) != 1:
+            raise SystemExit(
+                f"{template_key} must contain {PROMPT_CACHE_BREAKPOINT_PLACEHOLDER} exactly once: {prompt_file}"
+            )
+    return prompts
 
 
 def resolve_digest_config(config: dict[str, Any]) -> DigestConfig:
@@ -266,11 +290,16 @@ def resolve_digest_config(config: dict[str, Any]) -> DigestConfig:
     raw_openai_max_output_tokens = str(
         shared_ai_section.get("max_output_tokens", DEFAULT_OPENAI_DIGEST_MAX_OUTPUT_TOKENS)
     ).strip()
+    openai_reasoning_effort = str(shared_ai_section.get("reasoning_effort", "")).strip().lower()
+    openai_reasoning_summary = str(shared_ai_section.get("reasoning_summary", "")).strip().lower()
     raw_openai_timeout_seconds = str(
         shared_ai_section.get("openai_timeout_seconds", DEFAULT_OPENAI_DIGEST_TIMEOUT_SECONDS)
     ).strip()
     raw_openai_retry_attempts = str(
         shared_ai_section.get("openai_retry_attempts", DEFAULT_OPENAI_DIGEST_RETRY_ATTEMPTS)
+    ).strip()
+    raw_openai_retry_backoff_seconds = str(
+        shared_ai_section.get("openai_retry_backoff_seconds", DEFAULT_OPENAI_DIGEST_RETRY_BACKOFF_SECONDS)
     ).strip()
     try:
         min_messages_for_ai = max(0, int(raw_min_messages_for_ai))
@@ -279,13 +308,28 @@ def resolve_digest_config(config: dict[str, Any]) -> DigestConfig:
         sync_total_timeout_seconds = max(1, int(raw_sync_total_timeout_seconds))
         openai_max_output_tokens = max(1, int(raw_openai_max_output_tokens))
         openai_timeout_seconds = max(1, int(raw_openai_timeout_seconds))
-        openai_retry_attempts = max(1, int(raw_openai_retry_attempts))
+        openai_retry_attempts = min(5, max(1, int(raw_openai_retry_attempts)))
+        openai_retry_backoff_seconds = min(60.0, max(0.0, float(raw_openai_retry_backoff_seconds)))
     except ValueError as exc:
         raise SystemExit(
             "Invalid digest.min_messages_for_ai, digest.run_total_timeout_seconds, digest.termination_grace_seconds, "
             "digest.sync_total_timeout_seconds, digest_ai.max_output_tokens, digest_ai.openai_timeout_seconds, "
-            "or digest_ai.openai_retry_attempts in runtime config."
+            "digest_ai.openai_retry_attempts, or digest_ai.openai_retry_backoff_seconds in runtime config."
         ) from exc
+    if not openai_reasoning_effort:
+        raise SystemExit("Missing digest_ai.reasoning_effort in runtime config.")
+    if openai_reasoning_effort not in VALID_OPENAI_REASONING_EFFORTS:
+        allowed_efforts = ", ".join(sorted(VALID_OPENAI_REASONING_EFFORTS))
+        raise SystemExit(
+            f"Invalid digest_ai.reasoning_effort in runtime config. Expected one of: {allowed_efforts}."
+        )
+    if not openai_reasoning_summary:
+        raise SystemExit("Missing digest_ai.reasoning_summary in runtime config.")
+    if openai_reasoning_summary not in VALID_OPENAI_REASONING_SUMMARIES:
+        allowed_summaries = ", ".join(sorted(VALID_OPENAI_REASONING_SUMMARIES))
+        raise SystemExit(
+            f"Invalid digest_ai.reasoning_summary in runtime config. Expected one of: {allowed_summaries}."
+        )
     return DigestConfig(
         time=history_client.get_config_value(config, "digest", "time") or "08:00",
         since=history_client.get_config_value(config, "digest", "since") or "yesterday",
@@ -311,13 +355,17 @@ def resolve_digest_config(config: dict[str, Any]) -> DigestConfig:
         ),
         system_instructions=prompts["system_instructions"],
         shared_prompt_prefix=prompts["shared_prompt_prefix"],
+        cache_breakpoint_marker=prompts["cache_breakpoint_marker"],
         single_prompt_template=prompts["single_digest_template"],
         batch_prompt_template=prompts["batch_digest_template"],
         final_prompt_template=prompts["final_digest_template"],
         openai_api_key=os.environ.get("OPENAI_API_KEY", "").strip() or history_client.get_config_value(config, "secrets", "openai_api_key"),
+        openai_reasoning_effort=openai_reasoning_effort,
+        openai_reasoning_summary=openai_reasoning_summary,
         openai_max_output_tokens=openai_max_output_tokens,
         openai_timeout_seconds=openai_timeout_seconds,
         openai_retry_attempts=openai_retry_attempts,
+        openai_retry_backoff_seconds=openai_retry_backoff_seconds,
         store_prompt_text=parse_bool(str(shared_ai_section.get("store_prompt_text", "")).strip(), default=False),
     )
 
@@ -895,6 +943,8 @@ def build_batch_digest_prompt(
     message_count: int,
     message_block: str,
     previous_batch_summary: str,
+    *,
+    cache_breakpoint_marker: str,
 ) -> str:
     prefix = shared_prefix.format(
         channel_name=channel_name,
@@ -909,6 +959,7 @@ def build_batch_digest_prompt(
         message_count=message_count,
         message_block=message_block,
         previous_batch_summary=previous_batch_summary or "<no previous batch>",
+        cache_breakpoint_marker=cache_breakpoint_marker,
     ).strip()
     return f"{prefix}\n\n{body}"
 
@@ -921,6 +972,8 @@ def build_single_digest_prompt(
     until: str,
     message_count: int,
     message_block: str,
+    *,
+    cache_breakpoint_marker: str,
 ) -> str:
     prefix = shared_prefix.format(
         channel_name=channel_name,
@@ -933,6 +986,7 @@ def build_single_digest_prompt(
         until=until,
         message_count=message_count,
         message_block=message_block,
+        cache_breakpoint_marker=cache_breakpoint_marker,
     ).strip()
     return f"{prefix}\n\n{body}"
 
@@ -946,6 +1000,8 @@ def build_final_digest_prompt(
     message_count: int,
     batch_count: int,
     batch_summary_block: str,
+    *,
+    cache_breakpoint_marker: str,
 ) -> str:
     prefix = shared_prefix.format(
         channel_name=channel_name,
@@ -959,6 +1015,7 @@ def build_final_digest_prompt(
         message_count=message_count,
         batch_count=batch_count,
         batch_summary_block=batch_summary_block,
+        cache_breakpoint_marker=cache_breakpoint_marker,
     ).strip()
     return f"{prefix}\n\n{body}"
 
@@ -990,43 +1047,73 @@ def extract_response_text(response: dict[str, Any]) -> str:
     return "\n".join(chunks).strip()
 
 
-def extract_usage(response: dict[str, Any], latency_ms: int) -> OpenAIUsage:
-    return shared_extract_usage(response, latency_ms)
+def extract_usage(response: dict[str, Any], latency_ms: int, *, output_chars: int | None = None) -> OpenAIUsage:
+    return shared_extract_usage(response, latency_ms, output_chars=output_chars)
 
 
-def build_prompt_cache_key(*, model: str, channel: str, profile: str, stage: str) -> str:
+def build_prompt_cache_key(
+    *,
+    model: str,
+    stage: str,
+    system_instructions: str,
+    shared_prompt_prefix: str,
+    stage_template: str,
+) -> str:
     return shared_hash_cache_key(
         "digest",
+        "v2",
         model.strip().lower() or "unknown-model",
-        channel.strip().lstrip("@").lower() or "unknown-channel",
-        profile.strip().lower() or "day",
         stage.strip().lower() or "unknown-stage",
+        system_instructions,
+        shared_prompt_prefix,
+        stage_template,
     )
+
+
+def explicit_prompt_cache_parts(
+    model: str,
+    prompt: str,
+    cache_breakpoint_marker: str,
+) -> tuple[str, str] | None:
+    if not model.strip().lower().startswith("gpt-5.6"):
+        return None
+    static_prefix, marker, dynamic_data = prompt.partition(cache_breakpoint_marker)
+    if not marker or not dynamic_data:
+        return None
+    return f"{static_prefix}{marker}", dynamic_data
 
 
 def build_prompt_cache_info(
     *,
     stage: str,
     model: str,
-    cache_channel: str,
     display_channel: str,
     since: str,
     until: str,
     system_instructions: str,
     shared_prompt_prefix: str,
+    cache_breakpoint_marker: str,
+    stage_template: str,
     prompt: str,
 ) -> PromptCacheInfo:
-    profile = digest_profile_name(since, until)
+    cache_parts = explicit_prompt_cache_parts(model, prompt, cache_breakpoint_marker)
     prefix_text = shared_prompt_prefix.format(
         channel_name=display_channel,
         since=since,
         until=until,
     ).strip()
     return shared_build_prompt_cache_info(
-        cache_key=build_prompt_cache_key(model=model, channel=cache_channel, profile=profile, stage=stage),
+        cache_key=build_prompt_cache_key(
+            model=model,
+            stage=stage,
+            system_instructions=system_instructions,
+            shared_prompt_prefix=shared_prompt_prefix,
+            stage_template=stage_template,
+        ),
         system_instructions=system_instructions,
         prompt_text=prompt,
-        shared_prefix=prefix_text,
+        shared_prefix=cache_parts[0] if cache_parts else prefix_text,
+        prompt_version_text="\n".join((system_instructions, shared_prompt_prefix, stage_template)),
     )
 
 
@@ -1073,6 +1160,10 @@ def log_openai_usage(
     )
 
 
+def is_fatal_openai_error(exc: OpenAIDigestRequestError) -> bool:
+    return exc.status_code == 401
+
+
 def run_openai_digest(
     api_key: str,
     model: str,
@@ -1080,67 +1171,67 @@ def run_openai_digest(
     prompt: str,
     *,
     prompt_cache_key: str,
+    cache_breakpoint_marker: str,
+    reasoning_effort: str,
+    reasoning_summary: str,
     max_output_tokens: int = DEFAULT_OPENAI_DIGEST_MAX_OUTPUT_TOKENS,
     timeout_seconds: int = DEFAULT_OPENAI_DIGEST_TIMEOUT_SECONDS,
     retry_attempts: int = DEFAULT_OPENAI_DIGEST_RETRY_ATTEMPTS,
+    retry_backoff_seconds: float = DEFAULT_OPENAI_DIGEST_RETRY_BACKOFF_SECONDS,
     urlopen_func: Callable[..., Any] = request.urlopen,
     sleep_func: Callable[[float], None] = time.sleep,
+    random_func: Callable[[], float] = random.random,
 ) -> OpenAIResult:
+    reasoning: dict[str, str] = {"effort": reasoning_effort}
+    if reasoning_summary != "none":
+        reasoning["summary"] = reasoning_summary
     payload = {
         "model": model,
         "instructions": system_instructions,
         "input": prompt,
         "prompt_cache_key": prompt_cache_key,
+        "reasoning": reasoning,
         "max_output_tokens": max_output_tokens,
     }
-    req = request.Request(
-        "https://api.openai.com/v1/responses",
-        data=json.dumps(payload).encode("utf-8"),
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        },
-        method="POST",
+    cache_parts = explicit_prompt_cache_parts(model, prompt, cache_breakpoint_marker)
+    if cache_parts:
+        static_prefix, dynamic_data = cache_parts
+        payload["input"] = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "input_text",
+                        "text": static_prefix,
+                        "prompt_cache_breakpoint": {"mode": "explicit"},
+                    },
+                    {"type": "input_text", "text": dynamic_data},
+                ],
+            }
+        ]
+        payload["prompt_cache_options"] = {"mode": "explicit"}
+    openai_response = post_responses(
+        payload,
+        api_key,
+        timeout_seconds=timeout_seconds,
+        retry_attempts=retry_attempts,
+        retry_backoff_seconds=retry_backoff_seconds,
+        urlopen_func=urlopen_func,
+        sleep_func=sleep_func,
+        random_func=random_func,
     )
-    last_network_error: BaseException | None = None
-    response: dict[str, Any] | None = None
-    latency_ms = 0
-    for attempt in range(1, retry_attempts + 1):
-        started_at = time.perf_counter()
-        try:
-            # Fixed OpenAI HTTPS endpoint built in code.
-            with urlopen_func(req, timeout=timeout_seconds) as resp:
-                response = json.loads(resp.read().decode("utf-8"))
-            latency_ms = int((time.perf_counter() - started_at) * 1000)
-            break
-        except error.HTTPError as exc:
-            raise SystemExit(f"OpenAI API HTTP {exc.code} while creating digest.") from exc
-        except (TimeoutError, error.URLError, OSError) as exc:
-            latency_ms = int((time.perf_counter() - started_at) * 1000)
-            error_text = str(exc).lower()
-            is_retryable = isinstance(exc, (TimeoutError, error.URLError)) or "timed out" in error_text or "connection reset" in error_text
-            if not is_retryable or attempt >= retry_attempts:
-                last_network_error = exc
-                break
-            sleep_func(attempt)
-            last_network_error = exc
-    if response is None:
-        if isinstance(last_network_error, error.URLError):
-            raise SystemExit(
-                f"OpenAI API request failed while creating digest after {retry_attempts} attempts."
-            ) from last_network_error
-        if isinstance(last_network_error, (TimeoutError, OSError)):
-            raise SystemExit(
-                f"OpenAI API request timed out while creating digest after {retry_attempts} attempts."
-            ) from last_network_error
-        raise SystemExit("OpenAI API request failed while creating digest.")
+    response = openai_response.response
     text = extract_response_text(response)
-    if not text:
-        raise SystemExit("OpenAI API returned an empty digest response.")
+    usage = extract_usage(response, openai_response.latency_ms, output_chars=len(text))
+    if not text and not has_reached_output_token_limit(usage):
+        raise OpenAIDigestRequestError(
+            "OpenAI API returned an empty digest response.",
+            error_type="invalid_response",
+        )
     return OpenAIResult(
         response_id=history_client.optional_text(response.get("id")),
         text=text,
-        usage=extract_usage(response, latency_ms),
+        usage=usage,
     )
 
 
@@ -1290,6 +1381,8 @@ def build_channel_digest_message(
     message_count: int,
     summary: str,
     char_limit_reached: bool = False,
+    output_token_limit_reached: bool = False,
+    output_token_limit: int | None = None,
     sync_limit_reached: bool = False,
     separator_text: str = "",
 ) -> str:
@@ -1319,6 +1412,8 @@ def build_channel_digest_message(
         warnings.append(
             "<i>Предупреждение: по этому чату был достигнут sync_limit, поэтому Telegram-история для выбранного периода могла быть загружена не полностью.</i>"
         )
+    if output_token_limit_reached and output_token_limit is not None:
+        warnings.append(f"ответ ИИ достиг лимита выходных токенов ({output_token_limit})")
     if warnings:
         body = f"{body}\n\n" + "\n\n".join(warnings)
     if separator_text:
@@ -1364,6 +1459,12 @@ def send_digest_message(token: str, chat_id: str | int, text: str) -> None:
     bridge.send_text_chunks(token, chat_id, text, parse_mode="HTML")
 
 
+def has_reached_output_token_limit(usage: OpenAIUsage) -> bool:
+    return (
+        usage.response_status == "incomplete" and usage.incomplete_reason == "max_output_tokens"
+    )
+
+
 def format_digest_delivery_error(channel_name: str, exc: BaseException) -> str:
     return f"{channel_name}: delivery failed: {str(exc) or exc.__class__.__name__}"
 
@@ -1379,7 +1480,7 @@ def summarize_channel_batches(
     until: str,
     total_message_count: int,
     messages: Any,
-) -> tuple[int, str, bool]:
+) -> tuple[int, str, bool, bool]:
     batch_summaries: list[str] = []
     unique_message_ids: set[int] = set()
     previous_batch_summary = ""
@@ -1388,6 +1489,7 @@ def summarize_channel_batches(
     all_messages = list(messages)
     batch_source = all_messages
     char_limit_reached = False
+    output_token_limit_reached = False
     if total_message_count <= batch_size:
         single_pass_input = render_message_block(
             all_messages,
@@ -1405,16 +1507,18 @@ def summarize_channel_batches(
                 until,
                 single_pass_input.message_count,
                 single_pass_input.message_block,
+                cache_breakpoint_marker=config.cache_breakpoint_marker,
             )
             cache_info = build_prompt_cache_info(
                 stage="single",
                 model=config.model,
-                cache_channel=channel,
                 display_channel=channel_name or channel,
                 since=since,
                 until=until,
                 system_instructions=config.system_instructions,
                 shared_prompt_prefix=config.shared_prompt_prefix,
+                cache_breakpoint_marker=config.cache_breakpoint_marker,
+                stage_template=config.single_prompt_template,
                 prompt=prompt,
             )
             try:
@@ -1424,9 +1528,13 @@ def summarize_channel_batches(
                     config.system_instructions,
                     prompt,
                     prompt_cache_key=cache_info.cache_key,
+                    cache_breakpoint_marker=config.cache_breakpoint_marker,
+                    reasoning_effort=config.openai_reasoning_effort,
+                    reasoning_summary=config.openai_reasoning_summary,
                     max_output_tokens=config.openai_max_output_tokens,
                     timeout_seconds=config.openai_timeout_seconds,
                     retry_attempts=config.openai_retry_attempts,
+                    retry_backoff_seconds=config.openai_retry_backoff_seconds,
                 )
             except Exception as exc:
                 log_openai_usage(
@@ -1461,7 +1569,16 @@ def summarize_channel_batches(
                 response_id=result.response_id,
                 store_prompt_text=config.store_prompt_text,
             )
-            return len(unique_message_ids), repair_popular_links_in_summary(result.text, all_messages), False
+            output_token_limit_reached = has_reached_output_token_limit(result.usage)
+            summary_text = repair_popular_links_in_summary(result.text, all_messages)
+            if not summary_text and output_token_limit_reached:
+                summary_text = OUTPUT_TOKEN_LIMIT_EMPTY_RESPONSE_TEXT
+            return (
+                len(unique_message_ids),
+                summary_text,
+                False,
+                output_token_limit_reached,
+            )
         char_limit_reached = True
     for batch, batch_input in iter_rendered_message_batches(
         batch_source,
@@ -1483,16 +1600,18 @@ def summarize_channel_batches(
             batch_input.message_count,
             batch_input.message_block,
             previous_batch_summary,
+            cache_breakpoint_marker=config.cache_breakpoint_marker,
         )
         cache_info = build_prompt_cache_info(
             stage="batch",
             model=config.model,
-            cache_channel=channel,
             display_channel=channel_name or channel,
             since=since,
             until=until,
             system_instructions=config.system_instructions,
             shared_prompt_prefix=config.shared_prompt_prefix,
+            cache_breakpoint_marker=config.cache_breakpoint_marker,
+            stage_template=config.batch_prompt_template,
             prompt=prompt,
         )
         try:
@@ -1502,9 +1621,13 @@ def summarize_channel_batches(
                 config.system_instructions,
                 prompt,
                 prompt_cache_key=cache_info.cache_key,
+                cache_breakpoint_marker=config.cache_breakpoint_marker,
+                reasoning_effort=config.openai_reasoning_effort,
+                reasoning_summary=config.openai_reasoning_summary,
                 max_output_tokens=config.openai_max_output_tokens,
                 timeout_seconds=config.openai_timeout_seconds,
                 retry_attempts=config.openai_retry_attempts,
+                retry_backoff_seconds=config.openai_retry_backoff_seconds,
             )
         except Exception as exc:
             log_openai_usage(
@@ -1539,17 +1662,27 @@ def summarize_channel_batches(
             response_id=batch_result.response_id,
             store_prompt_text=config.store_prompt_text,
         )
-        batch_summaries.append(f"Батч {batch_index}\n{batch_result.text}")
-        previous_batch_summary = batch_result.text[:2000]
+        output_token_limit_reached = output_token_limit_reached or has_reached_output_token_limit(batch_result.usage)
+        if batch_result.text:
+            batch_summaries.append(f"Батч {batch_index}\n{batch_result.text}")
+            previous_batch_summary = batch_result.text[:2000]
 
     if not batch_summaries:
-        return 0, "Новых сообщений в выбранном периоде нет.", False
+        if output_token_limit_reached:
+            return (
+                len(unique_message_ids),
+                OUTPUT_TOKEN_LIMIT_EMPTY_RESPONSE_TEXT,
+                char_limit_reached,
+                True,
+            )
+        return 0, "Новых сообщений в выбранном периоде нет.", False, False
     if len(batch_summaries) == 1:
         summary_text = batch_summaries[0].split("\n", 1)[1] if "\n" in batch_summaries[0] else batch_summaries[0]
         return (
             len(unique_message_ids),
             repair_popular_links_in_summary(summary_text, all_messages),
             char_limit_reached,
+            output_token_limit_reached,
         )
 
     final_prompt = build_final_digest_prompt(
@@ -1561,16 +1694,18 @@ def summarize_channel_batches(
         len(unique_message_ids),
         len(batch_summaries),
         "\n\n".join(batch_summaries),
+        cache_breakpoint_marker=config.cache_breakpoint_marker,
     )
     final_cache_info = build_prompt_cache_info(
         stage="final",
         model=config.model,
-        cache_channel=channel,
         display_channel=channel_name or channel,
         since=since,
         until=until,
         system_instructions=config.system_instructions,
         shared_prompt_prefix=config.shared_prompt_prefix,
+        cache_breakpoint_marker=config.cache_breakpoint_marker,
+        stage_template=config.final_prompt_template,
         prompt=final_prompt,
     )
     try:
@@ -1580,9 +1715,13 @@ def summarize_channel_batches(
             config.system_instructions,
             final_prompt,
             prompt_cache_key=final_cache_info.cache_key,
+            cache_breakpoint_marker=config.cache_breakpoint_marker,
+            reasoning_effort=config.openai_reasoning_effort,
+            reasoning_summary=config.openai_reasoning_summary,
             max_output_tokens=config.openai_max_output_tokens,
             timeout_seconds=config.openai_timeout_seconds,
             retry_attempts=config.openai_retry_attempts,
+            retry_backoff_seconds=config.openai_retry_backoff_seconds,
         )
     except Exception as exc:
         log_openai_usage(
@@ -1617,7 +1756,16 @@ def summarize_channel_batches(
         response_id=final_result.response_id,
         store_prompt_text=config.store_prompt_text,
     )
-    return len(unique_message_ids), repair_popular_links_in_summary(final_result.text, all_messages), char_limit_reached
+    final_output_token_limit_reached = has_reached_output_token_limit(final_result.usage)
+    summary_text = repair_popular_links_in_summary(final_result.text, all_messages)
+    if not summary_text and final_output_token_limit_reached:
+        summary_text = OUTPUT_TOKEN_LIMIT_EMPTY_RESPONSE_TEXT
+    return (
+        len(unique_message_ids),
+        summary_text,
+        char_limit_reached,
+        output_token_limit_reached or final_output_token_limit_reached,
+    )
 
 
 def cmd_run(args: argparse.Namespace) -> int:
@@ -1659,6 +1807,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     sent_channel_messages = 0
     sync_results: list[dict[str, Any]] = []
     errors: list[str] = []
+    analysis_errors: list[dict[str, Any]] = []
     conn = None
     log_conn = None
     token = None
@@ -1827,7 +1976,7 @@ def cmd_run(args: argparse.Namespace) -> int:
             if api_key is None:
                 api_key = require_openai_api_key(digest_config)
             try:
-                message_count, summary, char_limit_reached = summarize_channel_batches(
+                message_count, summary, char_limit_reached, output_token_limit_reached = summarize_channel_batches(
                     log_conn,
                     api_key=api_key,
                     config=DigestConfig(
@@ -1849,13 +1998,17 @@ def cmd_run(args: argparse.Namespace) -> int:
                         use_ocr=digest_config.use_ocr,
                         system_instructions=digest_config.system_instructions,
                         shared_prompt_prefix=digest_config.shared_prompt_prefix,
+                        cache_breakpoint_marker=digest_config.cache_breakpoint_marker,
                         single_prompt_template=digest_config.single_prompt_template,
                         batch_prompt_template=digest_config.batch_prompt_template,
                         final_prompt_template=digest_config.final_prompt_template,
                         openai_api_key=digest_config.openai_api_key,
+                        openai_reasoning_effort=digest_config.openai_reasoning_effort,
+                        openai_reasoning_summary=digest_config.openai_reasoning_summary,
                         openai_max_output_tokens=digest_config.openai_max_output_tokens,
                         openai_timeout_seconds=digest_config.openai_timeout_seconds,
                         openai_retry_attempts=digest_config.openai_retry_attempts,
+                        openai_retry_backoff_seconds=digest_config.openai_retry_backoff_seconds,
                         store_prompt_text=digest_config.store_prompt_text,
                     ),
                     channel=channel,
@@ -1865,6 +2018,22 @@ def cmd_run(args: argparse.Namespace) -> int:
                     total_message_count=total_message_count,
                     messages=message_rows,
                 )
+            except OpenAIDigestRequestError as exc:
+                error_details = {
+                    "channel": channel,
+                    "channel_name": channel_name,
+                    "error": exc.diagnostic(),
+                }
+                analysis_errors.append(error_details)
+                errors.append(f"{channel_name}: analysis failed: {exc}")
+                persist_attempt(
+                    current_channel=channel,
+                    errors=errors,
+                    analysis_errors=analysis_errors,
+                )
+                if is_fatal_openai_error(exc):
+                    raise
+                continue
             except Exception as exc:
                 errors.append(f"{channel_name}: analysis failed: {str(exc) or exc.__class__.__name__}")
                 persist_attempt(current_channel=channel, errors=errors)
@@ -1878,6 +2047,8 @@ def cmd_run(args: argparse.Namespace) -> int:
                     message_count=message_count,
                     summary=summary,
                     char_limit_reached=char_limit_reached,
+                    output_token_limit_reached=output_token_limit_reached,
+                    output_token_limit=digest_config.openai_max_output_tokens,
                     sync_limit_reached=sync_limit_reached,
                     separator_text=digest_config.separator_text,
                 ),
@@ -1914,6 +2085,7 @@ def cmd_run(args: argparse.Namespace) -> int:
             "auth_mode": auth_mode,
             "sync_results": sync_results,
             "errors": errors,
+            "analysis_errors": analysis_errors,
         }
         print(json.dumps(payload, ensure_ascii=False, indent=2))
         persist_attempt(
@@ -1932,6 +2104,7 @@ def cmd_run(args: argparse.Namespace) -> int:
             auth_mode=auth_mode,
             sync_results=sync_results,
             errors=errors,
+            analysis_errors=analysis_errors,
             error=str(exc) or exc.__class__.__name__,
         )
         raise

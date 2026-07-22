@@ -728,6 +728,7 @@ class TelegramConnectorTests(unittest.TestCase):
                         response_id TEXT,
                         prompt_cache_key TEXT,
                         prompt_cache_retention TEXT,
+                        prompt_version_hash TEXT,
                         request_index INTEGER,
                         message_count INTEGER,
                         system_chars INTEGER,
@@ -741,6 +742,11 @@ class TelegramConnectorTests(unittest.TestCase):
                         prompt_text TEXT,
                         input_tokens INTEGER,
                         cached_input_tokens INTEGER,
+                        cache_write_tokens INTEGER,
+                        reasoning_tokens INTEGER,
+                        output_chars INTEGER,
+                        response_status TEXT,
+                        incomplete_reason TEXT,
                         output_tokens INTEGER,
                         total_tokens INTEGER,
                         latency_ms INTEGER,
@@ -786,7 +792,11 @@ class TelegramConnectorTests(unittest.TestCase):
                     "last_request_at": "2026-03-23T10:10:00+00:00",
                     "input_tokens": 200,
                     "cached_input_tokens": 50,
+                    "cache_write_tokens": 12,
                     "output_tokens": 40,
+                    "reasoning_tokens": 24,
+                    "output_chars": 800,
+                    "incomplete_responses": 1,
                 },
                 "filtered": None,
                 "recent_rows": [
@@ -795,7 +805,12 @@ class TelegramConnectorTests(unittest.TestCase):
                         "status": "ok",
                         "input_tokens": 100,
                         "cached_input_tokens": 25,
+                        "cache_write_tokens": 7,
                         "output_tokens": 15,
+                        "reasoning_tokens": 9,
+                        "output_chars": 200,
+                        "response_status": "incomplete",
+                        "incomplete_reason": "max_output_tokens",
                     }
                 ],
                 "row_limit": 200,
@@ -803,11 +818,57 @@ class TelegramConnectorTests(unittest.TestCase):
         )
         self.assertIn("Digest AI usage:", text)
         self.assertIn("cached input tokens: 50", text)
+        self.assertIn("cache write tokens: 12", text)
+        self.assertIn("reasoning tokens: 24", text)
+        self.assertIn("visible output chars: 800", text)
+        self.assertIn("incomplete responses: 1", text)
         self.assertIn("cached share of input tokens: 25.0%", text)
         self.assertIn("single-pass requests: 1 (33.3%)", text)
         self.assertIn("analysis window: latest 200 requests", text)
         self.assertIn("Latest rounds:", text)
-        self.assertIn("final: ok, input=100, cached=25 (25.0%), output=15", text)
+        self.assertIn("final: ok, input=100, cached=25 (25.0%), cache-writes=7, output=15", text)
+        self.assertIn("reasoning=9, visible-chars=200, response=incomplete, incomplete=max_output_tokens", text)
+
+    def test_format_digest_usage_summary_hides_unavailable_metrics(self) -> None:
+        text = telegram_connector.format_digest_usage_summary(
+            {
+                "global": {
+                    "total_requests": 1,
+                    "ok_requests": 1,
+                    "error_requests": 0,
+                    "single_requests": 1,
+                    "cached_requests": 0,
+                    "cache_keys": 1,
+                    "input_tokens": 100,
+                    "cached_input_tokens": 0,
+                    "output_tokens": 10,
+                    "prompt_versions": None,
+                    "cache_write_tokens": None,
+                    "reasoning_tokens": None,
+                    "output_chars": None,
+                    "incomplete_responses": None,
+                },
+                "filtered": None,
+                "recent_rows": [
+                    {
+                        "stage": "single",
+                        "status": "ok",
+                        "input_tokens": 100,
+                        "cached_input_tokens": 0,
+                        "cache_write_tokens": None,
+                        "output_tokens": 10,
+                        "reasoning_tokens": None,
+                        "output_chars": None,
+                        "response_status": None,
+                        "incomplete_reason": None,
+                    }
+                ],
+                "row_limit": 50,
+            }
+        )
+
+        self.assertNotIn("unavailable", text)
+        self.assertIn("single: ok, input=100, cached=0 (0.0%), output=10", text)
 
     def test_project_root_override_does_not_redirect_data_files(self) -> None:
         original = os.environ.get("TELEGRAM_CONNECTOR_PROJECT_ROOT")

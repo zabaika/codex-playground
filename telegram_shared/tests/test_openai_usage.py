@@ -3,6 +3,7 @@ import unittest
 
 from telegram_shared.openai_usage import OpenAIUsage
 from telegram_shared.openai_usage import build_prompt_cache_info
+from telegram_shared.openai_usage import extract_usage
 from telegram_shared.openai_usage import log_openai_usage
 
 
@@ -19,6 +20,7 @@ CREATE TABLE ai_usage_log (
     response_id TEXT,
     prompt_cache_key TEXT,
     prompt_cache_retention TEXT,
+    prompt_version_hash TEXT,
     request_index INTEGER,
     message_count INTEGER,
     system_chars INTEGER,
@@ -32,9 +34,14 @@ CREATE TABLE ai_usage_log (
     prompt_text TEXT,
     input_tokens INTEGER,
     cached_input_tokens INTEGER,
+    cache_write_tokens INTEGER,
     output_tokens INTEGER,
+    reasoning_tokens INTEGER,
+    output_chars INTEGER,
     total_tokens INTEGER,
     latency_ms INTEGER,
+    response_status TEXT,
+    incomplete_reason TEXT,
     status TEXT NOT NULL,
     error TEXT
 )
@@ -54,7 +61,64 @@ class OpenAIUsageLoggingTests(unittest.TestCase):
             system_instructions="system",
             prompt_text=prompt_text,
             shared_prefix="prefix",
+            prompt_version_text="system\nprefix\nsingle-template",
         )
+
+    def test_extract_usage_reads_cache_metrics(self) -> None:
+        usage = extract_usage(
+            {
+                "usage": {
+                    "input_tokens": 100,
+                    "output_tokens": 25,
+                    "total_tokens": 125,
+                    "input_tokens_details": {"cached_tokens": 60, "cache_write_tokens": 40},
+                    "output_tokens_details": {"reasoning_tokens": 15},
+                },
+                "_latency_ms": 345,
+                "status": "incomplete",
+                "incomplete_details": {"reason": "max_output_tokens"},
+            },
+            output_chars=48,
+        )
+
+        self.assertEqual(usage.input_tokens, 100)
+        self.assertEqual(usage.cached_input_tokens, 60)
+        self.assertEqual(usage.cache_write_tokens, 40)
+        self.assertEqual(usage.output_tokens, 25)
+        self.assertEqual(usage.total_tokens, 125)
+        self.assertEqual(usage.latency_ms, 345)
+        self.assertEqual(usage.reasoning_tokens, 15)
+        self.assertEqual(usage.response_status, "incomplete")
+        self.assertEqual(usage.incomplete_reason, "max_output_tokens")
+        self.assertEqual(usage.output_chars, 48)
+
+    def test_extract_usage_keeps_missing_cache_write_tokens_unknown(self) -> None:
+        usage = extract_usage(
+            {
+                "usage": {
+                    "input_tokens": 100,
+                    "output_tokens": 25,
+                    "total_tokens": 125,
+                    "input_tokens_details": {"cached_tokens": 60},
+                }
+            }
+        )
+
+        self.assertIsNone(usage.cache_write_tokens)
+
+    def test_extract_usage_keeps_explicit_zero_cache_write_tokens(self) -> None:
+        usage = extract_usage(
+            {
+                "usage": {
+                    "input_tokens": 100,
+                    "output_tokens": 25,
+                    "total_tokens": 125,
+                    "input_tokens_details": {"cached_tokens": 60, "cache_write_tokens": 0},
+                }
+            }
+        )
+
+        self.assertEqual(usage.cache_write_tokens, 0)
 
     def test_log_openai_usage_does_not_store_prompt_text_by_default(self) -> None:
         conn = self.connect()
@@ -73,7 +137,7 @@ class OpenAIUsageLoggingTests(unittest.TestCase):
                 status="ok",
                 cache_info=self.cache_info("prefix\n\nsensitive prompt text"),
                 prompt_text="prefix\n\nsensitive prompt text",
-                usage=OpenAIUsage(10, 4, 3, 13, 200),
+                usage=OpenAIUsage(10, 4, 2, 3, 13, 200),
                 response_id="resp_1",
             )
             row = conn.execute("SELECT * FROM ai_usage_log WHERE response_id = 'resp_1'").fetchone()
@@ -84,8 +148,14 @@ class OpenAIUsageLoggingTests(unittest.TestCase):
         self.assertIsNone(row["prompt_text"])
         self.assertEqual(row["prompt_chars"], len("prefix\n\nsensitive prompt text"))
         self.assertIsNotNone(row["prompt_hash"])
+        self.assertIsNotNone(row["prompt_version_hash"])
         self.assertEqual(row["message_count"], 12)
         self.assertEqual(row["cached_input_tokens"], 4)
+        self.assertEqual(row["cache_write_tokens"], 2)
+        self.assertIsNone(row["reasoning_tokens"])
+        self.assertIsNone(row["response_status"])
+        self.assertIsNone(row["incomplete_reason"])
+        self.assertIsNone(row["output_chars"])
 
     def test_log_openai_usage_can_store_prompt_text_for_debugging(self) -> None:
         conn = self.connect()

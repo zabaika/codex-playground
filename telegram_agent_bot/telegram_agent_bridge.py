@@ -572,6 +572,7 @@ def format_agent_usage_summary(summary: dict[str, Any], *, chat_id: str, show_cu
         title="Agent AI usage",
         subject_label="Current Telegram chat",
         subject_value=chat_id,
+        hide_unavailable=True,
     )
 
 

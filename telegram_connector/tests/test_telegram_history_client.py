@@ -134,6 +134,22 @@ class TelegramHistoryClientTests(unittest.TestCase):
                 last_full_sync_at TEXT,
                 last_error TEXT
             );
+            CREATE TABLE ai_usage_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at TEXT NOT NULL,
+                feature TEXT NOT NULL,
+                stage TEXT NOT NULL,
+                model TEXT NOT NULL,
+                request_index INTEGER,
+                message_count INTEGER,
+                input_tokens INTEGER,
+                cached_input_tokens INTEGER,
+                output_tokens INTEGER,
+                total_tokens INTEGER,
+                latency_ms INTEGER,
+                status TEXT NOT NULL,
+                error_type TEXT
+            );
             INSERT INTO channels(channel_id, access_hash, username, title, channel_type, raw_json, first_seen_at, last_seen_at)
             VALUES (1, '', 'vcnews', 'vc.ru', 'Channel', '{}', '2026-03-16T10:00:00+00:00', '2026-03-16T10:00:00+00:00');
             INSERT INTO messages(channel_id, message_id, grouped_id, date_utc, edit_date_utc, sender_id, post_author, text, views, forwards, replies, has_media, media_kind, raw_json, content_hash, imported_at)
@@ -149,6 +165,13 @@ class TelegramHistoryClientTests(unittest.TestCase):
         self.assertIn("sender_username", columns)
         self.assertIn("sender_display_name", columns)
         self.assertNotIn("post_author", columns)
+        ai_usage_columns = [row[1] for row in conn.execute("PRAGMA table_info(ai_usage_log)").fetchall()]
+        self.assertIn("prompt_version_hash", ai_usage_columns)
+        self.assertIn("cache_write_tokens", ai_usage_columns)
+        self.assertIn("reasoning_tokens", ai_usage_columns)
+        self.assertIn("output_chars", ai_usage_columns)
+        self.assertIn("response_status", ai_usage_columns)
+        self.assertIn("incomplete_reason", ai_usage_columns)
         row = conn.execute(
             "SELECT grouped_id, sender_id, sender_username, sender_display_name FROM messages WHERE channel_id = 1 AND message_id = 2"
         ).fetchone()

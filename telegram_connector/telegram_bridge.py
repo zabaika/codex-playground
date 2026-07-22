@@ -909,7 +909,11 @@ def fetch_digest_usage_summary(config: dict[str, Any], *, row_limit: int, recent
 
 
 def format_digest_usage_summary(summary: dict[str, Any]) -> str:
-    return shared_format_ai_usage_summary(summary, title="Digest AI usage")
+    return shared_format_ai_usage_summary(
+        summary,
+        title="Digest AI usage",
+        hide_unavailable=True,
+    )
 
 
 def append_period_option(argv: list[str], part: str) -> bool:

@@ -31,7 +31,7 @@ The README intentionally does not restate every config key. Use `runtime.example
 - `bridge.allowed_chat_ids`, `bridge.allowed_user_ids`, and `bridge.allowed_usernames` for bot command access control
 - `bridge.worker_process_timeout_seconds` for bridge-launched command lifetime
 - `bridge.send_message_retry_attempts` and `bridge.send_message_retry_backoff_seconds` for transient Telegram `sendMessage` failures, including network errors, timeouts, and Telegram HTTP 5xx
-- `digest.*`, `digest_ai.*`, and `digest_limits.*` for scheduled digest window, AI batching, sync budget, and process TTL
+- `digest.*`, `digest_ai.*`, and `digest_limits.*` for scheduled digest window, AI batching, sync budget, process TTL, and bounded OpenAI retry delays
 - `digest_prompts.file` for the prompt bundle used by digest
 - `sync.sync_limit` and `sync.batch_size` for non-digest sync runs
 - `ocr.*` for OCR defaults and subprocess timeout
@@ -77,6 +77,14 @@ bash telegram_connector/scripts/restart_launch_agent.sh
 
 Use the installer after code changes, `telegram_shared` changes, runtime config changes, prompt-bundle changes, or scheduled digest config changes. Use restart only when installed code and config are already current.
 
+The installer preserves existing launchd logs and the latest digest audit. Clear them only when explicitly required:
+
+```bash
+bash telegram_connector/scripts/clear_launch_logs.sh
+```
+
+Each digest run initializes and migrates its SQLite schema before reading or writing usage data; no separate manual migration command is required after an installed upgrade.
+
 Launchd logs:
 
 - `telegram_connector/data/launchd/bridge.startup.log`
@@ -91,7 +99,7 @@ Launchd logs:
 
 Bot command quick reference:
 
-- `/agent-stats`: recent local Digest AI usage and prompt-cache summary
+- `/agent-stats`: recent local Digest AI usage and prompt-cache summary; see [shared metric definitions](../telegram_shared/README.md#ai-usage-metrics)
 - `/top-models [limit] [debug]`: configured external free-model ranking
 - `/backfill [channel] [limit] [since=...] [until=...] [media] [bot|user|auto]`: historical load into SQLite
 - `/tail [channel] [limit] [since=...] [until=...] [media|ocr|read] [bot|user|auto]`: latest window sync
@@ -131,6 +139,8 @@ Digest runs are per channel: prep-sync, optional OCR, AI analysis, and Telegram 
 - channels below `digest.min_messages_for_ai` send a short loaded-without-analysis note
 - channels that fit `digest_ai.*` budgets use one direct OpenAI request; larger windows fall back to chronological batches and a final summary
 - hitting an effective digest `sync_limit` is called out in the delivered channel message
+- transient OpenAI failures (`408`, retryable `429`, and `500`/`502`/`503`/`504`) use bounded retries; retryable rate limits honor `Retry-After`
+- failed OpenAI analysis for one channel is recorded with the HTTP status, OpenAI error code, and request id where available, then produces `status=partial` while the remaining channels continue
 - transient delivery failures are recorded as per-channel errors and produce `status=partial`
 - permanent delivery failures, such as invalid chat ids or revoked tokens, fail the run and write `status=failed`
 - final error summary delivery is best-effort

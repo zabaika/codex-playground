@@ -5,6 +5,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 INSTALLER = ROOT / "scripts" / "install_launch_agent.sh"
 RESTARTER = ROOT / "scripts" / "restart_launch_agent.sh"
+CLEAR_LOGS = ROOT / "scripts" / "clear_launch_logs.sh"
 BRIDGE_PLIST_TEMPLATE = ROOT / "scripts" / "com.zabaika.telegram-connector-bridge.plist"
 
 
@@ -18,8 +19,14 @@ class LaunchAgentScriptTests(unittest.TestCase):
         self.assertIn('DIGEST_LAST_ATTEMPT_LOG="$PROJECT_LOG_DIR/digest.last_attempt.json"', content)
         self.assertIn('BRIDGE_LAUNCHER="$SERVICE_ROOT/scripts/telegram-connector-bridge-launcher"', content)
         self.assertIn('DIGEST_LAUNCHER="$SERVICE_ROOT/scripts/telegram-connector-digest-launcher"', content)
-        self.assertIn('rm -f "$PROJECT_LOG_DIR"/bridge.startup.log', content)
+        self.assertNotIn('rm -f "$PROJECT_LOG_DIR"', content)
         self.assertNotIn('"$SERVICE_ROOT"/data/launchd', content)
+
+    def test_clear_logs_is_an_explicit_separate_command(self) -> None:
+        content = CLEAR_LOGS.read_text(encoding="utf-8")
+        self.assertIn('PROJECT_LOG_DIR="$SOURCE_ROOT/data/launchd"', content)
+        self.assertIn('rm -f "$PROJECT_LOG_DIR"/bridge.startup.log', content)
+        self.assertIn('rm -f "$PROJECT_LOG_DIR"/digest.last_attempt.json', content)
 
     def test_installer_runner_appends_startup_log(self) -> None:
         content = INSTALLER.read_text(encoding="utf-8")

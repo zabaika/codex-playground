@@ -27,7 +27,7 @@ allowed_usernames = ""
 # Values are clamped to 500..4096; 4096 is Telegram's text-message limit.
 text_chunk_size = "3900"
 # Maximum number of latest ai_usage_log rows scanned by /agent-stats.
-# Values are clamped to 20..2000.
+# Values are clamped to 1..2000.
 agent_stats_row_limit = "200"
 # Wall-clock timeout in seconds for one bridge-launched worker subprocess, such as /digest, /update, /tail, /ocr, or /exportcsv.
 # Values are clamped to 60..14400.
@@ -99,12 +99,21 @@ message_text_max_chars = "450"
 message_ocr_max_chars = "300"
 # Maximum total size of one rendered AI input block in characters for one channel, regardless of digest period.
 message_block_max_chars = "100000"
-# Maximum output tokens requested from OpenAI for each digest summarization call.
+# Maximum output tokens requested from OpenAI for each digest summarization call. Affected channel digests show a warning only when OpenAI reports incomplete output because of this limit. For daily Telegram digests, increase first to 1500 and use no more than 2000. Values are clamped to 1 or more.
 max_output_tokens = "1200"
+# Reasoning effort for each OpenAI digest request. Valid values are none, low, medium, high, xhigh, and max; GPT-5.4-mini supports none through xhigh, while GPT-5.6 also supports max.
+# Reasoning and visible text share max_output_tokens. Increase max_output_tokens before raising this above none; use 1500 as the first step for daily digests.
+reasoning_effort = "none"
+# Reasoning summary returned by the OpenAI Responses API with each digest request. Use auto, concise, or detailed; none omits the API field and disables summary output.
+reasoning_summary = "auto"
 # Network timeout in seconds for one OpenAI digest request attempt.
 openai_timeout_seconds = "120"
-# Number of OpenAI digest retry attempts for transient network failures.
+# Number of OpenAI digest retry attempts for transient network, HTTP 408, retryable HTTP 429, and HTTP 500/502/503/504 failures.
+# Values are clamped to 1..5.
 openai_retry_attempts = "3"
+# Base delay in seconds for OpenAI digest retries. The delay grows exponentially with jitter; Retry-After overrides it when OpenAI supplies that header.
+# Values are clamped to 0..60.
+openai_retry_backoff_seconds = "1"
 # Store full OpenAI digest prompt text in ai_usage_log.prompt_text for temporary debugging.
 # Keep false by default to avoid persisting channel/message content in SQLite.
 store_prompt_text = "false"

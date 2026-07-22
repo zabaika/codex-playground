@@ -167,24 +167,6 @@ class TelegramAgentWorkerTests(unittest.TestCase):
         self.assertNotIn("\"secret\":\"value\"", tool_log_text)
         self.assertIn("item_1_output_hash=", tool_log_text)
 
-    def test_extract_usage_reads_cached_tokens(self) -> None:
-        usage = telegram_agent_worker.extract_usage(
-            {
-                "usage": {
-                    "input_tokens": 100,
-                    "output_tokens": 25,
-                    "total_tokens": 125,
-                    "input_tokens_details": {"cached_tokens": 60},
-                },
-                "_latency_ms": 345,
-            }
-        )
-        self.assertEqual(usage.input_tokens, 100)
-        self.assertEqual(usage.cached_input_tokens, 60)
-        self.assertEqual(usage.output_tokens, 25)
-        self.assertEqual(usage.total_tokens, 125)
-        self.assertEqual(usage.latency_ms, 345)
-
     def test_log_openai_usage_skips_prompt_text_by_default_but_keeps_metadata(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             original_db_file = telegram_agent_worker.DB_FILE
@@ -198,6 +180,7 @@ class TelegramAgentWorkerTests(unittest.TestCase):
                     system_instructions="sys",
                     prompt_text="prefix\n\nfirst",
                     shared_prefix="prefix",
+                    prompt_version_text=telegram_agent_worker.build_round_prompt_version_text(1),
                 )
                 telegram_agent_worker.log_openai_usage(
                     conn,
@@ -209,7 +192,7 @@ class TelegramAgentWorkerTests(unittest.TestCase):
                     status="ok",
                     cache_info=cache_info_1,
                     prompt_text="prefix\n\nfirst",
-                    usage=telegram_agent_worker.OpenAIUsage(10, 4, 3, 13, 200),
+                    usage=telegram_agent_worker.OpenAIUsage(10, 4, 2, 3, 13, 200),
                     response_id="resp_1",
                 )
                 cache_info_2 = telegram_agent_worker.build_prompt_cache_info(
@@ -218,6 +201,7 @@ class TelegramAgentWorkerTests(unittest.TestCase):
                     system_instructions="sys",
                     prompt_text="prefix\n\nfirst plus more",
                     shared_prefix="prefix",
+                    prompt_version_text=telegram_agent_worker.build_round_prompt_version_text(2),
                 )
                 telegram_agent_worker.log_openai_usage(
                     conn,
@@ -229,13 +213,13 @@ class TelegramAgentWorkerTests(unittest.TestCase):
                     status="ok",
                     cache_info=cache_info_2,
                     prompt_text="prefix\n\nfirst plus more",
-                    usage=telegram_agent_worker.OpenAIUsage(12, 8, 5, 17, 250),
+                    usage=telegram_agent_worker.OpenAIUsage(12, 8, 1, 5, 17, 250),
                     response_id="resp_2",
                 )
                 row = conn.execute(
                     """
                     SELECT previous_response_id, previous_prompt_hash, prefix_match_chars_with_previous,
-                           cached_input_tokens, prompt_cache_key, feature, prompt_text
+                           cached_input_tokens, cache_write_tokens, prompt_version_hash, prompt_cache_key, feature, prompt_text
                     FROM ai_usage_log
                     WHERE response_id = 'resp_2'
                     """
@@ -249,8 +233,36 @@ class TelegramAgentWorkerTests(unittest.TestCase):
         self.assertEqual(row["prefix_match_chars_with_previous"], 0)
         self.assertIsNone(row["prompt_text"])
         self.assertEqual(row["cached_input_tokens"], 8)
+        self.assertEqual(row["cache_write_tokens"], 1)
+        self.assertIsNotNone(row["prompt_version_hash"])
         self.assertEqual(row["prompt_cache_key"], "agent:test-cache")
         self.assertEqual(row["feature"], "agent")
+
+    def test_init_db_migrates_existing_usage_log_cache_metrics(self) -> None:
+        legacy_schema = telegram_agent_worker.SCHEMA_SQL
+        for column in (
+            "    prompt_version_hash TEXT,\n",
+            "    cache_write_tokens INTEGER,\n",
+            "    reasoning_tokens INTEGER,\n",
+            "    output_chars INTEGER,\n",
+            "    response_status TEXT,\n",
+            "    incomplete_reason TEXT,\n",
+        ):
+            legacy_schema = legacy_schema.replace(column, "")
+        conn = sqlite3.connect(":memory:")
+        try:
+            conn.executescript(legacy_schema)
+            telegram_agent_worker.init_db(conn)
+            columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(ai_usage_log)")}
+        finally:
+            conn.close()
+
+        self.assertIn("prompt_version_hash", columns)
+        self.assertIn("cache_write_tokens", columns)
+        self.assertIn("reasoning_tokens", columns)
+        self.assertIn("output_chars", columns)
+        self.assertIn("response_status", columns)
+        self.assertIn("incomplete_reason", columns)
 
     def test_serialize_tool_result_truncates_oversized_payload(self) -> None:
         result = {"content": "x" * (telegram_agent_worker.DEFAULT_MAX_TOOL_OUTPUT_CHARS + 5000)}
@@ -268,6 +280,8 @@ class TelegramAgentWorkerTests(unittest.TestCase):
             "agent": {
                 "max_tool_rounds": "6",
                 "openai_timeout_seconds": "240",
+                "openai_retry_attempts": "2",
+                "openai_retry_backoff_seconds": "4",
                 "web_search_limit": "4",
                 "fetch_char_limit": "15000",
                 "local_search_timeout_seconds": "11",
@@ -290,6 +304,8 @@ class TelegramAgentWorkerTests(unittest.TestCase):
             telegram_agent_worker.resolve_secret_value = original_resolve_secret_value
         self.assertEqual(runtime["max_tool_rounds"], 6)
         self.assertEqual(runtime["openai_timeout_seconds"], 240)
+        self.assertEqual(runtime["openai_retry_attempts"], 2)
+        self.assertEqual(runtime["openai_retry_backoff_seconds"], 4)
         self.assertEqual(runtime["web_search_limit"], 4)
         self.assertEqual(runtime["fetch_char_limit"], 15000)
         self.assertEqual(runtime["local_search_timeout_seconds"], 11)
@@ -317,7 +333,10 @@ class TelegramAgentWorkerTests(unittest.TestCase):
                 "key",
                 urlopen_func=fake_urlopen,
             )
-        self.assertEqual(str(ctx.exception), "OpenAI API HTTP 400 while running telegram agent worker")
+        self.assertEqual(
+            str(ctx.exception),
+            "OpenAI API request failed while running telegram agent worker: OpenAI API request failed (HTTP 400).",
+        )
 
     def test_api_request_includes_openai_error_message_from_body(self) -> None:
         def fake_urlopen(_req: object, timeout: int = 180) -> object:
@@ -338,7 +357,8 @@ class TelegramAgentWorkerTests(unittest.TestCase):
             )
         self.assertEqual(
             str(ctx.exception),
-            "OpenAI API HTTP 400 while running telegram agent worker: Input is too large.",
+            "OpenAI API request failed while running telegram agent worker: "
+            "OpenAI API request failed (HTTP 400, message=Input is too large.).",
         )
 
     def test_api_request_uses_configured_timeout(self) -> None:

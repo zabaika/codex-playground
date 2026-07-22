@@ -15,9 +15,6 @@ LAUNCHCTL_DOMAIN="gui/$(id -u)"
 
 mkdir -p "$SERVICE_ROOT/config" "$SERVICE_ROOT/data/launchd" "$SERVICE_ROOT/scripts" "$LAUNCH_AGENTS_DIR" "$PROJECT_LOG_DIR"
 
-rm -f "$PROJECT_LOG_DIR"/bridge.startup.log "$PROJECT_LOG_DIR"/bridge.stdout.log "$PROJECT_LOG_DIR"/bridge.stderr.log
-rm -f "$SERVICE_ROOT"/data/launchd/bridge.stdout.log "$SERVICE_ROOT"/data/launchd/bridge.stderr.log
-
 cp "$SOURCE_ROOT/telegram_agent_bridge.py" "$SERVICE_ROOT/telegram_agent_bridge.py"
 cp "$SOURCE_ROOT/telegram_agent_worker.py" "$SERVICE_ROOT/telegram_agent_worker.py"
 rm -rf "$SERVICE_ROOT/telegram_shared"

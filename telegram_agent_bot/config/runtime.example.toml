@@ -17,7 +17,7 @@ default_command = "agent"
 # Values are clamped to 500..4096; 4096 is Telegram's text-message limit.
 text_chunk_size = "3900"
 # Maximum number of latest ai_usage_log rows scanned by /agent-stats.
-# Values are clamped to 20..2000.
+# Values are clamped to 1..2000.
 agent_stats_row_limit = "200"
 # Wall-clock timeout in seconds for one bridge-launched agent worker subprocess.
 # Values are clamped to 60..14400.
@@ -37,6 +37,12 @@ model = "gpt-5.4-mini"
 max_tool_rounds = "8"
 # Network timeout in seconds for one OpenAI Responses API request from the agent worker. Values are clamped to 30..600.
 openai_timeout_seconds = "180"
+# Number of OpenAI Responses API retry attempts for transient network, HTTP 408, retryable HTTP 429, and HTTP 500/502/503/504 failures.
+# Values are clamped to 1..5.
+openai_retry_attempts = "3"
+# Base delay in seconds for OpenAI retries. The delay grows exponentially with jitter; Retry-After overrides it when OpenAI supplies that header.
+# Values are clamped to 0..60.
+openai_retry_backoff_seconds = "1"
 # Maximum number of web search hits returned by one search tool call. Values are clamped to 1..10.
 web_search_limit = "5"
 # Maximum number of plain-text characters kept from one fetched page. Values are clamped to 1000..30000.

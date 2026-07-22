@@ -31,7 +31,7 @@ The README intentionally does not restate every config key. Use `runtime.example
 - `bridge.default_command` for routing plain text to `/agent`
 - `bridge.worker_process_timeout_seconds` for one bridge-launched worker subprocess
 - `bridge.send_message_retry_attempts` and `bridge.send_message_retry_backoff_seconds` for transient Telegram `sendMessage` failures, including network errors, timeouts, and Telegram HTTP 5xx
-- `agent.model`, `agent.openai_timeout_seconds`, and `agent.max_tool_rounds` for OpenAI worker behavior
+- `agent.model`, `agent.openai_timeout_seconds`, `agent.openai_retry_attempts`, `agent.openai_retry_backoff_seconds`, and `agent.max_tool_rounds` for OpenAI worker behavior
 - `agent.allowed_roots` for local file access
 - `agent.max_local_matches`, `agent.max_file_lines`, `agent.max_directory_entries`, and `agent.max_tool_output_chars` for tool-output guardrails
 - `agent.prompt_cache_scope` for global or per-chat prompt-cache keys
@@ -77,6 +77,12 @@ bash telegram_agent_bot/scripts/restart_launch_agent.sh
 
 Use the installer after code changes, `telegram_shared` changes, runtime config changes, or prompt changes. Use restart only when installed code and config are already current.
 
+The installer preserves existing launchd logs. Clear them only when explicitly required:
+
+```bash
+bash telegram_agent_bot/scripts/clear_launch_logs.sh
+```
+
 Launchd logs:
 
 - `telegram_agent_bot/data/launchd/bridge.startup.log`
@@ -89,7 +95,7 @@ Bot command quick reference:
 
 - `/help`: show command help
 - `/agent <task>`: run the task agent and answer back into Telegram
-- `/agent-stats`: show local Agent AI usage and prompt-cache summary
+- `/agent-stats`: show local Agent AI usage and prompt-cache summary; see [shared metric definitions](../telegram_shared/README.md#ai-usage-metrics)
 - `/reset`: clear saved conversation context for the current chat
 
 Command notes:

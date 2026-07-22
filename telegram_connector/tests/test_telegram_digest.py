@@ -6,8 +6,10 @@ import os
 import sqlite3
 import sys
 import tempfile
+import tomllib
 import unittest
 from datetime import datetime, timezone
+from email.message import Message
 from pathlib import Path
 from urllib import error
 
@@ -22,9 +24,10 @@ SPEC.loader.exec_module(telegram_digest)
 TEST_DIGEST_PROMPTS = """[digest_prompts]
 system_instructions = "system prompt"
 shared_prompt_prefix = "Shared {channel_name} {since} {until}"
-single_digest_template = "Single={channel_name}; Total={message_count}; {message_block}"
-batch_digest_template = "Batch={batch_index}; Count={message_count}; Prev={previous_batch_summary}; {message_block}"
-final_digest_template = "Final={channel_name}; Total={message_count}; Batches={batch_count}; {batch_summary_block}"
+cache_breakpoint_marker = "<cache-boundary>"
+single_digest_template = "Single={channel_name}; {cache_breakpoint_marker} Total={message_count}; {message_block}"
+batch_digest_template = "Batch={batch_index}; {cache_breakpoint_marker} Count={message_count}; Prev={previous_batch_summary}; {message_block}"
+final_digest_template = "Final={channel_name}; {cache_breakpoint_marker} Total={message_count}; Batches={batch_count}; {batch_summary_block}"
 """
 
 
@@ -109,8 +112,11 @@ class TelegramDigestTests(unittest.TestCase):
                 },
                 "digest_ai": {
                     "max_output_tokens": "900",
+                    "reasoning_effort": "low",
+                    "reasoning_summary": "auto",
                     "openai_timeout_seconds": "45",
                     "openai_retry_attempts": "2",
+                    "openai_retry_backoff_seconds": "3.5",
                     "store_prompt_text": "true",
                 },
                 "digest_prompts": {
@@ -132,18 +138,59 @@ class TelegramDigestTests(unittest.TestCase):
         self.assertEqual(result.messages_per_ai_pass, 0)
         self.assertEqual(result.min_messages_for_ai, 7)
         self.assertEqual(result.openai_max_output_tokens, 900)
+        self.assertEqual(result.openai_reasoning_effort, "low")
+        self.assertEqual(result.openai_reasoning_summary, "auto")
         self.assertEqual(result.openai_timeout_seconds, 45)
         self.assertEqual(result.openai_retry_attempts, 2)
+        self.assertEqual(result.openai_retry_backoff_seconds, 3.5)
         self.assertTrue(result.store_prompt_text)
         self.assertEqual(result.separator_text, "────────")
         self.assertTrue(result.mark_read)
         self.assertFalse(result.use_ocr)
         self.assertEqual(result.system_instructions, "system prompt")
         self.assertEqual(result.shared_prompt_prefix, "Shared {channel_name} {since} {until}")
-        self.assertEqual(result.single_prompt_template, "Single={channel_name}; Total={message_count}; {message_block}")
-        self.assertEqual(result.batch_prompt_template, "Batch={batch_index}; Count={message_count}; Prev={previous_batch_summary}; {message_block}")
-        self.assertEqual(result.final_prompt_template, "Final={channel_name}; Total={message_count}; Batches={batch_count}; {batch_summary_block}")
+        self.assertEqual(result.cache_breakpoint_marker, "<cache-boundary>")
+        self.assertEqual(
+            result.single_prompt_template,
+            "Single={channel_name}; {cache_breakpoint_marker} Total={message_count}; {message_block}",
+        )
+        self.assertEqual(
+            result.batch_prompt_template,
+            "Batch={batch_index}; {cache_breakpoint_marker} Count={message_count}; Prev={previous_batch_summary}; {message_block}",
+        )
+        self.assertEqual(
+            result.final_prompt_template,
+            "Final={channel_name}; {cache_breakpoint_marker} Total={message_count}; Batches={batch_count}; {batch_summary_block}",
+        )
         self.assertEqual(result.openai_api_key, "op://Personal/item/openai_api_key")
+
+    def test_resolve_digest_config_requires_reasoning_effort(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            prompt_file = self.write_prompt_bundle(Path(tmp_dir))
+            config = {
+                "processing": {"model": "test-model"},
+                "digest_ai": {"max_output_tokens": "900"},
+                "digest_prompts": {"file": str(prompt_file)},
+            }
+
+            with self.assertRaises(SystemExit) as ctx:
+                telegram_digest.resolve_digest_config(config)
+
+        self.assertEqual(str(ctx.exception), "Missing digest_ai.reasoning_effort in runtime config.")
+
+    def test_resolve_digest_config_requires_reasoning_summary(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            prompt_file = self.write_prompt_bundle(Path(tmp_dir))
+            config = {
+                "processing": {"model": "test-model"},
+                "digest_ai": {"reasoning_effort": "none"},
+                "digest_prompts": {"file": str(prompt_file)},
+            }
+
+            with self.assertRaises(SystemExit) as ctx:
+                telegram_digest.resolve_digest_config(config)
+
+        self.assertEqual(str(ctx.exception), "Missing digest_ai.reasoning_summary in runtime config.")
 
     def test_run_sync_reuses_single_telethon_client_for_all_channels(self) -> None:
         original_connect_db = telegram_digest.history_client.connect_db
@@ -219,6 +266,7 @@ class TelegramDigestTests(unittest.TestCase):
                 "digest": {
                     "time": "09:30",
                 },
+                "digest_ai": {"reasoning_effort": "none", "reasoning_summary": "auto"},
                 "digest_prompts": {
                     "file": str(prompt_file),
                 },
@@ -284,8 +332,9 @@ class TelegramDigestTests(unittest.TestCase):
                 content="""[digest_prompts]
 system_instructions = "system prompt"
 shared_prompt_prefix = "Shared {channel_name} {since} {until}"
-single_digest_template = "Single={channel_name}; Total={message_count}; {message_block}"
-batch_digest_template = "Batch={batch_index}"
+cache_breakpoint_marker = "<cache-boundary>"
+single_digest_template = "Single={channel_name}; {cache_breakpoint_marker} Total={message_count}; {message_block}"
+batch_digest_template = "Batch={batch_index}; {cache_breakpoint_marker}"
 """,
             )
 
@@ -293,6 +342,60 @@ batch_digest_template = "Batch={batch_index}"
                 telegram_digest.load_digest_prompts({"digest_prompts": {"file": str(prompt_file)}})
 
         self.assertIn("digest_prompts.final_digest_template", str(context.exception))
+
+    def test_load_digest_prompts_requires_one_cache_breakpoint_placeholder_per_template(self) -> None:
+        invalid_templates = (
+            TEST_DIGEST_PROMPTS.replace("{cache_breakpoint_marker}", "", 1),
+            TEST_DIGEST_PROMPTS.replace(
+                "{cache_breakpoint_marker}",
+                "{cache_breakpoint_marker} {cache_breakpoint_marker}",
+                1,
+            ),
+        )
+        for content in invalid_templates:
+            with self.subTest(content=content):
+                with tempfile.TemporaryDirectory() as tmp_dir:
+                    prompt_file = self.write_prompt_bundle(Path(tmp_dir), content=content)
+
+                    with self.assertRaises(SystemExit) as context:
+                        telegram_digest.load_digest_prompts({"digest_prompts": {"file": str(prompt_file)}})
+
+                self.assertIn(
+                    "single_digest_template must contain {cache_breakpoint_marker} exactly once",
+                    str(context.exception),
+                )
+
+    def test_repository_prompt_templates_keep_dynamic_data_after_static_rules(self) -> None:
+        prompt_file = MODULE_PATH.parent / "config" / "digest_prompts.toml"
+        with prompt_file.open("rb") as fh:
+            prompts = tomllib.load(fh)["digest_prompts"]
+
+        dynamic_fields = {
+            "single_digest_template": ("{channel_name}", "{since}", "{until}", "{message_count}", "{message_block}"),
+            "batch_digest_template": (
+                "{channel_name}",
+                "{since}",
+                "{until}",
+                "{batch_index}",
+                "{message_count}",
+                "{message_block}",
+                "{previous_batch_summary}",
+            ),
+            "final_digest_template": (
+                "{channel_name}",
+                "{since}",
+                "{until}",
+                "{message_count}",
+                "{batch_count}",
+                "{batch_summary_block}",
+            ),
+        }
+        for template_name, fields in dynamic_fields.items():
+            template = prompts[template_name]
+            data_marker = template.index(telegram_digest.PROMPT_CACHE_BREAKPOINT_PLACEHOLDER)
+            for field in fields:
+                self.assertNotIn(field, template[:data_marker])
+                self.assertIn(field, template[data_marker:])
 
     def test_resolve_digest_window_uses_relative_defaults(self) -> None:
         config = telegram_digest.DigestConfig(
@@ -314,10 +417,13 @@ batch_digest_template = "Batch={batch_index}"
             use_ocr=True,
             system_instructions="system",
             shared_prompt_prefix="shared {channel_name} {since} {until}",
+            cache_breakpoint_marker="<cache-boundary>",
             single_prompt_template="{channel_name} {message_count} {message_block}",
             batch_prompt_template="{channel_name} {message_block}",
             final_prompt_template="{channel_name} {batch_summary_block}",
             openai_api_key="k",
+            openai_reasoning_effort="none",
+            openai_reasoning_summary="auto",
         )
 
         since, until = telegram_digest.resolve_digest_window(
@@ -398,7 +504,7 @@ batch_digest_template = "Batch={batch_index}"
             def read(self) -> bytes:
                 return json_bytes
 
-        json_bytes = b'{"id":"resp_1","output":[{"type":"message","content":[{"type":"output_text","text":"summary"}]}],"usage":{"input_tokens":10,"output_tokens":5,"total_tokens":15}}'
+        json_bytes = b'{"id":"resp_1","status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"summary"}]}],"usage":{"input_tokens":10,"output_tokens":5,"total_tokens":15,"output_tokens_details":{"reasoning_tokens":3}}}'
 
         def fake_urlopen(req, timeout=120):
             attempts["count"] += 1
@@ -412,12 +518,296 @@ batch_digest_template = "Batch={batch_index}"
             "system",
             "prompt",
             prompt_cache_key="digest:test",
+            cache_breakpoint_marker="<cache-boundary>",
+            reasoning_effort="none",
+            reasoning_summary="auto",
             urlopen_func=fake_urlopen,
             sleep_func=lambda seconds: None,
         )
 
         self.assertEqual(attempts["count"], 2)
         self.assertEqual(result.text, "summary")
+        self.assertEqual(result.usage.reasoning_tokens, 3)
+        self.assertEqual(result.usage.response_status, "completed")
+        self.assertEqual(result.usage.output_chars, len("summary"))
+
+    def test_run_openai_digest_retries_503_with_exponential_backoff(self) -> None:
+        attempts = {"count": 0}
+        delays: list[float] = []
+
+        class FakeResponse:
+            def __enter__(self) -> "FakeResponse":
+                return self
+
+            def __exit__(self, exc_type, exc, tb) -> None:
+                return None
+
+            def read(self) -> bytes:
+                return b'{"id":"resp_1","output_text":"summary"}'
+
+        def fake_urlopen(req, timeout=120):
+            attempts["count"] += 1
+            if attempts["count"] == 1:
+                headers = Message()
+                headers["x-request-id"] = "req_503"
+                raise error.HTTPError(
+                    "https://api.openai.com/v1/responses",
+                    503,
+                    "overloaded",
+                    headers,
+                    io.BytesIO(b'{"error":{"type":"server_error","code":"overloaded"}}'),
+                )
+            return FakeResponse()
+
+        result = telegram_digest.run_openai_digest(
+            "k",
+            "gpt-5.4-mini",
+            "system",
+            "prompt",
+            prompt_cache_key="digest:test",
+            cache_breakpoint_marker="<cache-boundary>",
+            reasoning_effort="none",
+            reasoning_summary="auto",
+            retry_backoff_seconds=2,
+            urlopen_func=fake_urlopen,
+            sleep_func=delays.append,
+            random_func=lambda: 0.5,
+        )
+
+        self.assertEqual(attempts["count"], 2)
+        self.assertEqual(delays, [3.0])
+        self.assertEqual(result.text, "summary")
+
+    def test_run_openai_digest_respects_retry_after_for_429(self) -> None:
+        attempts = {"count": 0}
+        delays: list[float] = []
+
+        class FakeResponse:
+            def __enter__(self) -> "FakeResponse":
+                return self
+
+            def __exit__(self, exc_type, exc, tb) -> None:
+                return None
+
+            def read(self) -> bytes:
+                return b'{"id":"resp_1","output_text":"summary"}'
+
+        def fake_urlopen(req, timeout=120):
+            attempts["count"] += 1
+            if attempts["count"] == 1:
+                headers = Message()
+                headers["Retry-After"] = "7"
+                raise error.HTTPError(
+                    "https://api.openai.com/v1/responses",
+                    429,
+                    "rate limited",
+                    headers,
+                    io.BytesIO(b'{"error":{"type":"rate_limit_error","code":"rate_limit_exceeded"}}'),
+                )
+            return FakeResponse()
+
+        telegram_digest.run_openai_digest(
+            "k",
+            "gpt-5.4-mini",
+            "system",
+            "prompt",
+            prompt_cache_key="digest:test",
+            cache_breakpoint_marker="<cache-boundary>",
+            reasoning_effort="none",
+            reasoning_summary="auto",
+            urlopen_func=fake_urlopen,
+            sleep_func=delays.append,
+        )
+
+        self.assertEqual(attempts["count"], 2)
+        self.assertEqual(delays, [7.0])
+
+    def test_run_openai_digest_does_not_retry_403_and_keeps_diagnostics(self) -> None:
+        attempts = {"count": 0}
+
+        def fake_urlopen(req, timeout=120):
+            attempts["count"] += 1
+            headers = Message()
+            headers["x-request-id"] = "req_403"
+            raise error.HTTPError(
+                "https://api.openai.com/v1/responses",
+                403,
+                "forbidden",
+                headers,
+                io.BytesIO(
+                    b'{"error":{"type":"permission_error","code":"content_policy_violation","message":"blocked"}}'
+                ),
+            )
+
+        with self.assertRaises(telegram_digest.OpenAIDigestRequestError) as ctx:
+            telegram_digest.run_openai_digest(
+                "k",
+                "gpt-5.4-mini",
+                "system",
+                "prompt",
+                prompt_cache_key="digest:test",
+                cache_breakpoint_marker="<cache-boundary>",
+                reasoning_effort="none",
+                reasoning_summary="auto",
+                urlopen_func=fake_urlopen,
+                sleep_func=lambda seconds: self.fail("403 must not be retried"),
+            )
+
+        self.assertEqual(attempts["count"], 1)
+        self.assertEqual(ctx.exception.status_code, 403)
+        self.assertEqual(ctx.exception.error_code, "content_policy_violation")
+        self.assertEqual(ctx.exception.request_id, "req_403")
+        self.assertFalse(ctx.exception.retryable)
+
+    def test_run_openai_digest_does_not_retry_nontransient_429(self) -> None:
+        attempts = {"count": 0}
+
+        def fake_urlopen(req, timeout=120):
+            attempts["count"] += 1
+            raise error.HTTPError(
+                "https://api.openai.com/v1/responses",
+                429,
+                "credits exhausted",
+                Message(),
+                io.BytesIO(b'{"error":{"type":"insufficient_quota","code":"credit_balance_exhausted"}}'),
+            )
+
+        with self.assertRaises(telegram_digest.OpenAIDigestRequestError) as ctx:
+            telegram_digest.run_openai_digest(
+                "k",
+                "gpt-5.4-mini",
+                "system",
+                "prompt",
+                prompt_cache_key="digest:test",
+                cache_breakpoint_marker="<cache-boundary>",
+                reasoning_effort="none",
+                reasoning_summary="auto",
+                urlopen_func=fake_urlopen,
+                sleep_func=lambda seconds: self.fail("quota errors must not be retried"),
+            )
+
+        self.assertEqual(attempts["count"], 1)
+        self.assertEqual(ctx.exception.error_code, "credit_balance_exhausted")
+        self.assertFalse(ctx.exception.retryable)
+
+    def test_run_openai_digest_accepts_empty_text_when_output_limit_is_reached(self) -> None:
+        class FakeResponse:
+            def __enter__(self) -> "FakeResponse":
+                return self
+
+            def __exit__(self, exc_type, exc, tb) -> None:
+                return None
+
+            def read(self) -> bytes:
+                return (
+                    b'{"id":"resp_1","status":"incomplete",'
+                    b'"incomplete_details":{"reason":"max_output_tokens"},'
+                    b'"output":[{"type":"reasoning","summary":[]}],'
+                    b'"usage":{"input_tokens":10,"output_tokens":1500,"total_tokens":1510}}'
+                )
+
+        result = telegram_digest.run_openai_digest(
+            "k",
+            "gpt-5.4-mini",
+            "system",
+            "prompt",
+            prompt_cache_key="digest:test",
+            cache_breakpoint_marker="<cache-boundary>",
+            reasoning_effort="low",
+            reasoning_summary="auto",
+            max_output_tokens=1500,
+            urlopen_func=lambda req, timeout=120: FakeResponse(),
+        )
+
+        self.assertEqual(result.text, "")
+        self.assertEqual(result.usage.output_chars, 0)
+        self.assertTrue(telegram_digest.has_reached_output_token_limit(result.usage))
+
+    def test_run_openai_digest_keeps_legacy_prompt_payload_for_gpt_5_4(self) -> None:
+        captured_payload: dict[str, object] = {}
+
+        class FakeResponse:
+            def __enter__(self) -> "FakeResponse":
+                return self
+
+            def __exit__(self, exc_type, exc, tb) -> None:
+                return None
+
+            def read(self) -> bytes:
+                return b'{"id":"resp_1","output_text":"summary"}'
+
+        def fake_urlopen(req, timeout=120):
+            captured_payload.update(json.loads(req.data.decode("utf-8")))
+            return FakeResponse()
+
+        marker = "<cache-boundary>"
+        prompt = f"static prompt\n\n{marker}\ndynamic payload"
+        telegram_digest.run_openai_digest(
+            "k",
+            "gpt-5.4-mini",
+            "system",
+            prompt,
+            prompt_cache_key="digest:test",
+            cache_breakpoint_marker=marker,
+            reasoning_effort="low",
+            reasoning_summary="auto",
+            urlopen_func=fake_urlopen,
+        )
+
+        self.assertEqual(captured_payload["input"], prompt)
+        self.assertEqual(captured_payload["reasoning"], {"effort": "low", "summary": "auto"})
+        self.assertNotIn("prompt_cache_options", captured_payload)
+
+        telegram_digest.run_openai_digest(
+            "k",
+            "gpt-5.4-mini",
+            "system",
+            prompt,
+            prompt_cache_key="digest:test",
+            cache_breakpoint_marker=marker,
+            reasoning_effort="low",
+            reasoning_summary="none",
+            urlopen_func=fake_urlopen,
+        )
+
+        self.assertEqual(captured_payload["reasoning"], {"effort": "low"})
+
+    def test_run_openai_digest_adds_explicit_cache_breakpoint_for_gpt_5_6(self) -> None:
+        captured_payload: dict[str, object] = {}
+
+        class FakeResponse:
+            def __enter__(self) -> "FakeResponse":
+                return self
+
+            def __exit__(self, exc_type, exc, tb) -> None:
+                return None
+
+            def read(self) -> bytes:
+                return b'{"id":"resp_1","output_text":"summary"}'
+
+        def fake_urlopen(req, timeout=120):
+            captured_payload.update(json.loads(req.data.decode("utf-8")))
+            return FakeResponse()
+
+        marker = "<cache-boundary>"
+        prompt = f"static prompt\n\n{marker}\ndynamic payload"
+        telegram_digest.run_openai_digest(
+            "k",
+            "gpt-5.6-luna",
+            "system",
+            prompt,
+            prompt_cache_key="digest:test",
+            cache_breakpoint_marker=marker,
+            reasoning_effort="low",
+            reasoning_summary="auto",
+            urlopen_func=fake_urlopen,
+        )
+
+        self.assertEqual(captured_payload["prompt_cache_options"], {"mode": "explicit"})
+        content = captured_payload["input"][0]["content"]
+        self.assertEqual(content[0]["text"] + content[1]["text"], prompt)
+        self.assertEqual(content[0]["prompt_cache_breakpoint"], {"mode": "explicit"})
+        self.assertNotIn("prompt_cache_breakpoint", content[1])
 
     def test_run_openai_digest_raises_after_exhausted_timeouts(self) -> None:
         attempts = {"count": 0}
@@ -426,19 +816,22 @@ batch_digest_template = "Batch={batch_index}"
             attempts["count"] += 1
             raise error.URLError("timed out")
 
-        with self.assertRaises(SystemExit) as ctx:
+        with self.assertRaises(telegram_digest.OpenAIDigestRequestError) as ctx:
             telegram_digest.run_openai_digest(
                 "k",
                 "gpt-5.4-mini",
                 "system",
                 "prompt",
                 prompt_cache_key="digest:test",
+                cache_breakpoint_marker="<cache-boundary>",
+                reasoning_effort="none",
+                reasoning_summary="auto",
                 urlopen_func=fake_urlopen,
                 sleep_func=lambda seconds: None,
             )
 
         self.assertEqual(attempts["count"], telegram_digest.OPENAI_DIGEST_RETRY_ATTEMPTS)
-        self.assertIn("after 3 attempts", str(ctx.exception))
+        self.assertEqual(ctx.exception.error_type, "network_error")
 
     def test_build_channel_digest_message_appends_separator_text(self) -> None:
         message = telegram_digest.build_channel_digest_message(
@@ -463,6 +856,42 @@ batch_digest_template = "Batch={batch_index}"
         )
 
         self.assertIn("достигнут лимит message_block_max_chars", message)
+
+    def test_build_channel_digest_message_appends_output_token_limit_warning(self) -> None:
+        message = telegram_digest.build_channel_digest_message(
+            "Channel A",
+            since="2026-03-17",
+            until="2026-03-17",
+            message_count=3,
+            summary="Главные темы дня: тема.",
+            output_token_limit_reached=True,
+            output_token_limit=1200,
+            sync_limit_reached=True,
+        )
+
+        self.assertIn("ответ ИИ достиг лимита выходных токенов (1200)", message)
+        self.assertGreater(
+            message.index("ответ ИИ достиг лимита выходных токенов"),
+            message.index("достигнут sync_limit"),
+        )
+
+    def test_has_reached_output_token_limit_requires_explicit_incomplete_status(self) -> None:
+        at_limit = telegram_digest.OpenAIUsage(100, 0, 0, 1200, 1300, 50)
+        incomplete = telegram_digest.OpenAIUsage(
+            100,
+            0,
+            0,
+            500,
+            600,
+            50,
+            response_status="incomplete",
+            incomplete_reason="max_output_tokens",
+        )
+        below_limit = telegram_digest.OpenAIUsage(100, 0, 0, 1199, 1299, 50)
+
+        self.assertFalse(telegram_digest.has_reached_output_token_limit(at_limit))
+        self.assertTrue(telegram_digest.has_reached_output_token_limit(incomplete))
+        self.assertFalse(telegram_digest.has_reached_output_token_limit(below_limit))
 
     def test_build_channel_digest_message_appends_sync_limit_warning(self) -> None:
         message = telegram_digest.build_channel_digest_message(
@@ -871,6 +1300,7 @@ batch_digest_template = "Batch={batch_index}"
             1,
             "id=1\nsender=Alice (@alice)\ntext=hello",
             "prev summary",
+            cache_breakpoint_marker="<cache-boundary>",
         )
 
         self.assertTrue(prompt.startswith("Shared vc.ru 2026-03-17 2026-03-17"))
@@ -886,23 +1316,37 @@ batch_digest_template = "Batch={batch_index}"
             "2026-03-17",
             2,
             "id=1\nsender=Alice (@alice)\ntext=hello",
+            cache_breakpoint_marker="<cache-boundary>",
         )
 
         self.assertTrue(prompt.startswith("Shared vc.ru 2026-03-17 2026-03-17"))
         self.assertIn("Single vc.ru 2026-03-17 2026-03-17 2", prompt)
         self.assertIn("sender=Alice (@alice)", prompt)
 
-    def test_build_prompt_cache_info_uses_shared_prefix_hash_and_common_key(self) -> None:
+    def test_build_prompt_cache_info_uses_stable_prefix_and_cross_channel_key(self) -> None:
         info = telegram_digest.build_prompt_cache_info(
             stage="batch",
             model="gpt-5.4-mini",
-            cache_channel="@vcnews",
             display_channel="vc.ru",
             since="2026-03-17",
             until="2026-03-17",
             system_instructions="system",
-            shared_prompt_prefix="Shared {channel_name} {since} {until}",
-            prompt="Shared vc.ru 2026-03-17 2026-03-17\n\nbody",
+            shared_prompt_prefix="Shared stable instructions",
+            cache_breakpoint_marker="<cache-boundary>",
+            stage_template="Batch={channel_name}; {message_block}",
+            prompt="Shared stable instructions\n\nBatch=vc.ru; body",
+        )
+        other_info = telegram_digest.build_prompt_cache_info(
+            stage="batch",
+            model="gpt-5.4-mini",
+            display_channel="another channel",
+            since="2026-03-18",
+            until="2026-03-18",
+            system_instructions="system",
+            shared_prompt_prefix="Shared stable instructions",
+            cache_breakpoint_marker="<cache-boundary>",
+            stage_template="Batch={channel_name}; {message_block}",
+            prompt="Shared stable instructions\n\nBatch=another channel; body",
         )
 
         self.assertTrue(info.cache_key.startswith("digest:"))
@@ -911,51 +1355,37 @@ batch_digest_template = "Batch={batch_index}"
             info.cache_key,
             telegram_digest.build_prompt_cache_key(
                 model="gpt-5.4-mini",
-                channel="@vcnews",
-                profile="day",
                 stage="batch",
+                system_instructions="system",
+                shared_prompt_prefix="Shared stable instructions",
+                stage_template="Batch={channel_name}; {message_block}",
             ),
         )
-        self.assertEqual(info.cache_retention, "in_memory")
+        self.assertEqual(info.cache_key, other_info.cache_key)
+        self.assertEqual(info.cache_retention, "api_default")
         self.assertEqual(info.system_chars, len("system"))
-        self.assertEqual(info.prompt_chars, len("Shared vc.ru 2026-03-17 2026-03-17\n\nbody"))
-        self.assertEqual(info.shared_prefix_chars, len("Shared vc.ru 2026-03-17 2026-03-17"))
+        self.assertEqual(info.prompt_chars, len("Shared stable instructions\n\nBatch=vc.ru; body"))
+        self.assertEqual(info.shared_prefix_chars, len("Shared stable instructions"))
         self.assertTrue(info.shared_prefix_hash)
+        self.assertTrue(info.prompt_version_hash)
 
     def test_build_prompt_cache_key_splits_by_stage(self) -> None:
         batch_key = telegram_digest.build_prompt_cache_key(
             model="gpt-5.4-mini",
-            channel="@vcnews",
-            profile="day",
             stage="batch",
+            system_instructions="system",
+            shared_prompt_prefix="Shared stable instructions",
+            stage_template="Batch template",
         )
         final_key = telegram_digest.build_prompt_cache_key(
             model="gpt-5.4-mini",
-            channel="@vcnews",
-            profile="day",
             stage="final",
+            system_instructions="system",
+            shared_prompt_prefix="Shared stable instructions",
+            stage_template="Final template",
         )
 
         self.assertNotEqual(batch_key, final_key)
-
-    def test_extract_usage_reads_cached_tokens(self) -> None:
-        usage = telegram_digest.extract_usage(
-            {
-                "usage": {
-                    "input_tokens": 7800,
-                    "output_tokens": 520,
-                    "total_tokens": 8320,
-                    "input_tokens_details": {"cached_tokens": 2048},
-                }
-            },
-            latency_ms=321,
-        )
-
-        self.assertEqual(usage.input_tokens, 7800)
-        self.assertEqual(usage.cached_input_tokens, 2048)
-        self.assertEqual(usage.output_tokens, 520)
-        self.assertEqual(usage.total_tokens, 8320)
-        self.assertEqual(usage.latency_ms, 321)
 
     def test_allocate_sync_limits_splits_total_across_channels(self) -> None:
         plans = telegram_digest.allocate_sync_limits(["@a", "@b", "@c"], 10)
@@ -1051,8 +1481,9 @@ batch_digest_template = "Batch={batch_index}"
             ("month", 181000, 111, 121, 221, 100000),
         )
 
-    def test_summarize_channel_batches_uses_single_pass_when_full_window_fits(self) -> None:
+    def test_summarize_channel_batches_handles_single_pass_results(self) -> None:
         conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
         telegram_digest.history_client.init_db(conn)
         messages = [
             {
@@ -1101,22 +1532,42 @@ batch_digest_template = "Batch={batch_index}"
             use_ocr=True,
             system_instructions="system",
             shared_prompt_prefix="Shared {channel_name} {since} {until}",
+            cache_breakpoint_marker="<cache-boundary>",
             single_prompt_template="Single {channel_name} {message_count}\n{message_block}",
             batch_prompt_template="Digest {channel_name} {message_count}\n{message_block}",
             final_prompt_template="Final {channel_name}\n{batch_summary_block}",
             openai_api_key="k",
+            openai_reasoning_effort="none",
+            openai_reasoning_summary="auto",
         )
         original_run_openai_digest = telegram_digest.run_openai_digest
         calls: list[str] = []
         try:
             def fake_run_openai_digest(api_key, model, system_instructions, prompt, *, prompt_cache_key, **kwargs):
                 calls.append(prompt)
+                if len(calls) == 2:
+                    return telegram_digest.OpenAIResult(
+                        response_id="resp_2",
+                        text="",
+                        usage=telegram_digest.OpenAIUsage(
+                            input_tokens=100,
+                            cached_input_tokens=0,
+                            cache_write_tokens=0,
+                            output_tokens=1500,
+                            total_tokens=1600,
+                            latency_ms=50,
+                            response_status="incomplete",
+                            incomplete_reason="max_output_tokens",
+                            output_chars=0,
+                        ),
+                    )
                 return telegram_digest.OpenAIResult(
                     response_id="resp_1",
                     text="Main topics of the day: one direct digest.",
                     usage=telegram_digest.OpenAIUsage(
                         input_tokens=100,
                         cached_input_tokens=0,
+                        cache_write_tokens=0,
                         output_tokens=20,
                         total_tokens=120,
                         latency_ms=50,
@@ -1124,7 +1575,18 @@ batch_digest_template = "Batch={batch_index}"
                 )
 
             telegram_digest.run_openai_digest = fake_run_openai_digest
-            count, summary, char_limit_reached = telegram_digest.summarize_channel_batches(
+            count, summary, char_limit_reached, output_token_limit_reached = telegram_digest.summarize_channel_batches(
+                conn,
+                api_key="k",
+                config=config,
+                channel="@vcnews",
+                channel_name="vc.ru",
+                since="2026-03-17",
+                until="2026-03-17",
+                total_message_count=2,
+                messages=iter(messages),
+            )
+            capped_count, capped_summary, capped_char_limit_reached, capped_output_token_limit_reached = telegram_digest.summarize_channel_batches(
                 conn,
                 api_key="k",
                 config=config,
@@ -1141,7 +1603,12 @@ batch_digest_template = "Batch={batch_index}"
         self.assertEqual(count, 2)
         self.assertEqual(summary, "Main topics of the day: one direct digest.")
         self.assertFalse(char_limit_reached)
-        self.assertEqual(len(calls), 1)
+        self.assertFalse(output_token_limit_reached)
+        self.assertEqual(capped_count, 2)
+        self.assertEqual(capped_summary, telegram_digest.OUTPUT_TOKEN_LIMIT_EMPTY_RESPONSE_TEXT)
+        self.assertFalse(capped_char_limit_reached)
+        self.assertTrue(capped_output_token_limit_reached)
+        self.assertEqual(len(calls), 2)
         self.assertNotIn("Final vc.ru", calls[0])
 
     def test_summarize_channel_batches_reports_char_limit_hit(self) -> None:
@@ -1195,10 +1662,13 @@ batch_digest_template = "Batch={batch_index}"
             use_ocr=False,
             system_instructions="system",
             shared_prompt_prefix="Shared {channel_name} {since} {until}",
+            cache_breakpoint_marker="<cache-boundary>",
             single_prompt_template="Single {channel_name} {message_count}\n{message_block}",
             batch_prompt_template="Digest {channel_name} {message_count}\n{message_block}",
             final_prompt_template="Final {channel_name}\n{batch_summary_block}",
             openai_api_key="k",
+            openai_reasoning_effort="none",
+            openai_reasoning_summary="auto",
         )
         original_run_openai_digest = telegram_digest.run_openai_digest
         try:
@@ -1208,12 +1678,13 @@ batch_digest_template = "Batch={batch_index}"
                 usage=telegram_digest.OpenAIUsage(
                     input_tokens=100,
                     cached_input_tokens=0,
+                    cache_write_tokens=0,
                     output_tokens=20,
                     total_tokens=120,
                     latency_ms=50,
                 ),
             )
-            count, summary, char_limit_reached = telegram_digest.summarize_channel_batches(
+            count, summary, char_limit_reached, output_token_limit_reached = telegram_digest.summarize_channel_batches(
                 conn,
                 api_key="k",
                 config=config,
@@ -1230,6 +1701,7 @@ batch_digest_template = "Batch={batch_index}"
         self.assertEqual(count, 2)
         self.assertEqual(summary, "Главные темы дня: тема.")
         self.assertTrue(char_limit_reached)
+        self.assertFalse(output_token_limit_reached)
         conn.close()
 
     def test_cmd_run_sends_per_channel_messages_and_final_error_only_when_needed(self) -> None:
@@ -1247,13 +1719,21 @@ batch_digest_template = "Batch={batch_index}"
         original_summarize_channel_batches = telegram_digest.summarize_channel_batches
         original_require_token = telegram_digest.bridge.require_token
         original_send_text_chunks = telegram_digest.bridge.send_text_chunks
+        original_project_root = telegram_digest.PROJECT_ROOT
+        original_launchd_log_dir = telegram_digest.LAUNCHD_LOG_DIR
+        original_digest_last_attempt_log = telegram_digest.DIGEST_LAST_ATTEMPT_LOG
         try:
+            telegram_digest.PROJECT_ROOT = Path(temp_dir.name)
+            telegram_digest.LAUNCHD_LOG_DIR = telegram_digest.PROJECT_ROOT / "data" / "launchd"
+            telegram_digest.DIGEST_LAST_ATTEMPT_LOG = telegram_digest.LAUNCHD_LOG_DIR / "digest.last_attempt.json"
             telegram_digest.history_client.resolve_runtime = lambda: type("Runtime", (), {"default_auth_mode": "user"})()
             telegram_digest.history_client.load_runtime_config = lambda: {
                 "telegram": {"default_chat_id": "1"},
                 "processing": {"model": "test-model"},
                 "digest_prompts": {"file": str(prompt_file)},
                 "digest_ai": {
+                    "reasoning_effort": "none",
+                    "reasoning_summary": "auto",
                     "messages_per_ai_pass": "111",
                     "message_text_max_chars": "450",
                     "message_ocr_max_chars": "300",
@@ -1281,6 +1761,7 @@ batch_digest_template = "Batch={batch_index}"
                     response_id TEXT,
                     prompt_cache_key TEXT,
                     prompt_cache_retention TEXT,
+                    prompt_version_hash TEXT,
                     request_index INTEGER,
                     message_count INTEGER,
                     system_chars INTEGER,
@@ -1294,6 +1775,11 @@ batch_digest_template = "Batch={batch_index}"
                     prompt_text TEXT,
                     input_tokens INTEGER,
                     cached_input_tokens INTEGER,
+                    cache_write_tokens INTEGER,
+                    reasoning_tokens INTEGER,
+                    output_chars INTEGER,
+                    response_status TEXT,
+                    incomplete_reason TEXT,
                     output_tokens INTEGER,
                     total_tokens INTEGER,
                     latency_ms INTEGER,
@@ -1327,8 +1813,14 @@ batch_digest_template = "Batch={batch_index}"
 
             def fake_summarize_channel_batches(conn, **kwargs):
                 if kwargs["channel"] == "@b":
-                    raise RuntimeError("boom")
-                return (1, "summary ok", False)
+                    raise telegram_digest.OpenAIDigestRequestError(
+                        "OpenAI API request failed (HTTP 403, code=content_policy_violation, request_id=req_403).",
+                        status_code=403,
+                        error_type="permission_error",
+                        error_code="content_policy_violation",
+                        request_id="req_403",
+                    )
+                return (1, "summary ok", False, True)
 
             telegram_digest.summarize_channel_batches = fake_summarize_channel_batches
             telegram_digest.bridge.require_token = lambda: "token"
@@ -1351,15 +1843,19 @@ batch_digest_template = "Batch={batch_index}"
             telegram_digest.summarize_channel_batches = original_summarize_channel_batches
             telegram_digest.bridge.require_token = original_require_token
             telegram_digest.bridge.send_text_chunks = original_send_text_chunks
+            telegram_digest.PROJECT_ROOT = original_project_root
+            telegram_digest.LAUNCHD_LOG_DIR = original_launchd_log_dir
+            telegram_digest.DIGEST_LAST_ATTEMPT_LOG = original_digest_last_attempt_log
             temp_dir.cleanup()
 
         self.assertEqual(exit_code, 0)
         self.assertEqual(len(sent), 2)
         self.assertIn("@a", sent[0])
         self.assertIn("summary ok", sent[0])
+        self.assertIn("ответ ИИ достиг лимита выходных токенов (1200)", sent[0])
         self.assertIn("достигнут sync_limit", sent[0])
         self.assertIn("Digest completed with errors", sent[1])
-        self.assertIn("analysis failed: boom", sent[1])
+        self.assertIn("analysis failed: OpenAI API request failed (HTTP 403", sent[1])
 
     def test_cmd_run_continues_after_channel_delivery_failure_and_marks_partial(self) -> None:
         temp_dir = tempfile.TemporaryDirectory()
@@ -1397,6 +1893,8 @@ batch_digest_template = "Batch={batch_index}"
                 "processing": {"model": "test-model"},
                 "digest_prompts": {"file": str(prompt_file)},
                 "digest_ai": {
+                    "reasoning_effort": "none",
+                    "reasoning_summary": "auto",
                     "messages_per_ai_pass": "111",
                     "message_text_max_chars": "450",
                     "message_ocr_max_chars": "300",
@@ -1423,6 +1921,7 @@ batch_digest_template = "Batch={batch_index}"
                     response_id TEXT,
                     prompt_cache_key TEXT,
                     prompt_cache_retention TEXT,
+                    prompt_version_hash TEXT,
                     request_index INTEGER,
                     message_count INTEGER,
                     system_chars INTEGER,
@@ -1436,6 +1935,11 @@ batch_digest_template = "Batch={batch_index}"
                     prompt_text TEXT,
                     input_tokens INTEGER,
                     cached_input_tokens INTEGER,
+                    cache_write_tokens INTEGER,
+                    reasoning_tokens INTEGER,
+                    output_chars INTEGER,
+                    response_status TEXT,
+                    incomplete_reason TEXT,
                     output_tokens INTEGER,
                     total_tokens INTEGER,
                     latency_ms INTEGER,
@@ -1471,6 +1975,7 @@ batch_digest_template = "Batch={batch_index}"
             telegram_digest.summarize_channel_batches = lambda conn, **kwargs: (
                 1,
                 f"summary {kwargs['channel']}",
+                False,
                 False,
             )
             telegram_digest.bridge.require_token = lambda: "token"
@@ -1556,6 +2061,8 @@ batch_digest_template = "Batch={batch_index}"
                 "processing": {"model": "test-model"},
                 "digest_prompts": {"file": str(prompt_file)},
                 "digest_ai": {
+                    "reasoning_effort": "none",
+                    "reasoning_summary": "auto",
                     "messages_per_ai_pass": "111",
                     "message_text_max_chars": "450",
                     "message_ocr_max_chars": "300",
@@ -1624,7 +2131,13 @@ batch_digest_template = "Batch={batch_index}"
         original_summarize_channel_batches = telegram_digest.summarize_channel_batches
         original_require_token = telegram_digest.bridge.require_token
         original_send_text_chunks = telegram_digest.bridge.send_text_chunks
+        original_project_root = telegram_digest.PROJECT_ROOT
+        original_launchd_log_dir = telegram_digest.LAUNCHD_LOG_DIR
+        original_digest_last_attempt_log = telegram_digest.DIGEST_LAST_ATTEMPT_LOG
         try:
+            telegram_digest.PROJECT_ROOT = Path(temp_dir.name)
+            telegram_digest.LAUNCHD_LOG_DIR = telegram_digest.PROJECT_ROOT / "data" / "launchd"
+            telegram_digest.DIGEST_LAST_ATTEMPT_LOG = telegram_digest.LAUNCHD_LOG_DIR / "digest.last_attempt.json"
             telegram_digest.history_client.resolve_runtime = lambda: type("Runtime", (), {"default_auth_mode": "user"})()
             telegram_digest.history_client.load_runtime_config = lambda: {
                 "telegram": {"default_chat_id": "1"},
@@ -1632,6 +2145,8 @@ batch_digest_template = "Batch={batch_index}"
                 "digest": {"min_messages_for_ai": "5"},
                 "digest_prompts": {"file": str(prompt_file)},
                 "digest_ai": {
+                    "reasoning_effort": "none",
+                    "reasoning_summary": "auto",
                     "messages_per_ai_pass": "111",
                     "message_text_max_chars": "450",
                     "message_ocr_max_chars": "300",
@@ -1659,6 +2174,7 @@ batch_digest_template = "Batch={batch_index}"
                     response_id TEXT,
                     prompt_cache_key TEXT,
                     prompt_cache_retention TEXT,
+                    prompt_version_hash TEXT,
                     request_index INTEGER,
                     message_count INTEGER,
                     system_chars INTEGER,
@@ -1672,6 +2188,11 @@ batch_digest_template = "Batch={batch_index}"
                     prompt_text TEXT,
                     input_tokens INTEGER,
                     cached_input_tokens INTEGER,
+                    cache_write_tokens INTEGER,
+                    reasoning_tokens INTEGER,
+                    output_chars INTEGER,
+                    response_status TEXT,
+                    incomplete_reason TEXT,
                     output_tokens INTEGER,
                     total_tokens INTEGER,
                     latency_ms INTEGER,
@@ -1729,6 +2250,9 @@ batch_digest_template = "Batch={batch_index}"
             telegram_digest.summarize_channel_batches = original_summarize_channel_batches
             telegram_digest.bridge.require_token = original_require_token
             telegram_digest.bridge.send_text_chunks = original_send_text_chunks
+            telegram_digest.PROJECT_ROOT = original_project_root
+            telegram_digest.LAUNCHD_LOG_DIR = original_launchd_log_dir
+            telegram_digest.DIGEST_LAST_ATTEMPT_LOG = original_digest_last_attempt_log
             temp_dir.cleanup()
 
         self.assertEqual(exit_code, 0)
@@ -1769,6 +2293,8 @@ batch_digest_template = "Batch={batch_index}"
                 },
                 "digest_prompts": {"file": str(prompt_file)},
                 "digest_ai": {
+                    "reasoning_effort": "none",
+                    "reasoning_summary": "auto",
                     "messages_per_ai_pass": "111",
                     "message_text_max_chars": "450",
                     "message_ocr_max_chars": "300",
@@ -1796,6 +2322,7 @@ batch_digest_template = "Batch={batch_index}"
                     response_id TEXT,
                     prompt_cache_key TEXT,
                     prompt_cache_retention TEXT,
+                    prompt_version_hash TEXT,
                     request_index INTEGER,
                     message_count INTEGER,
                     system_chars INTEGER,
@@ -1809,6 +2336,11 @@ batch_digest_template = "Batch={batch_index}"
                     prompt_text TEXT,
                     input_tokens INTEGER,
                     cached_input_tokens INTEGER,
+                    cache_write_tokens INTEGER,
+                    reasoning_tokens INTEGER,
+                    output_chars INTEGER,
+                    response_status TEXT,
+                    incomplete_reason TEXT,
                     output_tokens INTEGER,
                     total_tokens INTEGER,
                     latency_ms INTEGER,
@@ -1834,7 +2366,7 @@ batch_digest_template = "Batch={batch_index}"
                 message_block="block",
                 hit_char_limit=False,
             )
-            telegram_digest.summarize_channel_batches = lambda conn, **kwargs: (1, "summary ok", False)
+            telegram_digest.summarize_channel_batches = lambda conn, **kwargs: (1, "summary ok", False, False)
             telegram_digest.bridge.require_token = lambda: "token"
             telegram_digest.bridge.send_text_chunks = lambda token, chat_id, message, chunk_size=None, parse_mode=None: None
 
@@ -1905,6 +2437,8 @@ batch_digest_template = "Batch={batch_index}"
                 "digest": {"sync_total_timeout_seconds": "1"},
                 "digest_prompts": {"file": str(prompt_file)},
                 "digest_ai": {
+                    "reasoning_effort": "none",
+                    "reasoning_summary": "auto",
                     "messages_per_ai_pass": "111",
                     "message_text_max_chars": "450",
                     "message_ocr_max_chars": "300",
