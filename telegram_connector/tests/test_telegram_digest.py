@@ -658,6 +658,24 @@ batch_digest_template = "Batch={batch_index}; {cache_breakpoint_marker}"
         self.assertEqual(ctx.exception.error_code, "content_policy_violation")
         self.assertEqual(ctx.exception.request_id, "req_403")
         self.assertFalse(ctx.exception.retryable)
+        self.assertEqual(ctx.exception.operator_summary(), "HTTP 403 (permission_error; not retryable)")
+
+    def test_openai_usage_error_message_includes_safe_network_diagnostics(self) -> None:
+        exc = telegram_digest.OpenAIDigestRequestError(
+            "OpenAI API network request failed.",
+            error_type="network_error",
+            cause_type="OSError",
+            cause_errno="ENETDOWN",
+            cause_message="Network is down",
+            attempts_made=3,
+            retry_exhausted=True,
+        )
+
+        self.assertEqual(
+            telegram_digest.openai_usage_error_message(exc),
+            "OpenAI API network request failed. [cause_type=OSError, cause_errno=ENETDOWN, "
+            "cause_message=Network is down, attempts_made=3, retry_exhausted=true]",
+        )
 
     def test_run_openai_digest_does_not_retry_nontransient_429(self) -> None:
         attempts = {"count": 0}
@@ -1855,7 +1873,7 @@ batch_digest_template = "Batch={batch_index}; {cache_breakpoint_marker}"
         self.assertIn("ответ ИИ достиг лимита выходных токенов (1200)", sent[0])
         self.assertIn("достигнут sync_limit", sent[0])
         self.assertIn("Digest completed with errors", sent[1])
-        self.assertIn("analysis failed: OpenAI API request failed (HTTP 403", sent[1])
+        self.assertIn("analysis failed: HTTP 403 (permission_error)", sent[1])
 
     def test_cmd_run_continues_after_channel_delivery_failure_and_marks_partial(self) -> None:
         temp_dir = tempfile.TemporaryDirectory()

@@ -56,9 +56,9 @@ Permanent Telegram API errors such as bad chat ids, revoked tokens, and other no
 
 `telegram_shared.openai_api.post_responses` owns bounded retries for the shared OpenAI Responses API transport. Each caller supplies its timeout, attempt count, and backoff from its own runtime config.
 
-Retryable OpenAI failures are network errors, HTTP `408`, retryable HTTP `429`, and HTTP `500`/`502`/`503`/`504`. The helper honors `Retry-After`; otherwise it uses exponential backoff with jitter. Credential, permission, quota, and malformed-request errors are returned to the owning app without retry.
+Retryable OpenAI failures are network errors, including OS-level connection and temporary DNS failures; client errors `408` and eligible `429`; standard transient server errors `500`/`502`/`503`/`504`; and edge/origin errors `520` through `525` plus `530`. HTTP `3xx` responses are never retried: a redirect that reaches the classifier needs an explicitly validated target and is not a transient API failure. Every other HTTP `4xx` response is also not retried: it indicates a request, authentication, permission, quota, policy, or resource-state problem that another identical POST cannot resolve. A `429` with a permanent quota type or code is also not retried. Explicit local OS failures such as invalid descriptors and permission errors, HTTP `501`, and edge certificate error `526` are not retried. The helper honors `Retry-After`; otherwise it uses exponential backoff with jitter.
 
-The helper records only bounded, redacted error diagnostics: status, OpenAI type/code, request id, and a redacted message. Digest decides whether to continue other channels; the agent worker decides how to end one interactive request.
+The helper records only bounded, redacted error diagnostics: status, OpenAI type/code, request id, exception class, OS error code, message, completed attempts, and retry delays. Digest decides whether to continue other channels and how to summarize the error for Telegram; the agent worker decides how to end one interactive request.
 
 ## Tests
 

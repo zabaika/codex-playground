@@ -37,7 +37,7 @@ model = "gpt-5.4-mini"
 max_tool_rounds = "8"
 # Network timeout in seconds for one OpenAI Responses API request from the agent worker. Values are clamped to 30..600.
 openai_timeout_seconds = "180"
-# Number of OpenAI Responses API retry attempts for transient network, HTTP 408, retryable HTTP 429, and HTTP 500/502/503/504 failures.
+# Number of OpenAI Responses API retry attempts for transient network/OS, HTTP 408, retryable HTTP 429, HTTP 500/502/503/504, and edge/origin HTTP 520-525/530 failures.
 # Values are clamped to 1..5.
 openai_retry_attempts = "3"
 # Base delay in seconds for OpenAI retries. The delay grows exponentially with jitter; Retry-After overrides it when OpenAI supplies that header.

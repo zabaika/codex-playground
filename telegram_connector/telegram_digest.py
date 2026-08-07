@@ -1164,6 +1164,12 @@ def is_fatal_openai_error(exc: OpenAIDigestRequestError) -> bool:
     return exc.status_code == 401
 
 
+def openai_usage_error_message(exc: Exception) -> str:
+    if isinstance(exc, OpenAIDigestRequestError):
+        return exc.telemetry_message()
+    return str(exc) or exc.__class__.__name__
+
+
 def run_openai_digest(
     api_key: str,
     model: str,
@@ -1549,7 +1555,7 @@ def summarize_channel_batches(
                     status="error",
                     cache_info=cache_info,
                     prompt_text=prompt,
-                    error=str(exc) or exc.__class__.__name__,
+                    error=openai_usage_error_message(exc),
                     store_prompt_text=config.store_prompt_text,
                 )
                 raise
@@ -1642,7 +1648,7 @@ def summarize_channel_batches(
                 status="error",
                 cache_info=cache_info,
                 prompt_text=prompt,
-                error=str(exc) or exc.__class__.__name__,
+                error=openai_usage_error_message(exc),
                 store_prompt_text=config.store_prompt_text,
             )
             raise
@@ -1736,7 +1742,7 @@ def summarize_channel_batches(
             status="error",
             cache_info=final_cache_info,
             prompt_text=final_prompt,
-            error=str(exc) or exc.__class__.__name__,
+            error=openai_usage_error_message(exc),
             store_prompt_text=config.store_prompt_text,
         )
         raise
@@ -2025,7 +2031,7 @@ def cmd_run(args: argparse.Namespace) -> int:
                     "error": exc.diagnostic(),
                 }
                 analysis_errors.append(error_details)
-                errors.append(f"{channel_name}: analysis failed: {exc}")
+                errors.append(f"{channel_name}: analysis failed: {exc.operator_summary()}")
                 persist_attempt(
                     current_channel=channel,
                     errors=errors,
