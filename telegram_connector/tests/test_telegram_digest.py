@@ -1873,7 +1873,21 @@ batch_digest_template = "Batch={batch_index}; {cache_breakpoint_marker}"
         self.assertIn("ответ ИИ достиг лимита выходных токенов (1200)", sent[0])
         self.assertIn("достигнут sync_limit", sent[0])
         self.assertIn("Digest completed with errors", sent[1])
+        self.assertIn("@b: analysis failed", sent[1])
         self.assertIn("analysis failed: HTTP 403 (permission_error)", sent[1])
+
+    def test_format_digest_channel_reference_keeps_copyable_selector(self) -> None:
+        self.assertEqual(
+            telegram_digest.format_digest_channel_reference(
+                "@arraigo_spain",
+                "Оседлость в Испании",
+            ),
+            "Оседлость в Испании (@arraigo_spain)",
+        )
+        self.assertEqual(
+            telegram_digest.format_digest_channel_reference("-1001449711572", "-1001449711572"),
+            "-1001449711572",
+        )
 
     def test_cmd_run_continues_after_channel_delivery_failure_and_marks_partial(self) -> None:
         temp_dir = tempfile.TemporaryDirectory()

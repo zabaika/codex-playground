@@ -1471,6 +1471,14 @@ def has_reached_output_token_limit(usage: OpenAIUsage) -> bool:
     )
 
 
+def format_digest_channel_reference(channel: str, channel_name: str) -> str:
+    normalized_channel = channel.strip()
+    normalized_channel_name = channel_name.strip()
+    if normalized_channel_name and normalized_channel_name != normalized_channel:
+        return f"{normalized_channel_name} ({normalized_channel})"
+    return normalized_channel_name or normalized_channel
+
+
 def format_digest_delivery_error(channel_name: str, exc: BaseException) -> str:
     return f"{channel_name}: delivery failed: {str(exc) or exc.__class__.__name__}"
 
@@ -2031,7 +2039,10 @@ def cmd_run(args: argparse.Namespace) -> int:
                     "error": exc.diagnostic(),
                 }
                 analysis_errors.append(error_details)
-                errors.append(f"{channel_name}: analysis failed: {exc.operator_summary()}")
+                errors.append(
+                    f"{format_digest_channel_reference(channel, channel_name)}: "
+                    f"analysis failed: {exc.operator_summary()}"
+                )
                 persist_attempt(
                     current_channel=channel,
                     errors=errors,
@@ -2041,7 +2052,10 @@ def cmd_run(args: argparse.Namespace) -> int:
                     raise
                 continue
             except Exception as exc:
-                errors.append(f"{channel_name}: analysis failed: {str(exc) or exc.__class__.__name__}")
+                errors.append(
+                    f"{format_digest_channel_reference(channel, channel_name)}: "
+                    f"analysis failed: {str(exc) or exc.__class__.__name__}"
+                )
                 persist_attempt(current_channel=channel, errors=errors)
                 continue
             send_channel_digest(

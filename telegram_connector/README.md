@@ -140,7 +140,7 @@ Digest runs are per channel: prep-sync, optional OCR, AI analysis, and Telegram 
 - channels that fit `digest_ai.*` budgets use one direct OpenAI request; larger windows fall back to chronological batches and a final summary
 - hitting an effective digest `sync_limit` is called out in the delivered channel message
 - transient OpenAI network/OS failures, `408`, retryable `429`, `500`/`502`/`503`/`504`, and edge/origin `520`–`525`/`530` use bounded retries; retryable rate limits honor `Retry-After`
-- failed OpenAI analysis for one channel is recorded with safe HTTP or network diagnostics and retry outcome, then produces `status=partial` while the remaining channels continue
+- failed OpenAI analysis for one channel is recorded with safe HTTP or network diagnostics, retry outcome, and a copyable channel selector for a manual rerun, then produces `status=partial` while the remaining channels continue
 - transient delivery failures are recorded as per-channel errors and produce `status=partial`
 - permanent delivery failures, such as invalid chat ids or revoked tokens, fail the run and write `status=failed`
 - final error summary delivery is best-effort
