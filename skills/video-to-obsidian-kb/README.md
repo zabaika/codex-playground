@@ -1,14 +1,14 @@
 # video-to-obsidian-kb
 
-Local Codex skill for turning a YouTube or Vimeo video into linked Obsidian knowledge-base notes through a fail-closed transcript-first pipeline.
+Local Codex skill for turning a YouTube, Vimeo or supported LinkedIn video into linked Obsidian knowledge-base notes through a fail-closed transcript-first pipeline.
 
 ## Purpose
 
-Use `video-to-obsidian-kb` when a YouTube or Vimeo URL should become vault notes, but only after a real transcript is fetched locally and prepared for the shared note-writing workflow.
+Use `video-to-obsidian-kb` when a YouTube, Vimeo or supported LinkedIn URL should become vault notes, but only after a real transcript is fetched locally and prepared for the shared note-writing workflow.
 
 The skill:
 
-- accepts a YouTube or Vimeo URL
+- accepts a YouTube, Vimeo or supported LinkedIn URL
 - reuses `video-transcribe-skill` to fetch subtitles or transcripts locally
 - stages a cleaned markdown transcript under project-local `scratch/`
 - leaves source understanding, vault search, and final route/output-shape selection to `article-to-obsidian-kb`

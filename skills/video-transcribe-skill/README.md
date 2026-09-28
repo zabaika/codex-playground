@@ -1,14 +1,14 @@
 # video-transcribe-skill
 
-Local sanitized Codex skill for extracting YouTube or Vimeo subtitles through a fail-closed local workflow.
+Local sanitized Codex skill for extracting YouTube, Vimeo or supported LinkedIn subtitles through a fail-closed local workflow.
 
 ## Purpose
 
-Use `video-transcribe-skill` when a YouTube or Vimeo transcript or subtitle file is needed locally with bounded permissions and explicit fallback behavior.
+Use `video-transcribe-skill` when a YouTube, Vimeo or supported LinkedIn transcript or subtitle file is needed locally with bounded permissions and explicit fallback behavior.
 
 The skill:
 
-- accepts a YouTube or Vimeo URL
+- accepts a YouTube, Vimeo or supported LinkedIn URL
 - tries `youtube-transcript-api` first for YouTube
 - falls back to the reviewed `yt-dlp` path when needed
 - chooses only one subtitle language from a configured priority list
@@ -19,6 +19,13 @@ The skill:
 - keeps audit metadata and lockfiles in `third_party/` while unpacking runtime assets only during install
 
 ## Local Runtime Behavior
+
+LinkedIn support covers Events recordings and single Learning lessons, not whole courses.
+Use the normal runner first. If LinkedIn requires login, obtain approval and retry with
+`--cookies-from-browser <browser>` using a logged-in browser. This one-run override
+does not change persistent YouTube auth settings. Only exposed captions are extracted;
+no audio transcription or access restriction bypass is performed. See the
+[LinkedIn workflow](SKILL.md#linkedin-recordings) for failure handling.
 
 - loads `config/runtime.local.toml` when present and otherwise falls back to `config/runtime.example.toml`
 - reads `[artifacts].root_dir` as the local source of audited vendor archives for install/bootstrap

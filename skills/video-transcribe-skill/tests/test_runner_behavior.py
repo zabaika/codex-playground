@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import importlib.util
 import types
+import subprocess
+import tempfile
 import sys
 from pathlib import Path
 import unittest
@@ -26,6 +28,82 @@ RUNNER = load_module(RUNNER_PATH, "video_transcribe_runner")
 
 
 class VideoTranscribeRunnerBehaviorTests(unittest.TestCase):
+    def test_linkedin_urls_and_single_lesson_boundary(self):
+        for url in ["https://www.linkedin.com/events/demo7473150458098835457/",
+                    "https://linkedin.com/events/7473150458098835457/comments/",
+                    "https://www.linkedin.com/learning/course/lesson?autoplay=true"]:
+            self.assertEqual(RUNNER.detect_video_platform(url), "linkedin")
+        for url in ["https://linkedin.com/learning/course", "https://linkedin.com/in/person",
+                    "https://linkedin.com.evil.test/events/demo", "file://linkedin.com/events/demo"]:
+            with self.assertRaises(SystemExit):
+                RUNNER.detect_video_platform(url)
+
+    def test_linkedin_cookies_are_explicit_and_do_not_mutate_config(self):
+        config = {"auth": {"mode": "browser-cookies", "browser": "safari"}}
+        self.assertEqual(RUNNER.build_auth_args(config, platform="linkedin")[0], [])
+        args, env = RUNNER.build_auth_args(config, platform="linkedin", cookies_from_browser="chrome")
+        self.assertEqual(args, ["--cookies-from-browser=chrome"])
+        self.assertEqual(env["YTDLP_NO_PLUGINS"], "1")
+        self.assertEqual(config["auth"]["browser"], "safari")
+
+    def test_linkedin_failure_redaction_and_auth_classification(self):
+        command = ["yt-dlp", "https://linkedin.com/events/demo7473150458098835457/"]
+        failure = subprocess.CompletedProcess(command, 1, "", "ERROR: Login required; cookies at /private/browser; https://media.example/?token=PRIVATE")
+        with mock.patch.object(RUNNER.subprocess, "run", return_value=failure):
+            result = RUNNER.run_command(command)
+        self.assertNotIn("PRIVATE", result.stderr)
+        self.assertNotIn("/private/browser", result.stderr)
+        kind, message = RUNNER.classify_failure(result.stderr)
+        self.assertEqual(kind, "auth")
+        self.assertIn("LinkedIn", message)
+        self.assertNotIn("YouTube", message)
+
+    def test_linkedin_cli_subtitle_only_one_language_and_real_file(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            runtime = types.SimpleNamespace(config={"auth": {"mode": "provider-script"}}, output_dir=root, log_file=None, project_root=root)
+            saved = root / "Recording.en.vtt"
+            commands = []
+
+            def command(args, **kwargs):
+                commands.append(args)
+                self.assertIn("--skip-download", args)
+                self.assertIn("--ignore-config", args)
+                self.assertIn("--no-plugin-dirs", args)
+                self.assertIn("--cookies-from-browser=firefox", args)
+                if "--list-subs" in args:
+                    return subprocess.CompletedProcess(args, 0, "[info] Available subtitles for demo:\nLanguage Name Formats\nen English vtt\nde German vtt\n", "")
+                self.assertEqual(args[args.index("--sub-langs") + 1], "en")
+                saved.write_text("WEBVTT\n\n00:00:00.000 --> 00:00:02.000\nHello LinkedIn\n")
+                return subprocess.CompletedProcess(args, 0, f"[info] Writing video subtitles to: {saved}\n", "")
+
+            with mock.patch.dict(sys.modules, {"runtime_paths": types.SimpleNamespace(resolve_runtime_paths=lambda **kw: runtime)}), \
+                 mock.patch.object(RUNNER, "run_command", side_effect=command), \
+                 mock.patch.object(RUNNER, "fetch_video_title", side_effect=AssertionError("Unexpected title probe")), \
+                 mock.patch("sys.argv", ["runner", "--url", "https://linkedin.com/events/demo7473150458098835457/", "--cookies-from-browser", "firefox"]):
+                self.assertEqual(RUNNER.main(), 0)
+            self.assertEqual(len(commands), 2)
+            self.assertIn("00:00:00,000 --> 00:00:02,000", saved.with_suffix(".srt").read_text())
+
+    def test_linkedin_existing_subtitle_is_successful_rerun(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            runtime = types.SimpleNamespace(config={"auth": {"mode": "provider-script"}}, output_dir=root, log_file=None, project_root=root)
+            saved = root / "Recording.en.vtt"
+            saved.write_text("WEBVTT\n\n00:00:00.000 --> 00:00:02.000\nHello again\n")
+
+            def command(args, **kwargs):
+                if "--list-subs" in args:
+                    return subprocess.CompletedProcess(args, 0, "[info] Available subtitles for demo:\nLanguage Name Formats\nen English vtt\n", "")
+                return subprocess.CompletedProcess(args, 0, f"[download] {saved} has already been downloaded\n", "")
+
+            with mock.patch.dict(sys.modules, {"runtime_paths": types.SimpleNamespace(resolve_runtime_paths=lambda **kw: runtime)}), \
+                 mock.patch.object(RUNNER, "run_command", side_effect=command), \
+                 mock.patch.object(RUNNER, "fetch_video_title", side_effect=AssertionError("Unexpected title probe")), \
+                 mock.patch("sys.argv", ["runner", "--url", "https://linkedin.com/events/demo7473150458098835457/"]):
+                self.assertEqual(RUNNER.main(), 0)
+            self.assertIn("00:00:00,000 --> 00:00:02,000", saved.with_suffix(".srt").read_text())
+
     def test_detect_video_platform_supports_youtube_and_vimeo(self) -> None:
         self.assertEqual(
             RUNNER.detect_video_platform("https://www.youtube.com/watch?v=dQw4w9WgXcQ"),

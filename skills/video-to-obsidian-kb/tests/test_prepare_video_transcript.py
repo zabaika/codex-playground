@@ -80,6 +80,50 @@ def build_offline_runtime(tmp_root: Path) -> tuple[Path, Path]:
 
 
 class VideoRuntimePathTests(unittest.TestCase):
+    def test_linkedin_offline_preparation_preserves_recording_identity(self):
+        url = "https://www.linkedin.com/events/demo7473150458098835457/?tracking=discard"
+        self.assertEqual(VIDEO.detect_video_platform(url), "linkedin")
+        self.assertEqual(VIDEO.extract_video_id(url), "7473150458098835457")
+        self.assertFalse(VIDEO.is_supported_video_url("https://linkedin.com/learning/course"))
+        with TemporaryDirectory() as tmpdir:
+            config, subtitle = build_offline_runtime(Path(tmpdir))
+            output = io.StringIO()
+            with mock.patch("sys.argv", ["prepare", "--url", url, "--config", str(config), "--subtitle-file", str(subtitle), "--json"]), redirect_stdout(output):
+                self.assertEqual(VIDEO.main(), 0)
+            result = json.loads(output.getvalue())
+            prepared = Path(result["prepared_transcript_file"]).read_text()
+            self.assertIn("7473150458098835457", prepared)
+            self.assertIn("linkedin", prepared)
+            self.assertNotIn("tracking=discard", prepared)
+            self.assertIn("Это не проблема", prepared)
+
+    def test_browser_override_forwarded_without_config_mutation(self):
+        with TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            runner = root / "runner.py"
+            runner.touch()
+            config = root / "runtime.local.toml"
+            config.write_text('[auth]\nmode = "provider-script"\n')
+            before = config.read_bytes()
+            with mock.patch.object(VIDEO.subprocess, "run") as run:
+                VIDEO.run_transcribe_runner("https://linkedin.com/events/demo/", runner, config, "safari")
+            self.assertEqual(run.call_args.args[0][-2:], ["--cookies-from-browser", "safari"])
+            self.assertEqual(config.read_bytes(), before)
+
+    def test_linkedin_runner_receives_original_query_url(self):
+        with TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            runner = root / "runner.py"
+            runner.touch()
+            config = root / "runtime.local.toml"
+            config.write_text("", encoding="utf-8")
+            url = "https://www.linkedin.com/learning/course/lesson?u=123&account=456"
+
+            with mock.patch.object(VIDEO.subprocess, "run") as run:
+                VIDEO.run_transcribe_runner(url, runner, config, None)
+
+            self.assertEqual(run.call_args.args[0][2:4], ["--url", url])
+
     def test_wrapper_derives_project_root_from_sibling_article_config(self) -> None:
         with TemporaryDirectory() as tmpdir:
             tmp_root = Path(tmpdir)

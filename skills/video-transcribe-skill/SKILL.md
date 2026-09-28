@@ -1,6 +1,6 @@
 ---
 name: video-transcribe-skill
-description: Extract subtitles or transcripts from a YouTube or Vimeo video with a local, fail-closed workflow. Use `youtube-transcript-api` only for YouTube when available, otherwise fall back to reviewed `yt-dlp`, select only one subtitle language by priority, and convert downloaded `vtt` subtitles to `srt` when needed.
+description: Extract subtitles or transcripts from YouTube, Vimeo, LinkedIn Events recordings or individual LinkedIn Learning lessons. Use a local subtitle-only workflow, select one language, and require explicit approval for browser-cookie access to authenticated recordings.
 allowed-tools: Read, Write, Bash(which:*), Bash(python3:*), Bash(yt-dlp:*)
 ---
 
@@ -8,7 +8,7 @@ allowed-tools: Read, Write, Bash(which:*), Bash(python3:*), Bash(yt-dlp:*)
 
 ## Overview
 
-Extract subtitles from a YouTube or Vimeo URL into a local subtitle file with the smallest practical permission set. This local fork intentionally removes browser automation, chooses only one subtitle language based on priority order, prefers a dedicated PO token provider over direct browser-cookie access for YouTube, and converts downloaded `vtt` subtitles to `srt` when direct `srt` output is unavailable.
+Extract subtitles from a supported video URL into a local subtitle file. This local fork intentionally removes browser automation, chooses only one subtitle language based on priority order, prefers a dedicated PO token provider over direct browser-cookie access for YouTube, and converts downloaded `vtt` subtitles to `srt` when direct `srt` output is unavailable. For LinkedIn, follow the LinkedIn Recordings section below.
 
 Input video URL: `$ARGUMENTS`
 
@@ -28,7 +28,7 @@ Input video URL: `$ARGUMENTS`
 
 ## Guardrails
 
-1. Accept only standard YouTube URLs such as `https://www.youtube.com/watch?v=...` and `https://youtu.be/...`, plus standard Vimeo URLs such as `https://vimeo.com/...` and `https://player.vimeo.com/video/...`.
+1. Accept standard YouTube and Vimeo video URLs, LinkedIn `/events/<event>/` (including `/comments/`), and single `/learning/<course>/<lesson>` URLs. Reject LinkedIn profile, feed and course landing pages; do not process an entire course as one recording.
 2. Before running anything, check `which yt-dlp`.
 3. If `yt-dlp` is missing, stop and tell the user that this skill requires local `yt-dlp`. Do not fall back to browser automation, remote transcription APIs, or custom scripts.
 4. Never download video or audio media when subtitles are enough. Always prefer subtitle-only extraction with `--skip-download`.
@@ -44,7 +44,7 @@ Input video URL: `$ARGUMENTS`
 1. Validate the URL.
 2. Confirm `yt-dlp` is available with `which yt-dlp`.
 3. For real supported-host subtitle extraction, request to run the local runner outside the sandbox immediately instead of first waiting for an in-sandbox DNS or HTTPS failure.
-   - Treat network access to YouTube or Vimeo as the normal path for this skill, not as an exceptional fallback.
+   - Treat network access to supported hosts as the normal path for this skill, not as an exceptional fallback.
    - Do not burn a full failed attempt inside the sandbox just to rediscover that public video-host resolution is blocked there.
    - If the user declines the outside-sandbox run, stop honestly and report that the transcript pipeline cannot continue under the current network restrictions.
 4. Prefer the local runner:
@@ -55,10 +55,10 @@ python3 scripts/run_video_transcribe.py --url "[VIDEO_URL]"
 
 5. The runner should:
    - load `config/runtime.local.toml` when present
-   - detect whether the URL is YouTube or Vimeo
+   - detect whether the URL is YouTube, Vimeo or LinkedIn
    - try `youtube-transcript-api` first only for YouTube when the vendored venv is installed
    - if the first engine does not return subtitles, still attempt the `yt-dlp` path before stopping
-   - skip `youtube-transcript-api` entirely for Vimeo and use `yt-dlp` directly
+   - skip `youtube-transcript-api` entirely for Vimeo and LinkedIn and use `yt-dlp` directly
    - keep `yt-dlp` plugins disabled unless a provider mode is explicitly configured
    - resolve project-root-relative `[paths]`
    - write subtitles to `[paths].output_dir`
@@ -85,7 +85,7 @@ Recommended engine order:
 6. If the command succeeds, report:
    - saved file path
    - engine used: `youtube-transcript-api` or `yt-dlp`
-   - platform used: `youtube` or `vimeo`
+   - platform used: `youtube`, `vimeo` or `linkedin`
    - selected subtitle language
    - whether subtitles were uploaded or auto-generated when visible from the output
    - output format: final reported format after conversion, preferably `srt`
@@ -101,14 +101,25 @@ Recommended engine order:
 
 Use this only after the user explicitly approves local browser-cookie access for this task.
 
-1. Update `config/runtime.local.toml` to `mode = "browser-cookies"` and set `browser = "<browser>"`, or pass an equivalent temporary config.
+1. Pass `--cookies-from-browser <approved-browser>` for this run. Do not change persistent auth config for a one-task retry.
 2. Re-run:
 
 ```bash
-python3 scripts/run_video_transcribe.py --url "[VIDEO_URL]"
+python3 scripts/run_video_transcribe.py --url "[VIDEO_URL]" --cookies-from-browser chrome
 ```
 
 3. If the retry still fails with `HTTP Error 429`, explain that current yt-dlp guidance points to PO Token handling for YouTube subtitle requests and that browser cookies alone may not be sufficient.
+
+## LinkedIn Recordings
+
+- Use the installed `yt-dlp` LinkedIn Events or Learning extractor directly. Check `yt-dlp --ignore-config --list-extractors` if support is uncertain; do not upgrade audited dependencies automatically.
+- Events and Learning generally require a logged-in session. An unauthenticated failure is not evidence that captions do not exist. After that failure, ask once for permission to use cookies from the specific browser where the user is logged in, unless already approved for this task.
+- Run `python3 scripts/run_video_transcribe.py --url "[LINKEDIN_URL]" --cookies-from-browser chrome` only after that approval (substitute the approved browser).
+- The LinkedIn route ignores ambient yt-dlp config, disables plugins, and ignores persistent YouTube auth settings. Browser cookies are opt-in per run and are not exported to a file.
+- Extract only available subtitles/transcript data, one language at a time. Do not download media or invoke speech recognition when captions are absent. Distinguish authentication failure, extractor failure, and an accessible recording with no exposed captions.
+- Learning requires a single lesson URL and account access to that lesson. Do not bypass subscription or access restrictions. A similarly named course is not automatically the same recording.
+- Never output raw provider responses, cookie values, signed media URLs or cookie-store paths. Keep query strings out of LinkedIn provenance logs.
+- If the request is transcript-only, finish with the extracted artifact or the precise blocker; do not start Obsidian note generation.
 
 ## Provider Mode
 

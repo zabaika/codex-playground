@@ -13,6 +13,10 @@ import subprocess
 import sys
 from urllib.parse import parse_qs, urlparse
 
+TRANSCRIBE_SCRIPTS = Path(__file__).resolve().parents[2] / "video-transcribe-skill" / "scripts"
+sys.path.insert(0, str(TRANSCRIBE_SCRIPTS))
+from linkedin_urls import linkedin_video_id
+
 try:
     import tomllib
 except ModuleNotFoundError as exc:  # pragma: no cover
@@ -140,6 +144,8 @@ def append_log(path: Path, message: str) -> None:
 
 
 def detect_video_platform(raw_url: str) -> str:
+    if linkedin_video_id(raw_url):
+        return "linkedin"
     parsed = urlparse(raw_url.strip())
     if parsed.scheme not in {"http", "https"}:
         return "unsupported"
@@ -159,7 +165,15 @@ def is_supported_video_url(raw_url: str) -> bool:
     return detect_video_platform(raw_url) != "unsupported"
 
 
+def sanitized_url_for_provenance(raw_url: str, platform: str) -> str:
+    if platform == "linkedin":
+        return urlparse(raw_url)._replace(query="", fragment="").geturl()
+    return raw_url
+
+
 def extract_video_id(raw: str) -> str:
+    if video_id := linkedin_video_id(raw):
+        return video_id
     raw = raw.strip()
     if re.fullmatch(r"[\w-]{11}", raw):
         return raw
@@ -369,7 +383,7 @@ def ensure_article_config_is_ready(article_config_path: Path) -> None:
         )
 
 
-def run_transcribe_runner(url: str, runner_path: Path, transcribe_config_path: Path) -> subprocess.CompletedProcess[str]:
+def run_transcribe_runner(url: str, runner_path: Path, transcribe_config_path: Path, cookies_from_browser: str | None = None) -> subprocess.CompletedProcess[str]:
     if not runner_path.exists():
         raise SystemExit(f"video-transcribe runner is missing: {runner_path}")
     if not transcribe_config_path.exists():
@@ -377,8 +391,11 @@ def run_transcribe_runner(url: str, runner_path: Path, transcribe_config_path: P
             "Video transcript config is missing. "
             f"Expected runtime.local.toml at: {transcribe_config_path}"
         )
+    command = [sys.executable, str(runner_path), "--url", url, "--config", str(transcribe_config_path)]
+    if cookies_from_browser:
+        command.extend(["--cookies-from-browser", cookies_from_browser])
     return subprocess.run(
-        [sys.executable, str(runner_path), "--url", url, "--config", str(transcribe_config_path)],
+        command,
         capture_output=True,
         text=True,
         check=False,
@@ -429,7 +446,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         description="Prepare a cleaned markdown transcript for video-to-obsidian-kb.",
     )
-    parser.add_argument("--url", required=True, help="YouTube or Vimeo video URL")
+    parser.add_argument("--url", required=True, help="YouTube, Vimeo, LinkedIn event or single Learning lesson URL")
+    parser.add_argument("--cookies-from-browser", help="One-run browser-cookie access; requires explicit user approval")
     parser.add_argument(
         "--config",
         help="Optional path to this skill's runtime.local.toml",
@@ -447,7 +465,9 @@ def main() -> int:
 
     platform = detect_video_platform(args.url)
     if platform == "unsupported":
-        raise SystemExit("Expected a standard YouTube or Vimeo URL.")
+        raise SystemExit("Expected YouTube, Vimeo, LinkedIn Events or a single LinkedIn Learning lesson URL.")
+    extraction_url = args.url
+    provenance_url = sanitized_url_for_provenance(extraction_url, platform)
 
     script_dir = Path(__file__).resolve().parent
     skill_root = script_dir.parent
@@ -479,7 +499,7 @@ def main() -> int:
 
     append_log(current_log_path, "")
     append_log(current_log_path, f"=== run started {datetime.now(timezone.utc).isoformat()} ===")
-    append_log(current_log_path, f"URL: {args.url}")
+    append_log(current_log_path, f"URL: {provenance_url}")
     append_log(current_log_path, f"Platform: {platform}")
 
     if args.subtitle_file:
@@ -496,7 +516,7 @@ def main() -> int:
         selected_language = cached_metadata.get("selected_subtitle_language", selected_language)
         engine_used = cached_metadata.get("engine_used", "unknown")
     else:
-        result = run_transcribe_runner(args.url, transcribe_runner, transcribe_config_path)
+        result = run_transcribe_runner(extraction_url, transcribe_runner, transcribe_config_path, args.cookies_from_browser)
         runner_output = (result.stdout or "") + ("\n" if result.stdout and result.stderr else "") + (result.stderr or "")
         append_log(current_log_path, runner_output.strip() or "No transcribe output.")
         if result.returncode != 0:
@@ -514,10 +534,10 @@ def main() -> int:
         selected_language = parse_value_marker(runner_output, "Selected subtitle language:")
         engine_used = parse_value_marker(runner_output, "Engine used:")
 
-    video_id = extract_video_id(args.url)
+    video_id = extract_video_id(extraction_url)
     prepared_path = prepare_transcript_from_subtitle(
         subtitle_path=subtitle_path,
-        url=args.url,
+        url=provenance_url,
         platform=platform,
         video_id=video_id,
         engine=engine_used,

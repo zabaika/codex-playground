@@ -32,7 +32,10 @@ DEFAULT_RETRY_BACKOFF = 2.0
 DEFAULT_RETRY_MAX_DELAY = 10.0
 SCRIPT_DIR = Path(__file__).resolve().parent
 SKILL_DIR = SCRIPT_DIR.parent
-SUPPORTED_PLATFORMS = {"youtube", "vimeo"}
+SUPPORTED_PLATFORMS = {"youtube", "vimeo", "linkedin"}
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+from linkedin_urls import linkedin_video_id
 
 
 def load_config(config_path: Path) -> dict:
@@ -118,6 +121,8 @@ def extract_video_id(raw: str) -> str:
 
 
 def detect_video_platform(raw: str) -> str:
+    if linkedin_video_id(raw):
+        return "linkedin"
     parsed = parse.urlparse(raw.strip())
     host = parsed.netloc.lower()
     if host.startswith("www."):
@@ -127,7 +132,7 @@ def detect_video_platform(raw: str) -> str:
     if host in {"vimeo.com", "player.vimeo.com"}:
         return "vimeo"
     raise SystemExit(
-        "Unsupported video URL. This runner currently supports standard YouTube and Vimeo URLs only."
+        "Unsupported video URL. Use YouTube, Vimeo, LinkedIn Events or a single LinkedIn Learning lesson."
     )
 
 
@@ -171,6 +176,8 @@ def retry_settings(config: dict) -> dict[str, float | int]:
 def classify_failure(output: str) -> tuple[str, str]:
     lines = [line.strip() for line in output.splitlines() if line.strip()]
     lowered = output.lower()
+    if "linkedin authentication is required" in lowered:
+        return "auth", "LinkedIn requires authentication. After approval, retry with --cookies-from-browser and the browser where you are logged in."
     for line in lines:
         if line.startswith("TRANSIENT_ERROR:"):
             return "transient", line.split(":", 1)[1].strip()
@@ -294,7 +301,9 @@ def provider_settings(config: dict) -> dict[str, object]:
     }
 
 
-def build_auth_args(config: dict, *, platform: str) -> tuple[list[str], dict[str, str]]:
+def build_auth_args(config: dict, *, platform: str, cookies_from_browser: str | None = None) -> tuple[list[str], dict[str, str]]:
+    if cookies_from_browser:
+        return [f"--cookies-from-browser={cookies_from_browser}"], {"YTDLP_NO_PLUGINS": "1"}
     if platform != "youtube":
         return [], {"YTDLP_NO_PLUGINS": "1"}
     auth = config.get("auth", {})
@@ -404,7 +413,7 @@ def run_command(args: list[str], *, env_updates: dict[str, str] | None = None) -
     if env_updates:
         for key, value in env_updates.items():
             env[key] = value
-    return subprocess.run(
+    result = subprocess.run(
         args,
         capture_output=True,
         text=True,
@@ -412,6 +421,17 @@ def run_command(args: list[str], *, env_updates: dict[str, str] | None = None) -
         check=False,
         env=env,
     )
+    if result.returncode and any(linkedin_video_id(arg) for arg in args):
+        # LinkedIn errors may contain signed URLs or local cookie-store paths.
+        lowered = (result.stdout + "\n" + result.stderr).lower()
+        if any(word in lowered for word in ("login", "log in", "sign in", "authentication", "cookies")):
+            message = "LinkedIn authentication is required or browser cookies could not be used. Retry with --cookies-from-browser only after approval."
+        elif any(word in lowered for word in ("429", "timed out", "failed to resolve", "connection reset")):
+            message = "TRANSIENT_ERROR: Temporary network or rate-limit failure while contacting LinkedIn."
+        else:
+            message = "LinkedIn extraction failed; access may be restricted or the installed extractor may not support this recording."
+        return subprocess.CompletedProcess(args, result.returncode, "", message)
+    return result
 
 
 def run_command_with_retry(
@@ -512,6 +532,25 @@ def extract_written_subtitle_path(output: str) -> str:
     return ""
 
 
+def extract_existing_subtitle_path(output: str) -> str:
+    for line in output.splitlines():
+        match = re.match(r"^\[download\]\s+(.+?)\s+has already been downloaded\b", line.strip())
+        if match:
+            return match.group(1).strip()
+    return ""
+
+
+def find_existing_subtitle_path(target_output_dir: Path, selected_language: str) -> Path | None:
+    candidates = [
+        path
+        for path in target_output_dir.rglob(f"*.{selected_language}.*")
+        if path.is_file() and path.stat().st_size
+    ]
+    if not candidates:
+        return None
+    return max(candidates, key=lambda path: path.stat().st_mtime)
+
+
 def normalize_srt_timestamp(raw: str) -> str:
     value = raw.strip().replace(",", ".")
     match = re.fullmatch(r"(?:(\d{2}):)?(\d{2}):(\d{2})\.(\d{3})", value)
@@ -575,7 +614,8 @@ def normalize_reported_path(raw_path: str, target_output_dir: Path) -> Path:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Download video subtitles with local config.")
-    parser.add_argument("--url", required=True, help="YouTube or Vimeo video URL")
+    parser.add_argument("--url", required=True, help="YouTube, Vimeo, LinkedIn event or single Learning lesson URL")
+    parser.add_argument("--cookies-from-browser", choices=["chrome", "chromium", "edge", "firefox", "safari", "brave", "opera", "vivaldi"], help="One-run browser-cookie access; requires explicit user approval")
     parser.add_argument(
         "--config",
         help="Path to runtime.local.toml. Defaults to <skill>/config/runtime.local.toml",
@@ -592,15 +632,19 @@ def main() -> int:
     target_output_dir = ensure_directory(resolved_runtime.output_dir, "Subtitle output directory")
     current_log_path = build_log_path(resolved_runtime.log_file)
     platform = detect_video_platform(args.url)
-    auth_args, env_updates = build_auth_args(config, platform=platform)
+    auth_args, env_updates = build_auth_args(config, platform=platform, cookies_from_browser=args.cookies_from_browser)
+    if platform == "linkedin":
+        # Ignore ambient yt-dlp config: it must not enable cookies or media downloads.
+        auth_args = ["--ignore-config", "--no-plugin-dirs", "--no-playlist", *auth_args]
     network_args = build_network_args(config)
     retry_config = retry_settings(config)
     append_log(current_log_path, "")
     append_log(current_log_path, f"=== run started {datetime.now().isoformat()} ===")
-    append_log(current_log_path, f"URL: {args.url}")
+    logged_url = parse.urlunsplit((*parse.urlsplit(args.url)[:3], "", "")) if platform == "linkedin" else args.url
+    append_log(current_log_path, f"URL: {logged_url}")
     append_log(current_log_path, f"Platform: {platform}")
 
-    preferred_title = fetch_video_title(
+    preferred_title = "" if platform == "linkedin" else fetch_video_title(
         args.url, auth_args, network_args, env_updates, current_log_path, retry_config
     )
 
@@ -740,9 +784,24 @@ def main() -> int:
         print(download_message, file=sys.stderr)
         return 1 if download_result is None else download_result.returncode
 
-    written_path = extract_written_subtitle_path(download_result.stdout + "\n" + download_result.stderr)
+    download_output = download_result.stdout + "\n" + download_result.stderr
+    written_path = extract_written_subtitle_path(download_output)
+    if not written_path:
+        written_path = extract_existing_subtitle_path(download_output)
+    if not written_path and "already been downloaded" in download_output.lower():
+        existing_path = find_existing_subtitle_path(target_output_dir, selected_language)
+        if existing_path is not None:
+            written_path = str(existing_path)
+    if not written_path:
+        message = "Subtitle extraction returned no subtitle file."
+        log_failure(current_log_path, "yt-dlp download failed", message)
+        print(message, file=sys.stderr)
+        return 1
     if written_path:
         normalized_path = normalize_reported_path(written_path, target_output_dir)
+        if not normalized_path.is_file() or not normalized_path.stat().st_size:
+            print("Subtitle file is missing or empty.", file=sys.stderr)
+            return 1
         final_path = maybe_convert_vtt_to_srt(normalized_path)
         source_type = infer_subtitle_source_type(
             selected_language,

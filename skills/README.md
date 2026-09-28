@@ -83,14 +83,14 @@ Root skill docs in this folder should act as a catalog and navigation layer only
 
 ### video-to-obsidian-kb
 
-- Turns a YouTube or Vimeo URL into linked Obsidian notes by fetching a local transcript first and then reusing the shared note workflow.
+- Turns a YouTube, Vimeo or supported LinkedIn URL into linked Obsidian notes by fetching a local transcript first and then reusing the shared note workflow.
 - Entry: [SKILL.md](./video-to-obsidian-kb/SKILL.md)
 - Local docs: [README.md](./video-to-obsidian-kb/README.md)
 - Install: [install-local.sh](./video-to-obsidian-kb/install-local.sh)
 
 ### video-transcribe-skill
 
-- Fetches YouTube or Vimeo subtitles or transcripts locally through a fail-closed transcript pipeline with explicit fallback behavior.
+- Fetches YouTube, Vimeo or supported LinkedIn subtitles or transcripts locally through a fail-closed transcript pipeline with explicit fallback behavior.
 - Entry: [SKILL.md](./video-transcribe-skill/SKILL.md)
 - Install: [install-local.sh](./video-transcribe-skill/install-local.sh)
 - Local docs: [README.md](./video-transcribe-skill/README.md)

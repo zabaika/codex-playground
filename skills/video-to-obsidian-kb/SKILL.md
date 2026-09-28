@@ -1,13 +1,13 @@
 ---
 name: video-to-obsidian-kb
-description: Convert a YouTube or Vimeo video URL into linked Obsidian knowledge-base notes by first fetching a local transcript through video-transcribe-skill and then applying the article-to-obsidian-kb note workflow. Stop honestly when no transcript can be fetched.
+description: Convert a YouTube, Vimeo, LinkedIn Events recording or individual LinkedIn Learning lesson URL into linked Obsidian notes through video-transcribe-skill and article-to-obsidian-kb. Also handle transcript-only requests; stop honestly when no transcript can be fetched.
 ---
 
 # Video To Obsidian KB
 
 ## Overview
 
-Turn a YouTube or Vimeo URL into compact, Russian-language Obsidian knowledge-base notes with a fail-closed pipeline:
+Turn a supported video URL into compact, Russian-language Obsidian knowledge-base notes with a fail-closed pipeline:
 
 1. fetch the transcript through the local `video-transcribe-skill`
 2. stage a cleaned markdown transcript locally
@@ -36,7 +36,7 @@ Do not draft notes from the video title, thumbnail, or short description alone. 
 
 ## Default Workflow
 
-1. Validate that the input is a standard YouTube or Vimeo URL.
+1. Load `../video-transcribe-skill/SKILL.md` and validate the URL against its supported single-recording forms. LinkedIn Events and individual Learning lessons use its LinkedIn Recordings workflow; do not reject LinkedIn merely because a web search fetch is blocked by robots.txt.
 2. Run the local helper:
 
 ```bash
@@ -51,7 +51,9 @@ python3 scripts/prepare_video_transcript.py --url "[VIDEO_URL]"
    - print only transcript-preparation diagnostics: prepared transcript path, subtitle path, engine, selected subtitle language, configs/logs; do not detect, choose, or print the `article-to-obsidian-kb` route
 4. If transcript extraction fails or no subtitle file path is reported, stop.
 5. Do not retry with browser cookies unless the user explicitly approves that path for this task.
+   - After approval, pass `--cookies-from-browser <approved-browser>` to the helper; it forwards the one-run override to the transcript runner without modifying persistent auth config.
 6. After the helper succeeds, read the prepared markdown transcript as the source text.
+   - If the user asked only to obtain a transcript, report the transcript result and stop here without starting the note workflow.
 7. Then load the sibling article workflow in this order:
    - `../article-to-obsidian-kb/SKILL.md`
    - `../article-to-obsidian-kb/config/runtime.example.toml`
