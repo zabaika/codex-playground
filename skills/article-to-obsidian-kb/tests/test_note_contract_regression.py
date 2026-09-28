@@ -400,7 +400,7 @@ tags:
   - ai-adoption
 date: 2026
 ---
-Команда использует `code review`, держит путь в `production`, хранит `playbooks` и строит отдельный [[LLMOps]]-контур. На уровне ролей рядом работают `Product Manager` и `product engineer`, а практики описаны на панели `Microsoft`, `Atlassian` и `1Password`.
+Команда использует `code review`, держит путь в `production`, хранит `playbook`, изолирует `endpoint`, настраивает `guardrail`, применяет `progressive disclosure` и строит отдельный [[LLMOps]]-контур. На уровне ролей рядом работают `Product Manager` и `product engineer`, а практики описаны на панели `Microsoft`, `Atlassian` и `1Password`.
 {KEY_THESES_HEADING}
 - **Тезис.** Канонические инженерные термины, устойчивые названия ролей и названия компаний могут оставаться на английском.
 {PRACTICE_HEADING}
@@ -445,7 +445,7 @@ tags:
   - organization
 date: 2026
 ---
-Заметка намеренно оставляет фразы AI literacy, top-down, shadow AI, subjective satisfaction и delivery.
+Заметка намеренно оставляет фразы AI literacy, top-down, shadow AI, subjective satisfaction, delivery и pipeline.
 {KEY_THESES_HEADING}
 - **Тезис.** Эти ярлыки должны быть переведены, даже если встречаются в источнике.
 {PRACTICE_HEADING}
