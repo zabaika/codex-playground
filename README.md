@@ -16,6 +16,9 @@ Workspace for local Codex-oriented projects, tools, plugins, skills, and shared 
 - [telegram_shared](./telegram_shared/README.md)
   Shared infrastructure primitives reused by the Telegram projects: config loading, secret resolution, bridge env helpers, Bot API helpers, formatting, redaction, and OpenAI usage/stats utilities.
 
+- [infoext-monitor](./infoext-monitor/README.md)
+  Local macOS monitor for an InfoExt expediente status, using Playwright, local CAPTCHA OCR, atomic state and the existing `telegram_connector` delivery path.
+
 - [skills](./skills/README.md)  
   Local Codex skill collection for workspace-specific workflows, including Obsidian knowledge-base generation, YouTube transcript-to-notes conversion, local transcript extraction, multi-agent decision review via `llm-council`, and the `jss-*` job-search skill pack.
 

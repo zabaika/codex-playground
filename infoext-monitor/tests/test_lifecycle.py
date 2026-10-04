@@ -1,0 +1,92 @@
+"""Exercise installer lifecycle blocks without touching the real LaunchAgent."""
+
+import os
+from pathlib import Path
+import plistlib
+import subprocess
+import sys
+
+from config import load_settings
+
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+
+def isolated_launchctl(tmp_path):
+    commands = tmp_path / "commands"
+    commands.mkdir()
+    calls = tmp_path / "calls.txt"
+    stub = commands / "launchctl"
+    stub.write_text('#!/bin/sh\nprintf "%s\\n" "$*" >> "$CALLS_FILE"\n')
+    stub.chmod(0o700)
+    return {**os.environ, "PATH": str(commands) + os.pathsep + os.environ.get("PATH", ""),
+            "CALLS_FILE": str(calls)}, calls
+
+
+def test_installer_renders_config_calendar_and_reloads_agent(tmp_path) -> None:
+    root = tmp_path / "project"
+    (root / "config").mkdir(parents=True)
+    example = (PROJECT_ROOT / "config/runtime.example.toml").read_text()
+    local = example.replace('nie = ""', 'nie = "SYNTHETIC-NIE"').replace(
+        'fecha_presentacion = ""', 'fecha_presentacion = "01/02/2026"'
+    ).replace('first_run_time = "10:00"', 'first_run_time = "09:30"').replace(
+        'last_run_time = "20:00"', 'last_run_time = "19:30"'
+    ).replace('weekdays = [1, 2, 3, 4, 5]', 'weekdays = [2, 4]')
+    (root / "config/runtime.local.toml").write_text(local)
+    script = (PROJECT_ROOT / "install.sh").read_text()
+    # Execute the production renderer with temporary output and the real loader.
+    renderer = script.split("'\nplutil -lint", 1)[0].rsplit("-c '\n", 1)[1]
+    target = tmp_path / "monitor.plist"
+    env, calls = isolated_launchctl(tmp_path)
+    env.update(PROJECT_ROOT=str(root), PLIST_TARGET=str(target),
+               PLIST_SOURCE=str(PROJECT_ROOT / "launchd/com.infoext.monitor.plist"),
+               PYTHONPATH=str(PROJECT_ROOT))
+    subprocess.run([sys.executable, "-c", renderer], env=env, check=True, capture_output=True)
+    payload = plistlib.loads(target.read_bytes())
+    settings = load_settings(root)
+    assert payload["StartCalendarInterval"] == [
+        {"Weekday": day, "Hour": time.hour, "Minute": time.minute}
+        for day in settings.launchd.weekdays for time in settings.launchd.calendar_times
+    ]
+    assert payload["ProgramArguments"] == [str(root / "launchd/infoext-monitor-launcher")]
+    assert "RunAtLoad" not in payload
+    assert "__PROJECT_ROOT__" not in target.read_text()
+
+    registration = script.split('USER_ID="$(id -u)"', 1)[1].split(
+        '\n"$PROJECT_ROOT/.venv/bin/python"', 1
+    )[0]
+    env.update(USER_ID="test-user", LABEL="com.infoext.monitor")
+    subprocess.run(["/bin/bash", "-c", "set -euo pipefail\n" + registration],
+                   env=env, check=True, capture_output=True)
+    assert calls.read_text().splitlines() == [
+        f"bootout gui/test-user {target}", f"bootstrap gui/test-user {target}",
+        "print gui/test-user/com.infoext.monitor",
+    ]
+
+
+def test_restart_delegates_to_canonical_installer(tmp_path) -> None:
+    restart = tmp_path / "restart.sh"
+    restart.write_text((PROJECT_ROOT / "restart.sh").read_text())
+    (tmp_path / "install.sh").write_text(
+        '#!/bin/bash\nset -eu\nprintf "redeployed" > "$REDEPLOY_MARKER"\n'
+    )
+    marker = tmp_path / "redeploy.txt"
+    subprocess.run(["/bin/bash", str(restart)], check=True, capture_output=True,
+                   env={**os.environ, "REDEPLOY_MARKER": str(marker)})
+    assert marker.read_text() == "redeployed"
+
+
+def test_uninstall_removes_only_agent_and_preserves_runtime_data(tmp_path) -> None:
+    env, calls = isolated_launchctl(tmp_path)
+    target = tmp_path / "monitor.plist"
+    target.write_text("test plist")
+    for name in ("state.json", "history.jsonl", "runtime.local.toml"):
+        (tmp_path / name).write_text("preserved")
+    body = (PROJECT_ROOT / "uninstall.sh").read_text().split('if [[ -f', 1)[1]
+    env.update(PLIST_TARGET=str(target), USER_ID="test-user")
+    subprocess.run(["/bin/bash", "-c", "set -euo pipefail\nif [[ -f" + body],
+                   env=env, check=True, capture_output=True)
+    assert not target.exists()
+    assert calls.read_text().splitlines() == [f"bootout gui/test-user {target}"]
+    assert all((tmp_path / name).read_text() == "preserved"
+               for name in ("state.json", "history.jsonl", "runtime.local.toml"))

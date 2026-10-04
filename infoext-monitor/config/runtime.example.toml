@@ -1,0 +1,78 @@
+# Runtime configuration. Numeric bounds are inclusive; out-of-range values are rejected, not clamped.
+# Keep runtime.local.toml untracked with permissions 0600; copy runtime.example.toml for initial setup.
+
+[infoext]
+# Birth year: "" or a four-digit string "0001".."9999"; required before submission when the portal displays the field.
+ano_nacimiento = ""
+# Personal NIE: a non-empty string accepted by InfoExt; "" is an unconfigured placeholder and blocks normal checks.
+nie = ""
+# Submission date: a real calendar date as "DD/MM/YYYY"; "" and placeholder text block normal checks.
+fecha_presentacion = ""
+# Integer 1..5; shared budget per check for OCR-withheld images and server-rejected CAPTCHA submissions.
+captcha_max_attempts = 3
+# Integer 1..86400 seconds; minimum spacing between portal-visit starts, including manual and non-submitting debug runs.
+portal_min_check_interval_seconds = 60
+# Integer 30..900 seconds; per-browser-operation timeout and whole-worker hard TTL for manual and scheduled modes, including Telegram test and CLI debug; shared process config owns termination grace.
+run_timeout_seconds = 240
+# Number 0..30 seconds; pause after refresh or a rejected form, before the next OCR attempt; 0 disables the pause.
+captcha_retry_delay_seconds = 1.0
+# Number 0..30 seconds; pause after CONSULTAR and document load before inspecting the response; 0 disables the pause.
+result_settle_delay_seconds = 0.35
+# Integer 1..100; consecutive failed checks before one health alert; a successful check resets the count.
+failure_alert_threshold = 3
+# Boolean true or false; true queues a current-status report on unchanged success; status changes and recovery are always reported.
+notify_on_unchanged_status = true
+# String "enable" or "disable"; enable saves submitted-response HTML/text/metadata and adjacent CAPTCHA OCR JSON; artifacts may contain personal data; independent of CLI --debug.
+debug = "disable"
+
+[telegram_connector]
+# Non-empty path string to the existing connector project; relative paths resolve from this config directory; absolute paths and ~ are accepted locally; do not copy credentials.
+project_root = "../../telegram_connector"
+
+[ocr]
+# Only this exact string is allowed: lowercase Latin letters followed by digits; OCR output is normalized to lowercase.
+character_whitelist = "abcdefghijklmnopqrstuvwxyz0123456789"
+# Integer 1..8; primary image upscaling factor; must also appear in vision_fallback_scales.
+scale = 2
+# Number 0.1..10; image contrast multiplier; 1.0 leaves contrast unchanged after autocontrast.
+contrast = 1.0
+# Integer 1, 3, 5, 7, or 9; primary median-filter kernel; 1 disables filtering; must appear in vision_fallback_median_filter_sizes.
+median_filter_size = 1
+# Only integer 5 is allowed; minimum accepted CAPTCHA length.
+expected_length_min = 5
+# Only integer 5 is allowed; maximum accepted CAPTCHA length.
+expected_length_max = 5
+# Integer 1..120 seconds; maximum wall-clock duration of each Apple Vision helper invocation.
+vision_timeout_seconds = 30
+# Number 0..1; direct primary acceptance threshold only when vision_use_confidence=true; ignored for submission when false.
+vision_minimum_confidence = 1.0
+# Number 0..vision_minimum_confidence; primary candidate confidence floor for fallback consensus when vision_use_confidence=true; ignored when false.
+vision_fallback_minimum_confidence = 0.5
+# Non-empty list of unique integers 1..8, including scale; combined with median sizes for Vision variants; at least two combinations are required when confidence is disabled.
+vision_fallback_scales = [2, 3]
+# Non-empty list of unique integers from [1, 3, 5, 7, 9], including median_filter_size; each size is combined with each fallback scale.
+vision_fallback_median_filter_sizes = [1]
+# Integer 1..N with confidence enabled, 2..N otherwise; N=len(scales)*len(median sizes), including primary; without confidence all N variants must agree regardless of this minimum.
+vision_fallback_minimum_consensus_votes = 2
+# Number 0..1; minimum recognized text height as a fraction of image height; 0 applies no configured minimum.
+vision_minimum_text_height = 0.0
+# Non-empty Apple Vision-supported language identifier, e.g. "en-US"; available identifiers depend on macOS; loader checks non-emptiness only.
+vision_language = "en-US"
+# String "accurate" or "fast"; Apple Vision recognition mode.
+vision_recognition_level = "accurate"
+# Integer 1..10; raw alternatives retained per Vision observation for diagnostics; submission uses the top candidate, not all alternatives.
+vision_diagnostic_candidate_limit = 5
+# Boolean true or false; enables dictionary-based word correction; false is recommended for random CAPTCHA codes.
+vision_language_correction = false
+# Boolean true or false; false requires unanimous valid five-character output from all configured variants; true allows direct confidence acceptance or configured fallback consensus.
+vision_use_confidence = false
+
+[launchd]
+# Local macOS time string "HH:MM", "00:00".."23:59"; first calendar slot and earliest allowed start; must not exceed last_run_time.
+first_run_time = "10:00"
+# Integer 1..12 hours; calendar slots are first_run_time + k*interval_hours while not later than last_run_time.
+interval_hours = 5
+# Local macOS time string "HH:MM", "00:00".."23:59", not earlier than first_run_time; inclusive window end, included as a slot only if reached by interval increments.
+last_run_time = "20:00"
+# Non-empty list of distinct day integers 0..7: 1=Mon, 2=Tue, 3=Wed, 4=Thu, 5=Fri, 6=Sat, 0 or 7=Sun; do not include both 0 and 7.
+weekdays = [1, 2, 3, 4, 5]

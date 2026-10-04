@@ -13,6 +13,7 @@ Use it as an entry guide. For repository-wide engineering policy, safety rules, 
 - [telegram_connector](./telegram_connector): Telegram ingestion, OCR, digest, and bot bridge project
 - [telegram_agent_bot](./telegram_agent_bot): standalone Telegram task agent project
 - [telegram_shared](./telegram_shared/README.md): shared infrastructure primitives for Telegram projects
+- [infoext-monitor](./infoext-monitor): local InfoExt expediente monitor using Playwright, local CAPTCHA OCR, state tracking, and telegram_connector delivery
 - [skills](./skills): local skills and related documentation
 - [plugins](./plugins): local Codex plugin sources and related documentation
 - [tools/job-search-system](./tools/job-search-system): local job-search workflow system with API-lite, CLI, skills, and canonical artifact/runtime docs
@@ -42,6 +43,11 @@ When working in `telegram_shared`, prefer these sources in this order:
 - [telegram_shared/README.md](./telegram_shared/README.md) for the shared package boundary, retry semantics, and test commands
 - [RULEBOOK.md](./RULEBOOK.md) for cross-project rules
 - tests in [telegram_shared/tests](./telegram_shared/tests) for executable expectations
+
+When working in `infoext-monitor`, prefer these sources in this order:
+- [infoext-monitor/README.md](./infoext-monitor/README.md) for operator workflow and the observed InfoExt DOM contract
+- [RULEBOOK.md](./RULEBOOK.md) for cross-project security, daemon and runtime rules
+- tests in [infoext-monitor/tests](./infoext-monitor/tests) for executable expectations
 
 When working in `tools/kb-index`, prefer these sources in this order:
 - [tools/kb-index/README.md](./tools/kb-index/README.md) for operator behavior and command surface
