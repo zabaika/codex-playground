@@ -22,6 +22,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from common import process as common_process
+from common.json_io import write_json_atomic
 import telegram_bridge as bridge
 import telegram_history_client as history_client
 from telegram_shared.openai_usage import OpenAIUsage
@@ -186,10 +187,7 @@ def build_launch_context() -> dict[str, Any]:
 
 
 def write_digest_last_attempt(payload: dict[str, Any]) -> None:
-    LAUNCHD_LOG_DIR.mkdir(parents=True, exist_ok=True)
-    temp_path = DIGEST_LAST_ATTEMPT_LOG.with_suffix(".tmp")
-    temp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    temp_path.replace(DIGEST_LAST_ATTEMPT_LOG)
+    write_json_atomic(DIGEST_LAST_ATTEMPT_LOG, payload)
 
 
 @contextlib.contextmanager

@@ -47,6 +47,7 @@ def test_changed_status_is_persisted_as_pending_before_delivery(tmp_path: Path) 
         result,
         "2026-10-03T15:02:00+02:00",
         notify_on_unchanged_status=True,
+        nie="SYNTHETIC_SUBJECT",
     )
 
     persisted = store.load()
@@ -55,6 +56,7 @@ def test_changed_status_is_persisted_as_pending_before_delivery(tmp_path: Path) 
     assert persisted["pending_notifications"] == [
         {
             "kind": "status",
+            "nie": "SYNTHETIC_SUBJECT",
             "old_status": "EN TRÁMITE",
             "new_status": "RESUELTO - FAVORABLE",
             "fecha_resolucion": "03/10/2026",
@@ -74,12 +76,14 @@ def test_first_success_creates_a_current_status_notification_when_enabled(tmp_pa
         result,
         "2026-10-03T15:02:00+02:00",
         notify_on_unchanged_status=True,
+        nie="SYNTHETIC_SUBJECT",
     )
 
     assert changed is False
     assert store.load()["pending_notifications"] == [
         {
             "kind": "current",
+            "nie": "SYNTHETIC_SUBJECT",
             "status": "EN TRÁMITE",
             "fecha_resolucion": "",
             "detected_at": "2026-10-03T15:02:00+02:00",
@@ -100,6 +104,7 @@ def test_unchanged_status_does_not_create_notification_when_disabled(tmp_path: P
         result,
         "2026-10-03T15:02:00+02:00",
         notify_on_unchanged_status=False,
+        nie="SYNTHETIC_SUBJECT",
     )
 
     assert changed is False
@@ -135,6 +140,7 @@ def test_recovery_combines_status_into_one_persisted_notification(
     changed = record_success(
         state, store, result, "2026-10-03T15:02:00+02:00",
         notify_on_unchanged_status=notify_unchanged,
+        nie="SYNTHETIC_SUBJECT",
     )
 
     persisted = store.load()
@@ -146,6 +152,7 @@ def test_recovery_combines_status_into_one_persisted_notification(
     assert event["kind"] == "health"
     assert event["event"] == "recovery"
     text = notification_text(event)
+    assert "NIE: SYNTHETIC_SUBJECT" in text
     assert "проверка снова работает" in text
     assert "Проверено: 03.10.2026 15:02" in text
     assert "Дата решения: 03/10/2026" in text

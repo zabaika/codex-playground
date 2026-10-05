@@ -99,6 +99,11 @@ Launchd logs:
 
 Bot command quick reference:
 
+- `/infoext [NIE] [submission-date] [birth-year]`: check now and notify the monitor's configured recipient.
+  Date: `DD/MM/YYYY`; birth year: `YYYY`. Omitted fields use config; supplied fields
+  select a one-time query without changing the monitored state. Requires the installed
+  InfoExt monitor; `infoext` without `/` also works.
+  See [setup and query behavior](../infoext-monitor/README.md#check-from-telegram).
 - `/agent-stats`: recent local Digest AI usage and prompt-cache summary; see [shared metric definitions](../telegram_shared/README.md#ai-usage-metrics)
 - `/top-models [limit] [debug]`: configured external free-model ranking
 - `/backfill [channel] [limit] [since=...] [until=...] [media] [bot|user|auto]`: historical load into SQLite

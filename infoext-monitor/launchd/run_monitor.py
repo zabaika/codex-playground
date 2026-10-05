@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import json
-import os
 from datetime import datetime, timezone
 from pathlib import Path
 import sys
@@ -19,6 +18,7 @@ for path in (RUNTIME_ROOT, RUNTIME_ROOT.parent):
 
 from common import process as common_process
 from common import ttl_runner
+from common.json_io import write_json_atomic
 from config import PROJECT_ROOT, Settings, load_settings
 
 
@@ -31,10 +31,7 @@ def utc_timestamp() -> str:
 
 def write_last_attempt(path: Path, payload: dict[str, object]) -> None:
     """Atomically publish the latest scheduled-run state for operators."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
-    temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    temporary.replace(path)
+    write_json_atomic(path, payload)
 
 
 def scheduled_times(settings: Settings) -> list[str]:

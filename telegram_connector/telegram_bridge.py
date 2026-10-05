@@ -2,6 +2,7 @@
 import argparse
 import json
 import os
+import plistlib
 import re
 import shlex
 import subprocess
@@ -9,8 +10,10 @@ import sys
 import time
 import uuid
 from datetime import datetime, timezone
+from functools import partial
 from pathlib import Path
 from typing import Any
+from xml.parsers.expat import ExpatError
 from urllib import error, parse, request
 
 
@@ -70,7 +73,8 @@ DIGEST_FILE = APP_DIR / "telegram_digest.py"
 EXPORT_DIR = DATA_DIR / "exports"
 OP_REFERENCE_PREFIX = shared_secrets.OP_REFERENCE_PREFIX
 _SECRET_CACHE = shared_secrets._SECRET_CACHE
-SUPPORTED_BRIDGE_COMMANDS = {"help", "agent-stats", "top-models", "ocr", "exportcsv", "ocrhistory", "backfill", "tail", "update", "digest"}
+SUPPORTED_BRIDGE_COMMANDS = {"help", "agent-stats", "top-models", "ocr", "exportcsv", "ocrhistory", "backfill", "tail", "update", "digest", "infoext"}
+INFOEXT_LAUNCH_AGENT = Path.home() / "Library/LaunchAgents/com.infoext.monitor.plist"
 AUTH_MODES = {"auto", "bot", "user"}
 DIGEST_WINDOW_TOKEN_RE = re.compile(r"(today|yesterday|week|month|-?\d+d|\d{4}-\d{2}-\d{2})")
 DEFAULT_EXPORT_CSV_LIMIT = 100
@@ -453,7 +457,7 @@ def redact_update_for_storage(update: dict[str, Any]) -> dict[str, Any]:
     normalized = normalize_bridge_command_text(text)
     if normalized.startswith("/"):
         redacted["command"] = normalized.split(maxsplit=1)[0]
-        redacted["command_text"] = sanitize_text_for_storage(normalized)
+        redacted["command_text"] = "/infoext" if redacted["command"] == "/infoext" else sanitize_text_for_storage(normalized)
     return redacted
 
 
@@ -667,6 +671,8 @@ def command_help_text() -> str:
     return (
         "Bot commands:\n"
         "/help\n"
+        "/infoext [NIE] [DD/MM/YYYY] [YYYY]\n"
+        "  check InfoExt now and send the status of the configured expediente\n"
         "/agent-stats\n"
         "  show local Digest AI usage and prompt-cache summary for digest runs\n"
         "/top-models [limit] [debug]\n"
@@ -1047,7 +1053,40 @@ def build_sync_command(command: str, parts: list[str], base: list[str], config: 
     return argv + ["--auth-mode", auth_mode]
 
 
-def build_history_command(text: str) -> list[str] | None:
+def parse_infoext_query(parts: list[str]) -> dict[str, str]:
+    if len(parts) > 4 or any(not value.strip() or value.startswith("-") for value in parts[1:]):
+        raise ValueError("Usage: /infoext [NIE] [DD/MM/YYYY] [YYYY]")
+    if len(parts) == 4 and (not re.fullmatch(r"[0-9]{4}", parts[3]) or int(parts[3]) == 0):
+        raise ValueError("Год рождения должен содержать ровно 4 цифры: YYYY.")
+    return dict(zip(("nie", "fecha_presentacion", "ano_nacimiento"), parts[1:]))
+
+
+def resolve_infoext_paths() -> tuple[Path, Path]:
+    """Read the canonical installer artifact instead of duplicating its paths."""
+    try:
+        with INFOEXT_LAUNCH_AGENT.open("rb") as handle:
+            payload = plistlib.load(handle)
+        if not isinstance(payload, dict) or payload.get("Label") != "com.infoext.monitor":
+            raise ValueError
+        runtime = payload.get("WorkingDirectory")
+        environment = payload.get("EnvironmentVariables")
+        project = environment.get("INFOEXT_PROJECT_ROOT") if isinstance(environment, dict) else None
+        if not isinstance(runtime, str) or not isinstance(project, str):
+            raise ValueError
+        runtime_root, project_root = Path(runtime), Path(project)
+        if not runtime_root.is_absolute() or not project_root.is_absolute():
+            raise ValueError
+    except (OSError, ValueError, TypeError, plistlib.InvalidFileException, ExpatError) as exc:
+        raise ValueError("InfoExt LaunchAgent отсутствует или некорректен. Выполните install.sh проекта InfoExt.") from exc
+    if not all(path.is_file() for path in (
+        runtime_root / "main.py", runtime_root / ".venv/bin/python",
+        project_root / "config/runtime.local.toml",
+    )) or not os.access(runtime_root / ".venv/bin/python", os.X_OK):
+        raise ValueError("InfoExt runtime или конфиг недоступен. Повторите установку через install.sh.")
+    return runtime_root, project_root
+
+
+def build_history_command(text: str, *, infoext_paths: tuple[Path, Path] | None = None) -> list[str] | None:
     parts = shlex.split(text)
     if not parts:
         return None
@@ -1059,6 +1098,11 @@ def build_history_command(text: str) -> list[str] | None:
 
     if command == "/help":
         return []
+    if command == "/infoext":
+        query = parse_infoext_query(parts)
+        runtime_root, _ = infoext_paths if infoext_paths is not None else resolve_infoext_paths()
+        argv = [str(runtime_root / ".venv/bin/python"), str(runtime_root / "main.py"), "--check-now", "--notify"]
+        return argv + (["--query-stdin"] if query else [])
     if command == "/digest":
         return build_digest_command(parts, digest_base)
     if command == "/ocr":
@@ -1138,8 +1182,10 @@ def handle_history_command(token: str, config: dict[str, Any], update: dict[str,
         )
         return
 
+    is_infoext_command = text.split(maxsplit=1)[0] == "/infoext"
     try:
-        argv = build_history_command(text)
+        infoext_paths = resolve_infoext_paths() if is_infoext_command else None
+        argv = build_history_command(text, infoext_paths=infoext_paths) if is_infoext_command else build_history_command(text)
     except ValueError as exc:
         send_text_message(token, chat_id, f"{exc}\n\n{command_help_text()}")
         return
@@ -1154,16 +1200,44 @@ def handle_history_command(token: str, config: dict[str, Any], update: dict[str,
         return
 
     worker_timeout_seconds = resolve_worker_process_timeout_seconds(config)
+    child_env = build_history_client_subprocess_env({} if is_infoext_command else secret_env or {})
+    run_func = subprocess.run
+    if is_infoext_command:
+        child_env["INFOEXT_PROJECT_ROOT"] = str(infoext_paths[1])
+        query = parse_infoext_query(shlex.split(text))
+        if query:
+            # Personal data travels through stdin, never process arguments or logs.
+            run_func = partial(subprocess.run, input=json.dumps(query))
     try:
         completed = shared_run_worker_subprocess(
             argv,
-            cwd=BASE_DIR,
-            env=build_history_client_subprocess_env(secret_env or {}),
-            timeout_seconds=worker_timeout_seconds,
-            run_func=subprocess.run,
+            cwd=script_path.parent if is_infoext_command else BASE_DIR,
+            env=child_env,
+            # InfoExt owns its hard TTL and process-group cleanup. Killing its
+            # supervisor with a second timeout could orphan the browser worker.
+            timeout_seconds=None if is_infoext_command else worker_timeout_seconds,
+            run_func=run_func,
         )
     except subprocess.TimeoutExpired:
         send_text_message(token, chat_id, f"Command timed out after {worker_timeout_seconds} seconds.")
+        return
+    except OSError:
+        send_text_message(token, chat_id, "Command could not start; check the configured runtime and interpreter.")
+        return
+
+    if is_infoext_command:
+        # Return fixed diagnostics only; monitor notifications own status formatting.
+        if completed.returncode != 0:
+            response = "InfoExt: проверка не удалась. Подробности в logs/infoext.log."
+        elif "InfoExt check skipped:" in (completed.stdout or ""):
+            response = "InfoExt: проверка пропущена — минимальный интервал ещё не прошёл."
+        elif "InfoExt check\n" in (completed.stdout or ""):
+            if "Telegram notification: delivered" in (completed.stdout or "").splitlines():
+                return
+            response = "InfoExt: статус получен, но доставка уведомления не подтверждена. Проверьте logs/infoext.log; недоставленные уведомления остаются в очереди."
+        else:
+            response = "InfoExt: новый результат не получен; возможно, другая проверка уже выполняется."
+        send_text_message(token, chat_id, response)
         return
 
     safe_response, json_output = build_safe_command_response_any(" ".join(argv[2:]), completed)

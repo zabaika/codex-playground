@@ -1,6 +1,4 @@
 .venv/
 bin/
-data/
-logs/
 debug/
 .pytest_cache/

@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import fcntl
 import logging
+import json
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -70,7 +71,7 @@ def format_status_notification(payload: dict[str, str]) -> str:
 def format_current_notification(payload: dict[str, str]) -> str:
     checked_at = datetime.fromisoformat(payload["detected_at"]).astimezone(LOCAL_TZ)
     lines = [
-        "InfoExt: текущий статус expediente",
+        "InfoExt: статус разового запроса" if payload.get("query") == "one-time" else "InfoExt: текущий статус expediente",
         "",
         payload["status"],
         "",
@@ -100,10 +101,16 @@ def format_health_notification(payload: dict[str, str]) -> str:
 
 def notification_text(payload: dict[str, str]) -> str:
     if payload["kind"] == "status":
-        return format_status_notification(payload)
-    if payload["kind"] == "current":
-        return format_current_notification(payload)
-    return format_health_notification(payload)
+        text = format_status_notification(payload)
+    elif payload["kind"] == "current":
+        text = format_current_notification(payload)
+    else:
+        text = format_health_notification(payload)
+    if payload.get("nie"):
+        lines = text.splitlines()
+        lines.insert(1, f"NIE: {payload['nie']}")
+        return "\n".join(lines)
+    return text
 
 
 def deliver_pending(
@@ -159,6 +166,7 @@ def record_success(
     checked_at: str,
     *,
     notify_on_unchanged_status: bool,
+    nie: str,
 ) -> bool:
     previous = state.get("status")
     changed = bool(previous and normalize_status(str(previous)) != normalize_status(result.status))
@@ -177,6 +185,7 @@ def record_success(
     if had_failure_alert:
         recovery = {
             "kind": "health",
+            "nie": nie,
             "event": "recovery",
             "status": result.status,
             "fecha_resolucion": result.fecha_resolucion or "",
@@ -189,6 +198,7 @@ def record_success(
         state["pending_notifications"].append(
             {
                 "kind": "status",
+                "nie": nie,
                 "old_status": str(previous),
                 "new_status": result.status,
                 "fecha_resolucion": result.fecha_resolucion or "",
@@ -199,6 +209,7 @@ def record_success(
         state["pending_notifications"].append(
             {
                 "kind": "current",
+                "nie": nie,
                 "status": result.status,
                 "fecha_resolucion": result.fecha_resolucion or "",
                 "detected_at": checked_at,
@@ -255,7 +266,7 @@ def run_check(args: argparse.Namespace, settings: Settings, logger: logging.Logg
     captcha_dir = captcha_sample_directory(settings.project_root)
     submission_artifact_dir = (
         submitted_captcha_response_directory(settings.project_root)
-        if settings.debug_submitted_captcha_responses
+        if settings.debug_submitted_captcha_responses and not args.query_stdin
         else None
     )
     try:
@@ -264,30 +275,37 @@ def run_check(args: argparse.Namespace, settings: Settings, logger: logging.Logg
             submission_artifact_dir=submission_artifact_dir,
         )
     except InfoExtError as exc:
-        handle_check_failure(
-            state,
-            store,
-            notifier,
-            exc,
-            logger,
-            settings.failure_alert_threshold,
-        )
+        if args.query_stdin:
+            logger.error("One-time InfoExt query failed (%s): %s", exc.__class__.__name__, exc)
+        else:
+            handle_check_failure(
+                state, store, notifier, exc, logger, settings.failure_alert_threshold,
+            )
         print(f"InfoExt check failed: {exc}", file=sys.stderr)
         if captcha_dir.exists():
             print(f"CAPTCHA samples: {captcha_dir.relative_to(settings.project_root)}", file=sys.stderr)
         return 1
 
     checked_at = timestamp()
-    previous = state.get("status")
-    changed = record_success(
-        state,
-        store,
-        result,
-        checked_at,
-        notify_on_unchanged_status=settings.notify_on_unchanged_status or args.notify,
-    )
+    previous = None if args.query_stdin else state.get("status")
+    pending_before_check = len(state["pending_notifications"])
+    if args.query_stdin:
+        state["pending_notifications"].append({
+            "kind": "current", "query": "one-time", "status": result.status,
+            "nie": settings.nie,
+            "fecha_resolucion": result.fecha_resolucion or "", "detected_at": checked_at,
+        })
+        store.save(state)
+        changed = False
+    else:
+        changed = record_success(
+            state, store, result, checked_at,
+            notify_on_unchanged_status=settings.notify_on_unchanged_status or args.notify,
+            nie=settings.nie,
+        )
     logger.info("Status: %s", result.status)
     logger.info("Status %s", "changed" if changed else "unchanged")
+    check_notifications = state["pending_notifications"][pending_before_check:]
     deliver_pending(state, store, notifier, logger)
     checked = datetime.fromisoformat(checked_at).astimezone(LOCAL_TZ)
     print("InfoExt check")
@@ -296,6 +314,12 @@ def run_check(args: argparse.Namespace, settings: Settings, logger: logging.Logg
     print(f"Previous status: {previous or '-'}")
     print(f"Changed: {'yes' if changed else 'no'}")
     print(f"Captcha attempts: {result.captcha_attempts}")
+    if not check_notifications:
+        print("Telegram notification: not requested")
+    elif any(event in state["pending_notifications"] for event in check_notifications):
+        print("Telegram notification: pending")
+    else:
+        print("Telegram notification: delivered")
     if captcha_dir.exists():
         print(f"CAPTCHA samples: {captcha_dir.relative_to(settings.project_root)}")
     return 0
@@ -362,12 +386,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="Capture and assess the first CAPTCHA visibly without submitting the form.",
     )
     parser.add_argument("--_ttl-worker", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--query-stdin", action="store_true", help=argparse.SUPPRESS)
     return parser
 
 
 def validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
     if args.debug and not args.check_now:
         parser.error("--debug requires --check-now.")
+    if args.query_stdin and (not args.check_now or args.debug):
+        parser.error("--query-stdin requires --check-now without --debug.")
 
 
 def run_with_timeout(args: argparse.Namespace, settings: Settings, logger: logging.Logger) -> int:
@@ -385,6 +412,8 @@ def run_with_timeout(args: argparse.Namespace, settings: Settings, logger: loggi
         command.append("--debug")
     if args.notify:
         command.append("--notify")
+    if args.query_stdin:
+        command.append("--query-stdin")
     logger.info("Starting supervised command; whole-run timeout: %s seconds", settings.timeout_seconds)
     exit_code = ttl_runner.run_with_ttl(
         command,
@@ -411,7 +440,19 @@ def main() -> int:
     validate_args(parser, args)
     logger = configure_logging(PROJECT_ROOT)
     try:
-        settings = load_settings(PROJECT_ROOT, require_infoext=not args.test_telegram)
+        query_overrides = None
+        if args.query_stdin and args._ttl_worker:
+            try:
+                query_overrides = json.load(sys.stdin)
+            except (ValueError, OSError) as exc:
+                raise ConfigurationError("Invalid InfoExt query input.") from exc
+            if not isinstance(query_overrides, dict) or not query_overrides:
+                raise ConfigurationError("InfoExt query input must contain overrides.")
+        settings = load_settings(
+            PROJECT_ROOT,
+            require_infoext=not args.test_telegram and (not args.query_stdin or args._ttl_worker),
+            query_overrides=query_overrides,
+        )
         if not args._ttl_worker:
             return run_with_timeout(args, settings, logger)
         if args.test_telegram:

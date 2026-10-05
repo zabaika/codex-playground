@@ -28,6 +28,9 @@ then the relevant tests in [tests](./tests).
 - Preserve `pending_notifications`: commit a notification event before an
   external send, clear it only after confirmed delivery, and retry it on a
   later run.
+- Use `common.json_io.write_json_atomic` for state and launchd audit replacement.
+  Keep state schemas, the process lock, notification ordering and JSONL history
+  in this project; the shared helper owns only file publication.
 - A Telegram failure must not overwrite a known InfoExt status or turn a
   successful InfoExt check into an unknown status.
 

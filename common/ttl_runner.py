@@ -19,6 +19,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from common import process as common_process
+from common.json_io import write_json_atomic
 
 
 def audit_timestamp() -> str:
@@ -59,10 +60,7 @@ def load_audit_payload(audit_path: Path) -> dict[str, Any]:
 
 
 def write_audit_payload(audit_path: Path, payload: dict[str, Any]) -> None:
-    audit_path.parent.mkdir(parents=True, exist_ok=True)
-    temp_path = audit_path.with_suffix(".tmp")
-    temp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    temp_path.replace(audit_path)
+    write_json_atomic(audit_path, payload)
 
 
 def mark_timeout_audit(

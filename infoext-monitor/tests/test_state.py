@@ -18,4 +18,4 @@ def test_state_store_round_trip_and_history(tmp_path: Path) -> None:
         "status": "EN TRÁMITE",
         "timestamp": "2026-10-03T15:02:00+02:00",
     }
-    assert not list(store.data_dir.glob("state.*.tmp"))
+    assert not list(store.data_dir.glob("*.tmp"))

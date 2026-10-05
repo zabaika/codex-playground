@@ -191,9 +191,21 @@ def load_runtime_config(runtime_file: Path) -> dict[str, object]:
     return config
 
 
-def load_settings(project_root: Path = PROJECT_ROOT, *, require_infoext: bool = True) -> Settings:
+def load_settings(
+    project_root: Path = PROJECT_ROOT, *, require_infoext: bool = True,
+    query_overrides: dict[str, str] | None = None,
+) -> Settings:
     runtime_file = project_root / "config" / "runtime.local.toml"
     config = load_runtime_config(runtime_file)
+    if query_overrides is not None:
+        allowed = {"nie", "fecha_presentacion", "ano_nacimiento"}
+        if not isinstance(query_overrides, dict) or set(query_overrides) - allowed:
+            raise ConfigurationError("Invalid InfoExt query fields.")
+        for key, value in query_overrides.items():
+            if not isinstance(value, str) or not value.strip():
+                raise ConfigurationError("InfoExt query values must be nonempty strings.")
+            value = value.strip()
+            config["infoext"][key] = value
     connector_raw = _required(config, "telegram_connector", "project_root")
     connector_dir = Path(connector_raw).expanduser()
     if not connector_dir.is_absolute():

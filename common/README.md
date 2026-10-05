@@ -12,6 +12,9 @@ Use `common/` for code and config that are:
 
 ## Current Contents
 
+- [json_io.py](./json_io.py)
+  Shared atomic JSON replacement for state and audit files, with private temporary files and durable writes.
+
 - [sqlite.py](./sqlite.py)  
   Shared SQLite connection and transaction helpers with repository-wide defaults for autocommit, WAL mode, busy timeout, and short explicit write transactions.
 

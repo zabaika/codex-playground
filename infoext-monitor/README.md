@@ -1,114 +1,39 @@
 # InfoExt monitor
 
-Local macOS monitor for an InfoExt expediente status. The launchd calendar is
-defined only by the `[launchd]` section of the local TOML file. CAPTCHA is
-recognized locally and notifications use the existing sibling
-`../telegram_connector` project.
-
-## Architecture
-
-```text
-launchd
-  -> installed runtime in Application Support
-     -> stable launcher wrapper
-        -> launchd/run_monitor.py (whole-run limit and last-attempt audit)
-           -> common/ttl_runner.py (process group and forced termination)
-              -> main.py
-                 -> infoext.py (Playwright Chromium and the official site)
-                 -> captcha_solver.py (Pillow and macOS Apple Vision)
-                 -> state.py (atomic state.json and history.jsonl)
-                 -> notifier.py
-                    -> configured telegram_connector/telegram_bridge.py
-                       -> existing Keychain/config/token/chat id
-                       -> Telegram
-```
-
-`notifier.py` imports the existing `telegram_connector` API. It does not
-create a second bot token, copy connector source code, or load credentials
-into this project's configuration. The recipient comes from the connector's
-`[telegram].default_chat_id`; the token and `sendMessage` retry policy remain
-owned by the connector.
-
-## Observed InfoExt form
-
-The form and a successful result were verified with Playwright Chromium. The flow
-uses these selectors:
-
-| Element | Selector | Observation |
-|---|---|---|
-| Form entry | `get_by_role("link", name="ENTRAR FORMULARIO")` | Needed when the direct URL returns the entry screen. |
-| NIE | `#nie` | `name="nie"` |
-| Submission date | `#fechaPresentacion` | `name="fechaPresentacion"` |
-| Birth year, when displayed | `#anio` | `name="anio"`; the server rejects an empty value. |
-| CAPTCHA image | `img[alt="captcha"]` | PNG is directly available as a `data:image/png;base64,...` URL. |
-| CAPTCHA refresh | `get_by_role("link", name="Recargar Captcha")` | Calls `javascript: recargarCaptcha()`. |
-| CAPTCHA input | `#captcha` | `name="txtCaptcha"`, placeholder `Introduce el texto aquí`. |
-| Submit | `#btnConsulta` | `onclick="envioForm()"`. |
-
-Refreshing CAPTCHA sends a POST to `consulta.html`, so the client waits for a
-new document rather than an AJAX response. The `domcontentloaded` event wait
-is registered before clicking refresh, then the client checks for URL rejection
-and waits for the new document's CAPTCHA image. The result parser extracts labelled
-pairs from tables, `dl`, and label/layout elements. `Estado` is required.
-InfoExt's original status text is stored; comparison only normalizes whitespace
-and case. Before every `CONSULTAR`, the client verifies that both the NIE and
-submission-date fields are present and non-empty. A visible birth-year field
-requires `infoext.ano_nacimiento`; an empty setting stops before submission.
-Identity-field errors stop the check and are not retried as CAPTCHA failures.
-
-A CAPTCHA rejection is identified by the explicit field error
-`Los caracteres escritos no son correctos.` Returning the form alone does not
-prove CAPTCHA rejection. Other validation errors are reported separately.
+Local macOS expediente monitor using Playwright Chromium and local Apple Vision
+OCR. Checks run through CLI, Telegram or launchd; notifications use the existing
+`../telegram_connector` configuration and recipient.
 
 ## Requirements
 
-- macOS and Python 3.11 or later;
-- Xcode Command Line Tools for the local Apple Vision helper
-  (`xcode-select --install` if absent);
-- an existing configured `../telegram_connector` project;
-- access to the official InfoExt site.
+- macOS, Python 3.11+ and access to the official InfoExt site.
+- Xcode Command Line Tools (`xcode-select --install`).
+- A configured sibling `telegram_connector` project.
 
-## Installation
+## Installation and configuration
 
 ```bash
 cd /path/to/infoext-monitor
 cp config/runtime.example.toml config/runtime.local.toml
 chmod 600 config/runtime.local.toml
-# Fill infoext.nie, infoext.fecha_presentacion and infoext.ano_nacimiento when required by the portal.
+# Fill the local config before installing.
 bash install.sh
 ```
 
-`install.sh` creates `.venv`, installs Python dependencies and Chromium,
-compiles the Apple Vision helper, creates local runtime directories, renders a plist with
-absolute runtime paths, and registers the LaunchAgent. It does not change
-`telegram_connector`.
+Set `infoext.nie` and `infoext.fecha_presentacion` (`DD/MM/YYYY`); add
+`infoext.ano_nacimiento` (`YYYY`) when the portal requires it. Configure the
+existing connector through `telegram_connector.project_root`; keep its
+credentials in the connector.
 
-As in `telegram_connector`, scheduled executable code is deployed to
-`~/Library/Application Support/infoext_monitor_service`. The installer syncs
-application code, launchers, the compiled Vision helper and `common/`, and
-creates a separate service venv. Both the launcher and `WorkingDirectory` use
-this installed runtime rather than `Documents`. `INFOEXT_PROJECT_ROOT` points
-to the source project, whose local config, state, history, debug data and logs
-remain canonical. Local config and Telegram credentials are not copied into
-the service bundle. Manual commands continue to use the source project's venv.
+[config/runtime.example.toml](./config/runtime.example.toml) documents all
+settings, units and limits: schedule, portal spacing, retries, notifications,
+debug and OCR. Shared shutdown settings come from
+[common/config/process.toml](../common/config/process.toml).
 
-The repository is the editable source of truth. Do not edit installed Python
-files, helpers, shared process config or the service venv as a repair path;
-change the source and redeploy with the canonical installer. Changes to shared
-`common/` code or config also require redeployment, because scheduled jobs use
-the installed copy.
-
-Before installation, the script verifies that `infoext.nie` is present and
-that `infoext.fecha_presentacion` is a real calendar date in `DD/MM/YYYY`
-format. Placeholder text is rejected.
-
-All operator-controlled values live in `config/runtime.local.toml`: portal
-minimum-interval protection, CAPTCHA attempts and delays, whole-run timeout,
-health threshold, unchanged-status reports, OCR settings, and the launchd
-calendar. Units, constraints, and the schedule formula are documented next to the matching keys in
-`config/runtime.example.toml`. Shared termination grace, polling, signals, and
-timeout exit code come from `../common/config/process.toml`, as used by
-`telegram_connector`.
+The installer creates venvs, installs Chromium, compiles Vision and registers
+launchd. Scheduled code runs from `~/Library/Application Support/infoext_monitor_service`;
+config, data and logs stay in the source project selected by `INFOEXT_PROJECT_ROOT`.
+Edit the source and rerun the installer after code, config or shared-runtime changes.
 
 ## Manual commands
 
@@ -119,229 +44,138 @@ timeout exit code come from `../common/config/process.toml`, as used by
 .venv/bin/python main.py --test-telegram
 ```
 
-`infoext.notify_on_unchanged_status` controls whether a successful unchanged
-status creates a current-status report in the reliable Telegram queue. A status
-change creates one transition notification. `--notify` forces a current-status
-report when unchanged if the TOML setting disables it. `--debug` runs visible
-Chromium, fills the form, captures its first CAPTCHA and evaluates it locally.
-It does not invoke `CONSULTAR`, `Recargar Captcha`, obtain an expediente status,
-update the known status or failure count, or call Telegram. It does persist the
-portal-visit reservation used by the minimum-interval guard. It stores `filled-form.png`, `captcha-1.png`,
-and `ocr-report.json` under `debug/<timestamp>/`. Every ordinary check,
-including one launched by launchd, stores its CAPTCHA images under
-`data/captcha/`, with timestamped filenames. Set `infoext.debug` to `"enable"`
-to also retain the returned HTML, visible text, and OCR metadata after every
-submitted CAPTCHA in `debug/captcha-responses/`; this is separate from the
-non-submitting `--debug` command. Keep that setting disabled outside diagnosis,
-because the server response can contain identity fields. In this mode, each
-CAPTCHA image also has an adjacent JSON report retaining raw Vision candidates,
-including candidates rejected by the length or alphabet filters. The report
-measures OCR consensus and exact five-character coverage. Agreement and
-confidence are not accuracy measurements: compare the saved image against a
-manually verified transcription, or inspect the portal's explicit CAPTCHA response.
+- `--check-now`: check and apply `infoext.notify_on_unchanged_status`; real status changes notify regardless.
+- `--notify`: also report an unchanged status.
+- `--debug`: visible browser, first CAPTCHA and local OCR only; no submit, refresh or Telegram message.
+- `--test-telegram`: send a connector test and print `Telegram notification: OK` on success.
 
-`infoext.portal_min_check_interval_seconds` applies to every run that opens the
-InfoExt portal, including `--check-now` and `--debug`. The monitor writes the
-reservation before opening Chromium, so a crash or concurrent invocation cannot
-cause an earlier repeat visit. A run deferred by this guard exits successfully,
-does not increase the failure count, and does not create a health alert.
+All portal visits obey `infoext.portal_min_check_interval_seconds` and the
+process lock. Manual checks can run outside the launchd calendar.
 
-`--test-telegram` sends this exact message through `telegram_connector`:
+### Check from Telegram
 
-```text
-InfoExt monitor: Telegram notifications configured successfully.
+Redeploy the existing connector bridge to enable the command:
+
+```bash
+bash ../telegram_connector/scripts/install_launch_agent.sh
 ```
 
-After confirmed delivery it prints `Telegram notification: OK`.
+```text
+/infoext
+/infoext <NIE> <submission-date> <birth-year>
+```
 
-## CAPTCHA
+Submission date uses `DD/MM/YYYY`; birth year accepts only four digits (`YYYY`).
+Trailing arguments may be omitted and use config values. `infoext` without `/`
+also works. Any supplied identity field selects a one-time query that preserves
+the primary status, history and failure counters.
 
-OCR uses local Pillow and Apple Vision. `install.sh` compiles `vision_ocr.swift` into a
-local helper and sends it the CAPTCHA through standard input. InfoExt CAPTCHA
-codes contain five lowercase Latin letters or digits; OCR output is normalized
-to lowercase, then visual Cyrillic lookalikes (`а е о р с х у`) are replaced
-with their Latin equivalents (`a e o p c x y`) before whitelist filtering.
-Other Cyrillic letters are not transliterated. Length and agreement checks
-apply after normalization; raw Vision observations remain unchanged for
-diagnostics. Preprocessing and optional
-language correction are controlled by the OCR config; random codes normally
-use language correction disabled. By default, every configured Vision
-preprocessing variant must return the same five-character code. Confidence is
-retained for diagnostics but does not decide submission. When
-`ocr.vision_use_confidence` is enabled, the configured confidence thresholds
-and fallback agreement apply instead. Preprocessing composites transparent
-images onto white before grayscale, scaling, contrast, and optional median
-filtering. The solver interface remains replaceable without changing the
-browser client.
+Existing bridge allowlists apply. Paths come from the installed InfoExt LaunchAgent;
+no extra connector path settings are needed. Results go to the monitor's configured
+recipient, with no extra reply after confirmed delivery. Failure, unconfirmed
+delivery or a skipped check produces a diagnostic; failed deliveries remain queued.
+Status messages include the queried NIE, retained in the private pending event
+for retries; application logs use the masked NIE only.
+Personal arguments are excluded from local command records but remain in Telegram history.
 
-`infoext.captcha_max_attempts` is one shared budget for images evaluated during
-a check, including OCR-withheld candidates and submitted codes rejected by the
-portal. An OCR-withheld candidate triggers `Recargar Captcha` without
-`CONSULTAR`. After an explicit CAPTCHA rejection, the client uses the new image
-already returned by the portal instead of refreshing it again. The configured
-retry delay precedes the next OCR pass in both cases; the final attempt does not
-generate an unused CAPTCHA. Identity validation errors and a rejected URL stop
-the run immediately. In particular, `The requested URL was rejected. Please
-consult with your administrator.` is not retried as a CAPTCHA error.
+## CAPTCHA and debug artifacts
 
-## Reliability and local data
+Apple Vision validates five lowercase Latin letters or digits and configured
+variant agreement. `ocr.vision_use_confidence` controls confidence gating;
+agreement and confidence are not measurements of actual accuracy.
+`infoext.captcha_max_attempts` is shared by OCR-withheld and server-rejected attempts.
 
-- `data/state.json`: current successful status, consecutive-failure count, and
-  `pending_notifications`;
-- `data/history.jsonl`: append-only record of every successful check;
-- `logs/infoext.log`: diagnostics without a full NIE, token, or other secret;
-- `data/launchd/com.infoext.monitor.last_attempt.json`: latest scheduled-run
-  audit record.
+Ordinary checks save timestamped images in `data/captcha/`. CLI `--debug` saves
+its image, filled-form screenshot and OCR report in `debug/<timestamp>/`.
+Setting `infoext.debug = "enable"` instead retains submitted-form responses in
+`debug/captcha-responses/` and adjacent OCR JSON reports in `data/captcha/`.
+Response artifacts can contain personal data; keep this setting disabled outside
+diagnosis. One-time queries do not save returned-page artifacts.
 
-For a status change, the updated state and notification event are committed
-before Telegram is called. For an unchanged status, the current-status report
-is first committed to the same queue. Undelivered events remain queued and are
-retried at the start of a later check, before opening the portal; an event is
-removed only after confirmed delivery. If the process crashes after Telegram
-accepts a message but before that removal is persisted, a retry can deliver a
-duplicate. The connector interface does not provide an atomic send-and-state
-transaction, so delivery is at least once rather than exactly once.
+## State and reliability
 
-When the configured failure threshold is reached, one health alert is created
-and delivery is attempted in that same failing run. If Telegram is unavailable,
-the alert remains pending. The first subsequent successful run creates a
-single recovery notification containing the current status or status transition,
-check time, and resolution date when available. It replaces the routine status
-notification for that check, even when unchanged-status notifications are disabled.
-An InfoExt failure never replaces a known status, and a
-Telegram failure does not increment the InfoExt failure count.
+| Artifact | Purpose |
+|---|---|
+| `data/state.json` | Last status, failures and pending notifications |
+| `data/history.jsonl` | Successful monitored checks |
+| `logs/infoext.log` | Application diagnostics |
+| `data/launchd/com.infoext.monitor.last_attempt.json` | Latest scheduled attempt |
 
-`data/monitor.lock` prevents concurrent checks. Manual `--check-now`, its debug
-variant, and `--test-telegram` all run under `common/ttl_runner.py`, using
-`infoext.run_timeout_seconds` as the whole-worker hard TTL. The launchd runner
-owns the same timeout for scheduled checks without nesting another supervisor.
-Termination grace, polling and signals come from the shared process config.
-Expiry terminates the whole process group, releases its locks and is recorded
-in `logs/infoext.log` for manual commands or the launchd audit for scheduled
-commands. `caffeinate -i` keeps the Mac awake while a worker runs; it does not
-wake the Mac. Browser and network errors are reported with sanitized messages
-and count as failed checks; the non-submitting debug mode only records diagnostics.
+State and notification events are written atomically before sending. Failed
+notifications remain queued for retry; a crash after delivery but before queue
+removal can cause a duplicate. Temporary check failures preserve the last status.
+The configured failure threshold creates one alert; recovery includes the current
+status in a single message. Telegram failures do not increase check-failure counters.
+
+The shared TTL runner enforces `infoext.run_timeout_seconds` and terminates the
+whole process group on expiry. Locking prevents concurrent checks.
 
 ## LaunchAgent
 
-Check the installed agent:
-
-```bash
-launchctl print "gui/$(id -u)/com.infoext.monitor"
-```
-
-After code or configuration changes, run:
-
 ```bash
 bash restart.sh
-```
-
-It delegates to the canonical `install.sh`, which refreshes the service runtime,
-performs `bootout → bootstrap`, renders the plist again, and verifies registration. It does not
-create an unscheduled check; the next run follows the calendar from `[launchd]`.
-
-`first_run_time`, `interval_hours`, `last_run_time`, and `weekdays` form the
-calendar. Starts begin at `first_run_time`, repeat at `interval_hours` while not
-later than `last_run_time`, and run only on `weekdays`. The final boundary is a
-calendar slot only when an interval increment reaches it. `weekdays` uses launchd numbering:
-`1` is Monday, `6` is Saturday, and `0` or `7` is Sunday. `RunAtLoad` is
-intentionally absent, so login or reboot does not create an unscheduled check.
-
-A missed slot during Mac sleep is not an InfoExt failure. If launchd reaches
-the wrapper outside the configured time window or allowed weekday, it records
-`skipped` in `data/launchd/com.infoext.monitor.last_attempt.json` and does not
-start a check. The audit records start time, phase, terminal status
-(`succeeded`, `failed`, or `timed_out`), skip reason, exit code, and duration.
-
-The LaunchAgent uses an explicit wrapper, `.venv` interpreter, working
-directory, and `PATH`. `telegram_connector.project_root` resolves the
-connector without relying on an interactive shell environment.
-
-For an immediate trial through the actual installed agent:
-
-```bash
+launchctl print "gui/$(id -u)/com.infoext.monitor"
 launchctl kickstart "gui/$(id -u)/com.infoext.monitor"
 ```
 
-The trial still obeys the configured weekday, time window, and portal spacing.
-Inspect the launchd audit and application log for its outcome; successful
-registration alone does not prove that the worker or Telegram ran.
+`restart.sh` redeploys through `install.sh`; it does not trigger a check.
+The `[launchd]` config defines weekdays and slots from `first_run_time` through
+`last_run_time` at `interval_hours` increments. Login loads the calendar without
+an immediate check. Sleep does not count as failure and the monitor does not wake
+the Mac; delayed triggers outside allowed days or the time window are skipped.
+`kickstart` still obeys those guards and portal spacing.
 
 ```bash
 cat data/launchd/com.infoext.monitor.last_attempt.json
 tail -n 40 logs/infoext.log
-tail -n 20 logs/launchd.stdout.log
 tail -n 20 logs/launchd.stderr.log
 ```
 
-For a completed real check, correlate the audit's timestamps and exit code with
-`CAPTCHA accepted`, a status record and `Telegram notification delivered` in
-the application log. Confirm that `data/state.json` has a fresh
-`last_successful_check`. An idle agent after a one-shot run is normal.
-`succeeded` alone means the worker exited successfully: the portal-spacing
-guard can also skip a visit with a successful exit. `skipped` reports a weekday
-or time-window guard, and `failed` or `timed_out` requires diagnosis.
+Confirm a fresh successful-check timestamp, `CAPTCHA accepted`, a status and
+Telegram delivery in the logs. Exit zero can also mean a portal-spacing skip;
+an idle agent between checks is normal. Delivery failure leaves a pending event.
 
-If Telegram failed, the InfoExt result may still be saved successfully; inspect
-the pending queue and delivery warning rather than treating a successful
-worker exit as proof of message delivery. The audit describes the latest
-scheduled attempt; older log lines can belong to previous deployments.
+Stop or remove scheduling with `bash uninstall.sh`; resume with `bash install.sh`.
+Uninstall preserves the runtime, config, state, history and logs.
 
-## Uninstall
+## Observed InfoExt form
+
+| Element | Selector |
+|---|---|
+| Entry | `get_by_role("link", name="ENTRAR FORMULARIO")` |
+| NIE / submission date / birth year | `#nie` / `#fechaPresentacion` / `#anio` |
+| CAPTCHA image | `img[alt="captcha"]` |
+| Refresh | `get_by_role("link", name="Recargar Captcha")` |
+| CAPTCHA input / submit | `#captcha` / `#btnConsulta` |
+
+CAPTCHA is a PNG data URL. Refresh sends a POST and requires waiting for the new
+document; subscribe to `domcontentloaded` before clicking. Results use labelled
+fields and require `Estado`; comparison normalizes whitespace and case only.
+Submit clicks `#btnConsulta`, waits for `domcontentloaded` and the configured
+settle delay, then checks whether the form returned. Before submitting, NIE and
+submission date must be nonempty; visible `#anio` must also be filled.
+Result parsing supports table rows, `dt`/`dd` pairs and labelled values, extracting
+Estado, expediente number, authorization type, submission date and resolution
+date when present. Missing Estado is a parsing failure, never a new status.
+Explicit CAPTCHA rejection is `Los caracteres escritos no son correctos.`
+Identity validation errors and `The requested URL was rejected` stop the run.
+
+## Tests and troubleshooting
 
 ```bash
-bash uninstall.sh
-```
-
-The script removes only the LaunchAgent. It preserves the service runtime,
-local config, state, history, logs, debug data, and `telegram_connector`.
-To stop scheduled checks while keeping these artifacts, use `bash uninstall.sh`;
-to register the agent again, use `bash install.sh`.
-
-## Verification
-
-From the project directory:
-
-```bash
+# From this project:
 .venv/bin/python -m pytest -q
-```
-
-From the Playground root:
-
-```bash
+# From the Playground root:
 infoext-monitor/.venv/bin/python -m pytest infoext-monitor/tests -q
 ```
 
-`tests/conftest.py` adds the project root to the import path, so both commands
-run the same test suite.
-The suite includes forced-timeout and lock-release checks, transport-error
-redaction, and isolated installer rendering, registration, restart and uninstall
-checks. These lifecycle checks do not mutate the real LaunchAgent or send messages.
-
-## Troubleshooting
-
-- `Operation not permitted` or exit code `126` before any application log or
-  audit appears: inspect `ProgramArguments` and `WorkingDirectory` in
-  `launchctl print`. Both must point into the installed Application Support
-  runtime. A legacy launcher or working directory under `Documents` can be
-  denied before Python starts. Run `bash install.sh`, then repeat `kickstart`
-  and verify a fresh audit; changing executable bits alone does not resolve
-  macOS privacy restrictions. Old stderr entries remain after redeployment.
-- An interactive check succeeds but launchd does not: compare the actual
-  installed launcher, interpreter, working directory and project-root
-  environment. Reinstall after source/shared-runtime changes; do not assume
-  that Terminal permissions or environment are inherited by launchd.
-- `InfoExt check failed`: inspect `logs/infoext.log`; the last successful
-  status is retained.
-- `CAPTCHA was not accepted`: inspect the saved images in `data/captcha/`.
-  For a non-submitting diagnostic visit, use `--check-now --debug`. To retain
-  a real submitted form's response, enable `infoext.debug` for an ordinary check.
-- `InfoExt rejected required identity fields`: review the named local settings;
-  changing OCR does not resolve missing or invalid identity data.
-- `telegram_connector ... unavailable`: verify
-  `telegram_connector.project_root` and the configured connector's
-  `telegram_bridge.py`.
-- `Telegram notification failed`: the event stays in `pending_notifications`
-  and will be retried.
-- After code or `config/runtime.local.toml` changes, run `bash restart.sh` to
-  update the registered LaunchAgent.
+- CAPTCHA failures: inspect saved images; use CLI `--debug` without submitting,
+  or `infoext.debug` for submitted-response diagnosis.
+- Identity errors: check the local NIE, submission date and required birth year.
+- Connector errors: check `telegram_connector.project_root` and its own configuration;
+  undelivered notifications remain pending.
+- `Operation not permitted` or exit `126`: reinstall; launcher and working directory
+  must point to the Application Support runtime. Old stderr entries may remain.
+- Missing InfoExt LaunchAgent in Telegram: run `bash install.sh`.
+- Terminal works but launchd fails: reinstall and inspect its audit and stderr;
+  launchd does not inherit the interactive shell environment.

@@ -4,9 +4,17 @@ from __future__ import annotations
 
 import json
 import os
-import tempfile
+import sys
 from pathlib import Path
 from typing import Any
+
+# Source runs use sibling common/; installed runtimes carry their own copy.
+RUNTIME_ROOT = Path(__file__).resolve().parent
+SHARED_ROOT = RUNTIME_ROOT if (RUNTIME_ROOT / "common").is_dir() else RUNTIME_ROOT.parent
+if str(SHARED_ROOT) not in sys.path:
+    sys.path.insert(0, str(SHARED_ROOT))
+
+from common.json_io import write_json_atomic
 
 
 class StateError(RuntimeError):
@@ -53,20 +61,8 @@ class StateStore:
         return state
 
     def save(self, state: dict[str, Any]) -> None:
-        self.data_dir.mkdir(parents=True, exist_ok=True)
-        payload = json.dumps(state, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
         try:
-            fd, temporary_name = tempfile.mkstemp(prefix="state.", suffix=".tmp", dir=self.data_dir)
-            with os.fdopen(fd, "w", encoding="utf-8") as handle:
-                handle.write(payload)
-                handle.flush()
-                os.fsync(handle.fileno())
-            os.replace(temporary_name, self.state_file)
-            directory_fd = os.open(self.data_dir, os.O_RDONLY)
-            try:
-                os.fsync(directory_fd)
-            finally:
-                os.close(directory_fd)
+            write_json_atomic(self.state_file, state, sort_keys=True)
         except OSError as exc:
             raise StateError("Cannot write data/state.json safely.") from exc
 
