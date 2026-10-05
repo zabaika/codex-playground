@@ -1257,6 +1257,10 @@ def build_digest_message(
 
 
 def format_digest_summary_for_telegram(summary: str) -> str:
+    # The delivery uses HTML; normalize common model-generated Markdown first.
+    summary = re.sub(r"\[[^\]\n]*\]\((https?://[^\s)]+)\)", r"\1", summary)
+    summary = re.sub(r"(?m)^\s*#{1,6}\s+", "", summary)
+    summary = re.sub(r"(\*\*|__)([^\n]+?)\1", r"\2", summary)
     lines = [line.strip() for line in summary.replace("\r\n", "\n").replace("\r", "\n").split("\n")]
     compact_lines = [line for line in lines if line]
     if not compact_lines:
@@ -1272,10 +1276,12 @@ def format_digest_summary_for_telegram(summary: str) -> str:
         return escaped
 
     def format_main_topics_line(value: str) -> str:
-        match = re.match(r"^((?:[-•]\s+|\d+\.\s+)?)([^:]{2,200}):(.*)$", value)
+        match = re.match(r"^((?:[-•]\s+|\d+\.\s+)?)([^:]{2,200}):(?!//)(.*)$", value)
         if not match:
             return escape_line(value)
         marker, lead, tail = match.groups()
+        if re.search(r"https?://", lead):
+            return escape_line(value)
         return f"{escape_line(marker)}<b>{escape_line(lead)}:</b>\n{escape_line(tail).lstrip()}"
 
     def normalize_lead_line(value: str) -> str:
@@ -1293,6 +1299,7 @@ def format_digest_summary_for_telegram(summary: str) -> str:
         return bool(POPULAR_LINK_LINE_RE.match(value))
 
     def resolve_heading(value: str) -> tuple[str, str] | None:
+        value = re.sub(r"^(\*\*|__)(.+?)\1(?=\s*(?:$|[:\-—]))", r"\2", value)
         heading_patterns = (
             (MAIN_TOPICS_DAY_HEADING, r"^(?:Главная тема дня|Главные темы дня|Главные темы)\b"),
             (MOST_POPULAR_HEADING, r"^Наиболее популярное\b"),
@@ -1348,6 +1355,16 @@ def format_digest_summary_for_telegram(summary: str) -> str:
                 previous_line_kind = "text"
             else:
                 previous_line_kind = "heading"
+            continue
+
+        if (
+            current_section == "main_topics"
+            and previous_line_kind in {"text", "list"}
+            and re.fullmatch(r"<?https?://[^\s<>]+>?", line)
+            and formatted
+            and formatted[-1]
+        ):
+            formatted[-1] += " " + escape_line(line)
             continue
 
         if is_list_item:

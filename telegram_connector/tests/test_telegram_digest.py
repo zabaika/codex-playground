@@ -1245,6 +1245,83 @@ batch_digest_template = "Batch={batch_index}; {cache_breakpoint_marker}"
         self.assertIn("<b>Незакрытые вопросы/продолжения</b>\nнужен свежий кейс по банкам.", formatted)
         self.assertIn("<b>Связки вопрос-ответ/развитие темы</b>\nобсуждение перешло к картам и переводам.", formatted)
 
+    def test_format_digest_summary_keeps_topic_links_inline_and_markdown_heading_popular_dense(self) -> None:
+        formatted = telegram_digest.format_digest_summary_for_telegram(
+            "\n".join([
+                "Главные темы дня: рейсы и документы",
+                "1. Рейсы: частоту снизили до одного в неделю.",
+                "",
+                "https://t.me/ranarod/30911",
+                "2. Документы: исключение действует до 31 декабря. https://t.me/ranarod/30921",
+                "**Наиболее популярное**",
+                "https://t.me/ranarod/30914 - Дипломаты: высланы 10 сотрудников",
+                "https://t.me/ranarod/30923 - Туристы застряли на маршруте",
+            ])
+        )
+
+        self.assertIn("частоту снизили до одного в неделю. https://t.me/ranarod/30911", formatted)
+        self.assertIn("до 31 декабря. https://t.me/ranarod/30921", formatted)
+        self.assertIn(
+            "<b>Наиболее популярное</b>\n"
+            "https://t.me/ranarod/30914 - Дипломаты: высланы 10 сотрудников\n"
+            "https://t.me/ranarod/30923 - Туристы застряли на маршруте", formatted,
+        )
+        self.assertNotIn("**", formatted)
+        self.assertNotIn("<b>https", formatted)
+        self.assertNotIn("https:\n", formatted)
+
+    def test_format_digest_summary_does_not_treat_inline_url_as_topic_separator(self) -> None:
+        formatted = telegram_digest.format_digest_summary_for_telegram(
+            "Главные темы дня: рейсы\n"
+            "1. Частоту рейсов снизили. https://t.me/ranarod/30911"
+        )
+        self.assertIn("1. Частоту рейсов снизили. https://t.me/ranarod/30911", formatted)
+        self.assertNotIn("<b>Частоту", formatted)
+        self.assertNotIn("<b>https", formatted)
+
+    def test_format_digest_summary_normalizes_markdown_topics_links_and_hash_heading(self) -> None:
+        formatted = telegram_digest.format_digest_summary_for_telegram(
+            "Главные темы дня: авиасообщение\n"
+            "1. **Рейсы в ОАЭ**: билеты от 23 500 рублей. "
+            "[Обсуждение](https://t.me/ranarod/30913) [Utair](https://t.me/ranarod/30920)\n"
+            "2. __Страховка__: обязательна с 1 октября.\n"
+            "[Обсуждение](https://t.me/ranarod/30922)\n"
+            "### Наиболее популярное\n\n"
+            "https://t.me/ranarod/30925 - Отмена рейсов\n\n"
+            "https://t.me/ranarod/30919 - Изменения на границе"
+        )
+        self.assertIn(
+            "1. <b>Рейсы в ОАЭ:</b>\nбилеты от 23 500 рублей. "
+            "https://t.me/ranarod/30913 https://t.me/ranarod/30920", formatted,
+        )
+        self.assertIn(
+            "2. <b>Страховка:</b>\nобязательна с 1 октября. https://t.me/ranarod/30922", formatted,
+        )
+        self.assertIn(
+            "<b>Наиболее популярное</b>\n"
+            "https://t.me/ranarod/30925 - Отмена рейсов\n"
+            "https://t.me/ranarod/30919 - Изменения на границе", formatted,
+        )
+        for marker in ("**", "__", "###", "[Обсуждение]", "[Utair]", "https:\n"):
+            self.assertNotIn(marker, formatted)
+
+    def test_format_digest_summary_preserves_abbreviations_in_colon_headings(self) -> None:
+        formatted = telegram_digest.format_digest_summary_for_telegram(
+            "Главные темы дня: записи и консультации\n"
+            "1. г. Москва: запись открыта. https://t.me/example/1\n"
+            "2. Dr. Smith: консультация доступна.\n"
+            "3. Запись закрыта. Новых дат нет."
+        )
+        self.assertIn(
+            "1. <b>г. Москва:</b>\nзапись открыта. https://t.me/example/1", formatted,
+        )
+        self.assertIn(
+            "2. <b>Dr. Smith:</b>\nконсультация доступна.", formatted,
+        )
+        self.assertIn("3. Запись закрыта. Новых дат нет.", formatted)
+        self.assertNotIn("<b>Запись закрыта", formatted)
+        self.assertNotIn("<b>https", formatted)
+
     def test_format_digest_summary_for_telegram_bolds_numbered_main_topics_leads(self) -> None:
         formatted = telegram_digest.format_digest_summary_for_telegram(
             "\n".join(
