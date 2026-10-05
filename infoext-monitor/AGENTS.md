@@ -35,6 +35,15 @@ then the relevant tests in [tests](./tests).
 
 - Treat `install.sh` as the canonical deploy/redeploy path. It renders the
   plist from TOML and performs `bootout` then `bootstrap`.
+- Scheduled code, venv, Vision helper and shared process runtime are installed
+  in `~/Library/Application Support/infoext_monitor_service`, matching the
+  connector's deployment shape. Keep launchers and WorkingDirectory there.
+- `INFOEXT_PROJECT_ROOT` selects project-owned config, data and logs; runtime
+  modules and helper executables resolve from `RUNTIME_ROOT`. Do not copy local
+  config or connector credentials into this service runtime.
+- Treat installed runtime files as derived artifacts; edit the source and
+  redeploy after application or shared `common/` changes. Never patch the
+  Application Support copy directly.
 - `restart.sh` delegates to that same installer, so it is also a redeploy
   operation. Do not manually edit the installed plist.
 - Keep `ProgramArguments[0]` as the stable launcher wrapper. Keep shell
@@ -61,6 +70,10 @@ then the relevant tests in [tests](./tests).
   `infoext-monitor/.venv/bin/python -m pytest infoext-monitor/tests -q`.
 - For launchd changes, validate the rendered plist with `plutil -lint`, run the
   canonical installer, and inspect the loaded service with `launchctl print`.
+- Verify launcher migrations through an actual `kickstart` during an eligible
+  configured window. Correlate a fresh audit with worker and delivery logs;
+  bootstrap success or an idle service alone does not prove a completed check.
+  A portal-spacing skip can exit successfully without contacting InfoExt.
 - Before committing, scan tracked candidates for secrets and absolute local
   paths, and keep generated data, logs, debug artifacts, virtual environments
   and local config out of Git.

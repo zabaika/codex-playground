@@ -6,10 +6,10 @@
   <string>com.infoext.monitor</string>
   <key>ProgramArguments</key>
   <array>
-    <string>__PROJECT_ROOT__/launchd/infoext-monitor-launcher</string>
+    <string>__SERVICE_ROOT__/launchd/infoext-monitor-launcher</string>
   </array>
   <key>WorkingDirectory</key>
-  <string>__PROJECT_ROOT__</string>
+  <string>__SERVICE_ROOT__</string>
   <key>StartCalendarInterval</key>
   <array>
 __START_CALENDAR_INTERVALS__
@@ -20,6 +20,8 @@ __START_CALENDAR_INTERVALS__
   <string>__PROJECT_ROOT__/logs/launchd.stderr.log</string>
   <key>EnvironmentVariables</key>
   <dict>
+    <key>INFOEXT_PROJECT_ROOT</key>
+    <string>__PROJECT_ROOT__</string>
     <key>PATH</key>
     <string>/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin</string>
   </dict>

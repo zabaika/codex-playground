@@ -45,6 +45,7 @@ def test_public_modes_enter_the_hard_timeout_supervisor(monkeypatch, tmp_path, a
 
 
 def test_manual_timeout_releases_lock_and_allows_a_fresh_run(tmp_path, monkeypatch, caplog) -> None:
+    monkeypatch.setattr(monitor, "RUNTIME_ROOT", tmp_path)
     monkeypatch.syspath_prepend(str(Path(monitor.__file__).resolve().parent.parent))
     from common import process as common_process
     from common.process import ProcessConfig

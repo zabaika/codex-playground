@@ -11,7 +11,13 @@ from pathlib import Path
 
 from PIL import Image, ImageEnhance, ImageFilter, ImageOps
 
-from config import OCRSettings, Settings
+from config import OCRSettings, RUNTIME_ROOT, Settings
+
+# Normalize only visual Cyrillic lookalikes, not arbitrary transliteration.
+CYRILLIC_LOOKALIKES = str.maketrans({
+    "а": "a", "е": "e", "о": "o", "р": "p",
+    "с": "c", "х": "x", "у": "y",
+})
 
 
 class CaptchaSolverError(RuntimeError):
@@ -225,7 +231,8 @@ class AppleVisionCaptchaSolver(CaptchaSolver):
         return None
 
     def _clean(self, value: str) -> str:
-        return re.sub(rf"[^{self.settings.character_whitelist}]", "", value.lower())
+        normalized = value.lower().translate(CYRILLIC_LOOKALIKES)
+        return re.sub(rf"[^{self.settings.character_whitelist}]", "", normalized)
 
     def _has_expected_length(self, candidate: CaptchaSolution) -> bool:
         return self.settings.expected_length_min <= len(candidate.text) <= self.settings.expected_length_max
@@ -246,4 +253,4 @@ def prepare_image(image_bytes: bytes, settings: OCRSettings) -> Image.Image:
 
 
 def create_captcha_solver(settings: Settings) -> CaptchaSolver:
-    return AppleVisionCaptchaSolver(settings.ocr, settings.project_root)
+    return AppleVisionCaptchaSolver(settings.ocr, RUNTIME_ROOT)

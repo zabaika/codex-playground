@@ -12,15 +12,14 @@ import time
 from typing import Sequence
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-PLAYGROUND_ROOT = PROJECT_ROOT.parent
-for path in (PROJECT_ROOT, PLAYGROUND_ROOT):
+RUNTIME_ROOT = Path(__file__).resolve().parents[1]
+for path in (RUNTIME_ROOT, RUNTIME_ROOT.parent):
     if str(path) not in sys.path:
         sys.path.insert(0, str(path))
 
 from common import process as common_process
 from common import ttl_runner
-from config import Settings, load_settings
+from config import PROJECT_ROOT, Settings, load_settings
 
 
 LABEL = "com.infoext.monitor"
@@ -103,7 +102,7 @@ def run_scheduled_check(
     write_last_attempt(audit_file, base_payload)
     # The scheduled runner already owns the hard TTL; avoid a second supervisor.
     check_command = list(command or [
-        sys.executable, str(PROJECT_ROOT / "main.py"), "--check-now", "--_ttl-worker"
+        sys.executable, str(RUNTIME_ROOT / "main.py"), "--check-now", "--_ttl-worker"
     ])
     try:
         exit_code = ttl_runner.run_with_ttl(

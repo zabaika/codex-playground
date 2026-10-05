@@ -9,17 +9,18 @@ recognized locally and notifications use the existing sibling
 
 ```text
 launchd
-  -> stable launcher wrapper
-     -> launchd/run_monitor.py (whole-run limit and last-attempt audit)
-        -> common/ttl_runner.py (process group and forced termination)
-           -> main.py
-              -> infoext.py (Playwright Chromium and the official site)
-              -> captcha_solver.py (Pillow and macOS Apple Vision)
-              -> state.py (atomic state.json and history.jsonl)
-              -> notifier.py
-                 -> ../telegram_connector/telegram_bridge.py
-                    -> existing Keychain/config/token/chat id
-                    -> Telegram
+  -> installed runtime in Application Support
+     -> stable launcher wrapper
+        -> launchd/run_monitor.py (whole-run limit and last-attempt audit)
+           -> common/ttl_runner.py (process group and forced termination)
+              -> main.py
+                 -> infoext.py (Playwright Chromium and the official site)
+                 -> captcha_solver.py (Pillow and macOS Apple Vision)
+                 -> state.py (atomic state.json and history.jsonl)
+                 -> notifier.py
+                    -> configured telegram_connector/telegram_bridge.py
+                       -> existing Keychain/config/token/chat id
+                       -> Telegram
 ```
 
 `notifier.py` imports the existing `telegram_connector` API. It does not
@@ -82,6 +83,21 @@ compiles the Apple Vision helper, creates local runtime directories, renders a p
 absolute runtime paths, and registers the LaunchAgent. It does not change
 `telegram_connector`.
 
+As in `telegram_connector`, scheduled executable code is deployed to
+`~/Library/Application Support/infoext_monitor_service`. The installer syncs
+application code, launchers, the compiled Vision helper and `common/`, and
+creates a separate service venv. Both the launcher and `WorkingDirectory` use
+this installed runtime rather than `Documents`. `INFOEXT_PROJECT_ROOT` points
+to the source project, whose local config, state, history, debug data and logs
+remain canonical. Local config and Telegram credentials are not copied into
+the service bundle. Manual commands continue to use the source project's venv.
+
+The repository is the editable source of truth. Do not edit installed Python
+files, helpers, shared process config or the service venv as a repair path;
+change the source and redeploy with the canonical installer. Changes to shared
+`common/` code or config also require redeployment, because scheduled jobs use
+the installed copy.
+
 Before installation, the script verifies that `infoext.nie` is present and
 that `infoext.fecha_presentacion` is a real calendar date in `DD/MM/YYYY`
 format. Placeholder text is rejected.
@@ -143,7 +159,11 @@ After confirmed delivery it prints `Telegram notification: OK`.
 OCR uses local Pillow and Apple Vision. `install.sh` compiles `vision_ocr.swift` into a
 local helper and sends it the CAPTCHA through standard input. InfoExt CAPTCHA
 codes contain five lowercase Latin letters or digits; OCR output is normalized
-to lowercase before validation and submission. Preprocessing and optional
+to lowercase, then visual Cyrillic lookalikes (`а е о р с х у`) are replaced
+with their Latin equivalents (`a e o p c x y`) before whitelist filtering.
+Other Cyrillic letters are not transliterated. Length and agreement checks
+apply after normalization; raw Vision observations remain unchanged for
+diagnostics. Preprocessing and optional
 language correction are controlled by the OCR config; random codes normally
 use language correction disabled. By default, every configured Vision
 preprocessing variant must return the same five-character code. Confidence is
@@ -216,13 +236,14 @@ After code or configuration changes, run:
 bash restart.sh
 ```
 
-It delegates to the canonical `install.sh`, which performs `bootout →
-bootstrap`, renders the plist again, and verifies registration. It does not
+It delegates to the canonical `install.sh`, which refreshes the service runtime,
+performs `bootout → bootstrap`, renders the plist again, and verifies registration. It does not
 create an unscheduled check; the next run follows the calendar from `[launchd]`.
 
 `first_run_time`, `interval_hours`, `last_run_time`, and `weekdays` form the
-calendar. Starts begin at `first_run_time`, repeat at `interval_hours`, include
-`last_run_time`, and run only on `weekdays`. `weekdays` uses launchd numbering:
+calendar. Starts begin at `first_run_time`, repeat at `interval_hours` while not
+later than `last_run_time`, and run only on `weekdays`. The final boundary is a
+calendar slot only when an interval increment reaches it. `weekdays` uses launchd numbering:
 `1` is Monday, `6` is Saturday, and `0` or `7` is Sunday. `RunAtLoad` is
 intentionally absent, so login or reboot does not create an unscheduled check.
 
@@ -236,14 +257,44 @@ The LaunchAgent uses an explicit wrapper, `.venv` interpreter, working
 directory, and `PATH`. `telegram_connector.project_root` resolves the
 connector without relying on an interactive shell environment.
 
+For an immediate trial through the actual installed agent:
+
+```bash
+launchctl kickstart "gui/$(id -u)/com.infoext.monitor"
+```
+
+The trial still obeys the configured weekday, time window, and portal spacing.
+Inspect the launchd audit and application log for its outcome; successful
+registration alone does not prove that the worker or Telegram ran.
+
+```bash
+cat data/launchd/com.infoext.monitor.last_attempt.json
+tail -n 40 logs/infoext.log
+tail -n 20 logs/launchd.stdout.log
+tail -n 20 logs/launchd.stderr.log
+```
+
+For a completed real check, correlate the audit's timestamps and exit code with
+`CAPTCHA accepted`, a status record and `Telegram notification delivered` in
+the application log. Confirm that `data/state.json` has a fresh
+`last_successful_check`. An idle agent after a one-shot run is normal.
+`succeeded` alone means the worker exited successfully: the portal-spacing
+guard can also skip a visit with a successful exit. `skipped` reports a weekday
+or time-window guard, and `failed` or `timed_out` requires diagnosis.
+
+If Telegram failed, the InfoExt result may still be saved successfully; inspect
+the pending queue and delivery warning rather than treating a successful
+worker exit as proof of message delivery. The audit describes the latest
+scheduled attempt; older log lines can belong to previous deployments.
+
 ## Uninstall
 
 ```bash
 bash uninstall.sh
 ```
 
-The script removes only the LaunchAgent. It preserves local config, state,
-history, logs, debug data, and `telegram_connector`.
+The script removes only the LaunchAgent. It preserves the service runtime,
+local config, state, history, logs, debug data, and `telegram_connector`.
 To stop scheduled checks while keeping these artifacts, use `bash uninstall.sh`;
 to register the agent again, use `bash install.sh`.
 
@@ -269,6 +320,17 @@ checks. These lifecycle checks do not mutate the real LaunchAgent or send messag
 
 ## Troubleshooting
 
+- `Operation not permitted` or exit code `126` before any application log or
+  audit appears: inspect `ProgramArguments` and `WorkingDirectory` in
+  `launchctl print`. Both must point into the installed Application Support
+  runtime. A legacy launcher or working directory under `Documents` can be
+  denied before Python starts. Run `bash install.sh`, then repeat `kickstart`
+  and verify a fresh audit; changing executable bits alone does not resolve
+  macOS privacy restrictions. Old stderr entries remain after redeployment.
+- An interactive check succeeds but launchd does not: compare the actual
+  installed launcher, interpreter, working directory and project-root
+  environment. Reinstall after source/shared-runtime changes; do not assume
+  that Terminal permissions or environment are inherited by launchd.
 - `InfoExt check failed`: inspect `logs/infoext.log`; the last successful
   status is retained.
 - `CAPTCHA was not accepted`: inspect the saved images in `data/captcha/`.

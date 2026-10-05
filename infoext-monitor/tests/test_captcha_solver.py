@@ -51,6 +51,39 @@ def test_preprocess_composites_transparent_captcha_on_white_background(ocr_setti
     assert processed.getpixel((9, 4)) == 0
 
 
+@pytest.mark.parametrize(
+    ("raw", "expected", "allowed"),
+    [
+        ("xg53р", "xg53p", True),
+        ("Yb35еm-", "", False),
+        (",fyf45", "fyf45", True),
+        ("аб35m", "", False),
+    ],
+)
+def test_vision_normalizes_lookalikes_before_length_and_consensus_validation(
+    monkeypatch: pytest.MonkeyPatch, tmp_path, ocr_settings: OCRSettings,
+    raw: str, expected: str, allowed: bool,
+) -> None:
+    solver = AppleVisionCaptchaSolver(replace(ocr_settings, vision_use_confidence=False), tmp_path)
+    payload = {"candidates": [{"text": raw, "confidence": 0.3}]}
+    monkeypatch.setattr(solver, "_run", lambda *_: payload)
+    encoded = io.BytesIO()
+    Image.new("RGB", (20, 10), "white").save(encoded, format="PNG")
+
+    assessment = solver.assess(encoded.getvalue())
+
+    assert assessment.solution.text == expected
+    assert assessment.submission_allowed is allowed
+    assert all(item == payload for item in assessment.raw_vision_observations)
+
+
+def test_only_visual_cyrillic_lookalikes_are_normalized(tmp_path, ocr_settings: OCRSettings) -> None:
+    solver = AppleVisionCaptchaSolver(ocr_settings, tmp_path)
+
+    assert solver._clean("АЕОРСХУ аеорсху 0123456789") == "aeopcxy aeopcxy 0123456789".replace(" ", "")
+    assert solver._clean("бжзилфцчшщыэюя") == ""
+
+
 def test_assessment_report_exposes_consensus_without_claiming_accuracy() -> None:
     assessment = CaptchaAssessment(
         solution=CaptchaSolution("ekbhh", 0.5),

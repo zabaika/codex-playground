@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 import tomllib
+import os
 from dataclasses import dataclass
 from datetime import datetime, time
 from pathlib import Path
 import re
 
 
-PROJECT_ROOT = Path(__file__).resolve().parent
+RUNTIME_ROOT = Path(__file__).resolve().parent
+PROJECT_ROOT = Path(os.environ.get("INFOEXT_PROJECT_ROOT", RUNTIME_ROOT)).expanduser().resolve()
 INFOEXT_CAPTCHA_CHARACTER_WHITELIST = "abcdefghijklmnopqrstuvwxyz0123456789"
 
 

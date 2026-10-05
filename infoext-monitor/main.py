@@ -12,7 +12,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from captcha_solver import create_captcha_solver
-from config import ConfigurationError, PROJECT_ROOT, Settings, load_settings
+from config import ConfigurationError, PROJECT_ROOT, RUNTIME_ROOT, Settings, load_settings
 from infoext import InfoExtClient, InfoExtError, InfoExtResult, normalize_status
 from notifier import Notifier, NotifierError, TelegramConnectorNotifier
 from state import StateError, StateStore
@@ -372,13 +372,14 @@ def validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) -> 
 
 def run_with_timeout(args: argparse.Namespace, settings: Settings, logger: logging.Logger) -> int:
     """Supervise manual modes through the same hard TTL used by launchd."""
-    playground_root = str(PROJECT_ROOT.parent)
-    if playground_root not in sys.path:
-        sys.path.insert(0, playground_root)
+    # Installed runtimes carry common/ locally; source runs use its sibling.
+    for root in (RUNTIME_ROOT, RUNTIME_ROOT.parent):
+        if str(root) not in sys.path:
+            sys.path.insert(0, str(root))
     from common import process as common_process, ttl_runner
 
     process_config = common_process.load_process_config()
-    command = [sys.executable, str(settings.project_root / "main.py"), "--_ttl-worker"]
+    command = [sys.executable, str(RUNTIME_ROOT / "main.py"), "--_ttl-worker"]
     command.append("--test-telegram" if args.test_telegram else "--check-now")
     if args.debug:
         command.append("--debug")

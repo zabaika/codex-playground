@@ -5,6 +5,7 @@ from pathlib import Path
 import plistlib
 import subprocess
 import sys
+import shutil
 
 from config import load_settings
 
@@ -24,7 +25,8 @@ def isolated_launchctl(tmp_path):
 
 
 def test_installer_renders_config_calendar_and_reloads_agent(tmp_path) -> None:
-    root = tmp_path / "project"
+    root = tmp_path / "project & source"
+    service = tmp_path / "service runtime"
     (root / "config").mkdir(parents=True)
     example = (PROJECT_ROOT / "config/runtime.example.toml").read_text()
     local = example.replace('nie = ""', 'nie = "SYNTHETIC-NIE"').replace(
@@ -38,7 +40,7 @@ def test_installer_renders_config_calendar_and_reloads_agent(tmp_path) -> None:
     renderer = script.split("'\nplutil -lint", 1)[0].rsplit("-c '\n", 1)[1]
     target = tmp_path / "monitor.plist"
     env, calls = isolated_launchctl(tmp_path)
-    env.update(PROJECT_ROOT=str(root), PLIST_TARGET=str(target),
+    env.update(PROJECT_ROOT=str(root), SERVICE_ROOT=str(service), PLIST_TARGET=str(target),
                PLIST_SOURCE=str(PROJECT_ROOT / "launchd/com.infoext.monitor.plist"),
                PYTHONPATH=str(PROJECT_ROOT))
     subprocess.run([sys.executable, "-c", renderer], env=env, check=True, capture_output=True)
@@ -48,9 +50,12 @@ def test_installer_renders_config_calendar_and_reloads_agent(tmp_path) -> None:
         {"Weekday": day, "Hour": time.hour, "Minute": time.minute}
         for day in settings.launchd.weekdays for time in settings.launchd.calendar_times
     ]
-    assert payload["ProgramArguments"] == [str(root / "launchd/infoext-monitor-launcher")]
+    assert payload["ProgramArguments"] == [str(service / "launchd/infoext-monitor-launcher")]
+    assert payload["WorkingDirectory"] == str(service)
+    assert payload["EnvironmentVariables"]["INFOEXT_PROJECT_ROOT"] == str(root)
     assert "RunAtLoad" not in payload
     assert "__PROJECT_ROOT__" not in target.read_text()
+    assert "__SERVICE_ROOT__" not in target.read_text()
 
     registration = script.split('USER_ID="$(id -u)"', 1)[1].split(
         '\n"$PROJECT_ROOT/.venv/bin/python"', 1
@@ -62,6 +67,45 @@ def test_installer_renders_config_calendar_and_reloads_agent(tmp_path) -> None:
         f"bootout gui/test-user {target}", f"bootstrap gui/test-user {target}",
         "print gui/test-user/com.infoext.monitor",
     ]
+
+
+def test_runtime_sync_keeps_project_config_and_installs_shared_assets(tmp_path) -> None:
+    root = tmp_path / "project"
+    service = tmp_path / "service"
+    root.mkdir()
+    for name in ("main.py", "config.py", "infoext.py", "captcha_solver.py", "state.py",
+                 "notifier.py", "requirements.txt"):
+        shutil.copy2(PROJECT_ROOT / name, root / name)
+    shutil.copytree(PROJECT_ROOT / "launchd", root / "launchd")
+    (root / "bin").mkdir()
+    (root / "bin/infoext-vision-ocr").write_text("synthetic helper")
+    shutil.copytree(PROJECT_ROOT.parent / "common", tmp_path / "common",
+                    ignore=shutil.ignore_patterns("__pycache__", "tests"))
+    (root / "config").mkdir()
+    shutil.copy2(PROJECT_ROOT / "config/runtime.example.toml", root / "config/runtime.local.toml")
+    (service / "common").mkdir(parents=True)
+    (service / "common/obsolete.py").touch()
+    script = (PROJECT_ROOT / "install.sh").read_text()
+    sync = script.split("# Keep executable code outside Documents", 1)[1].split(
+        '\n"$PROJECT_ROOT/.venv/bin/python" -m venv', 1
+    )[0]
+    env = {**os.environ, "PROJECT_ROOT": str(root), "SERVICE_ROOT": str(service)}
+    subprocess.run(["/bin/bash", "-c", "set -euo pipefail\n# Keep executable code outside Documents" + sync],
+                   env=env, check=True, capture_output=True)
+    assert (service / "common/config/process.toml").is_file()
+    assert not (service / "common/obsolete.py").exists()
+    assert not (service / "config/runtime.local.toml").exists()
+    assert (service / "bin/infoext-vision-ocr").is_file()
+    env.update(INFOEXT_PROJECT_ROOT=str(root), PYTHONPATH=str(service))
+    probe = (
+        "from config import PROJECT_ROOT, RUNTIME_ROOT, load_settings; "
+        "from pathlib import Path; import os; "
+        "assert PROJECT_ROOT == Path(os.environ['INFOEXT_PROJECT_ROOT']); "
+        "assert RUNTIME_ROOT == Path(os.environ['SERVICE_ROOT']); "
+        "assert load_settings(require_infoext=False).project_root == PROJECT_ROOT"
+    )
+    subprocess.run([sys.executable, "-c", probe], cwd=service, env=env,
+                   check=True, capture_output=True)
 
 
 def test_restart_delegates_to_canonical_installer(tmp_path) -> None:

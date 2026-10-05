@@ -2,6 +2,7 @@
 set -euo pipefail
 
 PROJECT_ROOT="$(cd "$(dirname "$0")" && pwd)"
+SERVICE_ROOT="$HOME/Library/Application Support/infoext_monitor_service"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 LABEL="com.infoext.monitor"
 PLIST_SOURCE="$PROJECT_ROOT/launchd/$LABEL.plist"
@@ -37,11 +38,24 @@ chmod 700 "$PROJECT_ROOT/data" "$PROJECT_ROOT/debug"
 chmod +x "$PROJECT_ROOT/launchd/infoext-monitor-launcher.sh"
 chmod +x "$PROJECT_ROOT/launchd/infoext-monitor-launcher"
 
-PROJECT_ROOT="$PROJECT_ROOT" PLIST_SOURCE="$PLIST_SOURCE" PLIST_TARGET="$PLIST_TARGET" \
+# Keep executable code outside Documents, matching telegram_connector deployment.
+mkdir -p "$SERVICE_ROOT/launchd" "$SERVICE_ROOT/bin" "$SERVICE_ROOT/common"
+cp "$PROJECT_ROOT/"{main,config,infoext,captcha_solver,state,notifier}.py "$SERVICE_ROOT/"
+cp "$PROJECT_ROOT/requirements.txt" "$SERVICE_ROOT/requirements.txt"
+cp "$PROJECT_ROOT/launchd/"{run_monitor.py,infoext-monitor-launcher,infoext-monitor-launcher.sh} "$SERVICE_ROOT/launchd/"
+cp "$PROJECT_ROOT/bin/infoext-vision-ocr" "$SERVICE_ROOT/bin/infoext-vision-ocr"
+rsync -a --delete --exclude '__pycache__' --exclude 'tests' "$PROJECT_ROOT/../common/" "$SERVICE_ROOT/common/"
+"$PROJECT_ROOT/.venv/bin/python" -m venv "$SERVICE_ROOT/.venv"
+"$SERVICE_ROOT/.venv/bin/python" -m pip install -r "$SERVICE_ROOT/requirements.txt"
+"$SERVICE_ROOT/.venv/bin/python" -m playwright install chromium
+chmod +x "$SERVICE_ROOT/launchd/"{infoext-monitor-launcher,infoext-monitor-launcher.sh}
+
+PROJECT_ROOT="$PROJECT_ROOT" SERVICE_ROOT="$SERVICE_ROOT" PLIST_SOURCE="$PLIST_SOURCE" PLIST_TARGET="$PLIST_TARGET" \
   "$PROJECT_ROOT/.venv/bin/python" -c '
 from pathlib import Path
 import os
 import sys
+from xml.sax.saxutils import escape
 source = Path(os.environ["PLIST_SOURCE"])
 target = Path(os.environ["PLIST_TARGET"])
 root = os.environ["PROJECT_ROOT"]
@@ -58,7 +72,8 @@ calendar_intervals = "\n".join(
     for weekday in settings.launchd.weekdays
     for value in settings.launchd.calendar_times
 )
-payload = source.read_text(encoding="utf-8").replace("__PROJECT_ROOT__", root)
+payload = source.read_text(encoding="utf-8").replace("__PROJECT_ROOT__", escape(root))
+payload = payload.replace("__SERVICE_ROOT__", escape(os.environ["SERVICE_ROOT"]))
 target.write_text(payload.replace("__START_CALENDAR_INTERVALS__", calendar_intervals), encoding="utf-8")
 '
 plutil -lint "$PLIST_TARGET"
