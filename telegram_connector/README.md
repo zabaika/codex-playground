@@ -141,6 +141,7 @@ Command notes:
 Digest runs are per channel: prep-sync, optional OCR, AI analysis, and Telegram delivery are isolated by channel where possible.
 
 - output is delivered to `telegram.default_chat_id`
+- The scheduled digest uses the shared runner's `--sleep-policy pause`: it resumes after host sleep, and `digest.run_total_timeout_seconds` limits elapsed awake time rather than including sleep. This is an intentional exception to the default sleep-inclusive TTL; waits and retries while awake still consume the budget.
 - channels below `digest.min_messages_for_ai` send a short loaded-without-analysis note
 - channels that fit `digest_ai.*` budgets use one direct OpenAI request; larger windows fall back to chronological batches and a final summary
 - hitting an effective digest `sync_limit` is called out in the delivered channel message

@@ -44,6 +44,7 @@ class LaunchAgentScriptTests(unittest.TestCase):
         self.assertIn('exec "$PYTHON_BIN" "\\$ROOT/common/ttl_runner.py" \\', content)
         self.assertIn('--audit-file "\\$AUDIT_LOG" \\', content)
         self.assertIn('--use-caffeinate \\', content)
+        self.assertIn('--sleep-policy pause \\', content)
         self.assertIn('-- "$PYTHON_BIN" "\\$ROOT/telegram_digest.py" run', content)
         self.assertIn('exec /bin/bash "$SERVICE_ROOT/scripts/run_telegram_digest.sh"', content)
 

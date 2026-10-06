@@ -23,6 +23,10 @@ Use `common/` for code and config that are:
 
 - [process.py](./process.py) and [ttl_runner.py](./ttl_runner.py)  
   Shared non-daemon process runtime helpers for hard wall-clock TTL, process-group shutdown, and reusable timeout defaults.
+  By default (`--sleep-policy interrupt`), TTL includes host sleep on macOS/Linux and sleep interruptions have a distinct exit code.
+  Opt-in `--sleep-policy pause` resumes after sleep and enforces TTL against elapsed awake time, including network waits and retries; host sleep does not consume that budget.
+  Audit diagnostics include `sleep_policy`, `elapsed_seconds` (including sleep), `sleep_seconds`, and `ttl_elapsed_seconds` (the time counted against TTL).
+  Optional `caffeinate -i -s` runs only for the worker lifetime, with diagnostics in the audit.
 
 - [config/process.toml](./config/process.toml)  
   Shared defaults for one-shot process TTL, grace-period shutdown, polling, and timeout exit behavior.

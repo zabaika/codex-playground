@@ -115,6 +115,33 @@ def test_monitored_check_reports_delivery_and_preserves_retry(monkeypatch, tmp_p
         assert state["pending_notifications"][0]["nie"] == "CONFIG_SUBJECT"
 
 
+@pytest.mark.parametrize("portal_fails", [False, True])
+def test_sleep_interruption_preserves_status_failures_and_history(monkeypatch, tmp_path, portal_fails):
+    store = StateStore(tmp_path)
+    initial = store.load()
+    initial.update(status="PRIMARY", consecutive_failures=2)
+    store.save(initial)
+    settings = SimpleNamespace(
+        project_root=tmp_path, telegram_connector_dir=tmp_path, portal_min_check_interval_seconds=60,
+        nie="SYNTHETIC_SUBJECT", masked_nie="****", debug_submitted_captcha_responses=False,
+    )
+    def check(**_):
+        if portal_fails:
+            raise InfoExtError("Synthetic parsing failure after resume")
+        return InfoExtResult("NEW_STATUS", None, None, None, None, 1)
+    monkeypatch.setattr(monitor, "TelegramConnectorNotifier", lambda _: SimpleNamespace(
+        send=lambda _: pytest.fail("Sleep must not trigger an alert or status notification"),
+    ))
+    monkeypatch.setattr(monitor, "InfoExtClient", lambda *_: SimpleNamespace(check=check))
+    monkeypatch.setattr(monitor, "create_captcha_solver", lambda _: None)
+    monkeypatch.setattr(monitor.common_process, "sleep_elapsed", lambda *_: 600)
+    assert monitor.run_check(SimpleNamespace(query_stdin=False), settings, logging.getLogger("test")) == 125
+    final = store.load()
+    for key in ("status", "consecutive_failures", "failure_alerted", "pending_notifications", "last_successful_check"):
+        assert final[key] == initial[key]
+    assert not store.history_file.exists()
+
+
 def test_supervised_worker_reads_overrides_from_stdin(monkeypatch, tmp_path):
     query = {"nie": "QUERY_SUBJECT"}
     observed = []

@@ -99,3 +99,15 @@ def test_scheduled_runner_owns_the_only_timeout_supervisor(tmp_path, monkeypatch
     ) == 0
     assert commands[0][0] == sys.executable
     assert commands[0][-2:] == ["--check-now", "--_ttl-worker"]
+
+
+def test_worker_sleep_exit_is_preserved_in_scheduled_audit(tmp_path, monkeypatch) -> None:
+    from common import ttl_runner
+    monkeypatch.setattr(ttl_runner, "run_with_ttl", lambda *_args, **_kwargs: PROCESS_CONFIG.sleep_interruption_exit_code)
+    audit = tmp_path / "attempt.json"
+    code = run_scheduled_check(TestSettings(), audit_file=audit,
+                               now=datetime(2026, 10, 2, 10, 0), process_config=PROCESS_CONFIG)
+    payload = json.loads(audit.read_text())
+    assert code == PROCESS_CONFIG.sleep_interruption_exit_code
+    assert payload["status"] == "interrupted"
+    assert payload["reason"] == "host_sleep_interrupted"

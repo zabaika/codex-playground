@@ -107,8 +107,8 @@ removal can cause a duplicate. Temporary check failures preserve the last status
 The configured failure threshold creates one alert; recovery includes the current
 status in a single message. Telegram failures do not increase check-failure counters.
 
-The shared TTL runner enforces `infoext.run_timeout_seconds` and terminates the
-whole process group on expiry. Locking prevents concurrent checks.
+Locking prevents concurrent checks. Process supervision follows the
+[shared runtime contract](../common/README.md#current-contents).
 
 ## LaunchAgent
 

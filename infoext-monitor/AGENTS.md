@@ -51,12 +51,11 @@ then the relevant tests in [tests](./tests).
   operation. Do not manually edit the installed plist.
 - Keep `ProgramArguments[0]` as the stable launcher wrapper. Keep shell
   runners thin and delegate application behavior to `main.py`.
-- Retain the outer hard TTL through `common/ttl_runner.py`, its process-group
-  cleanup and the `data/launchd/com.infoext.monitor.last_attempt.json` audit
-  contract.
-- Manual CLI modes use that same TTL through `main.py`; the hidden worker
-  argument is only for supervised children and must not be shown in operator
-  examples. The scheduled runner invokes the worker directly under its own TTL.
+- Keep one outer supervisor from `common/ttl_runner.py` for manual and scheduled
+  modes. The scheduled runner invokes the worker directly; keep the hidden worker
+  argument out of operator examples.
+- Preserve `data/launchd/com.infoext.monitor.last_attempt.json` as the scheduled
+  audit. Host-sleep interruptions must preserve status and failure counters.
 - Calendar entries must be generated only from `[launchd]`; do not duplicate
   schedule values in the plist template or launcher scripts.
 

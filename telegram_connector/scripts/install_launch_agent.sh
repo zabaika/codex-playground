@@ -163,6 +163,7 @@ exec "$PYTHON_BIN" "\$ROOT/common/ttl_runner.py" \
   --grace-seconds "\$TERMINATION_GRACE_SECONDS" \
   --audit-file "\$AUDIT_LOG" \
   --timeout-reason process_ttl_expired \
+  --sleep-policy pause \
   --use-caffeinate \
   -- "$PYTHON_BIN" "\$ROOT/telegram_digest.py" run
 EOF

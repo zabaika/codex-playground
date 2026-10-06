@@ -7,7 +7,6 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 import sys
-import time
 from typing import Sequence
 
 
@@ -48,7 +47,7 @@ def run_scheduled_check(
 ) -> int:
     """Run one launchd-triggered check, or record why the trigger was skipped."""
     started_at = utc_timestamp()
-    started_monotonic = time.monotonic()
+    started_monotonic = common_process.continuous_time()
     current = now or datetime.now().astimezone()
     calendar_times = scheduled_times(settings)
     base_payload: dict[str, object] = {
@@ -122,7 +121,7 @@ def run_scheduled_check(
                 "status": "failed",
                 "phase": "launcher",
                 "error_type": exc.__class__.__name__,
-                "elapsed_seconds": round(time.monotonic() - started_monotonic, 3),
+                "elapsed_seconds": round(common_process.continuous_time() - started_monotonic, 3),
             }
         )
         write_last_attempt(audit_file, base_payload)
@@ -138,11 +137,13 @@ def run_scheduled_check(
         {
             "updated_at": utc_timestamp(),
             "finished_at": payload.get("finished_at") or utc_timestamp(),
-            "elapsed_seconds": round(time.monotonic() - started_monotonic, 3),
+            "elapsed_seconds": round(common_process.continuous_time() - started_monotonic, 3),
             "exit_code": exit_code,
         }
     )
-    if exit_code == process_config.timeout_exit_code:
+    if exit_code == process_config.sleep_interruption_exit_code:
+        payload.update(status="interrupted", phase="checking", reason="host_sleep_interrupted")
+    elif exit_code == process_config.timeout_exit_code:
         payload.setdefault("status", "timed_out")
         payload.setdefault("phase", "checking")
     elif exit_code == 0:

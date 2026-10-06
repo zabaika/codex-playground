@@ -12,8 +12,15 @@ from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from captcha_solver import create_captcha_solver
 from config import ConfigurationError, PROJECT_ROOT, RUNTIME_ROOT, Settings, load_settings
+
+# Installed runtimes carry common/ locally; source runs use its sibling.
+SHARED_ROOT = RUNTIME_ROOT if (RUNTIME_ROOT / "common").is_dir() else RUNTIME_ROOT.parent
+if str(SHARED_ROOT) not in sys.path:
+    sys.path.insert(0, str(SHARED_ROOT))
+
+from common import process as common_process, ttl_runner
+from captcha_solver import create_captcha_solver
 from infoext import InfoExtClient, InfoExtError, InfoExtResult, normalize_status
 from notifier import Notifier, NotifierError, TelegramConnectorNotifier
 from state import StateError, StateStore
@@ -269,12 +276,25 @@ def run_check(args: argparse.Namespace, settings: Settings, logger: logging.Logg
         if settings.debug_submitted_captcha_responses and not args.query_stdin
         else None
     )
+    process_config = common_process.load_process_config()
+    started_continuous = common_process.continuous_time()
+    started_awake = common_process.awake_time()
+
+    def interrupted_by_sleep() -> bool:
+        if common_process.sleep_elapsed(started_continuous, started_awake) < process_config.sleep_interruption_threshold_seconds:
+            return False
+        logger.warning("InfoExt check interrupted by host sleep; status and failure counters preserved.")
+        print("InfoExt check interrupted: host sleep.", file=sys.stderr)
+        return True
+
     try:
         result = InfoExtClient(settings, create_captcha_solver(settings), logger.info).check(
             captcha_dir=captcha_dir,
             submission_artifact_dir=submission_artifact_dir,
         )
     except InfoExtError as exc:
+        if interrupted_by_sleep():
+            return process_config.sleep_interruption_exit_code
         if args.query_stdin:
             logger.error("One-time InfoExt query failed (%s): %s", exc.__class__.__name__, exc)
         else:
@@ -286,6 +306,8 @@ def run_check(args: argparse.Namespace, settings: Settings, logger: logging.Logg
             print(f"CAPTCHA samples: {captcha_dir.relative_to(settings.project_root)}", file=sys.stderr)
         return 1
 
+    if interrupted_by_sleep():
+        return process_config.sleep_interruption_exit_code
     checked_at = timestamp()
     previous = None if args.query_stdin else state.get("status")
     pending_before_check = len(state["pending_notifications"])
@@ -399,12 +421,6 @@ def validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) -> 
 
 def run_with_timeout(args: argparse.Namespace, settings: Settings, logger: logging.Logger) -> int:
     """Supervise manual modes through the same hard TTL used by launchd."""
-    # Installed runtimes carry common/ locally; source runs use its sibling.
-    for root in (RUNTIME_ROOT, RUNTIME_ROOT.parent):
-        if str(root) not in sys.path:
-            sys.path.insert(0, str(root))
-    from common import process as common_process, ttl_runner
-
     process_config = common_process.load_process_config()
     command = [sys.executable, str(RUNTIME_ROOT / "main.py"), "--_ttl-worker"]
     command.append("--test-telegram" if args.test_telegram else "--check-now")
