@@ -33,11 +33,15 @@ then the relevant tests in [tests](./tests).
   in this project; the shared helper owns only file publication.
 - A Telegram failure must not overwrite a known InfoExt status or turn a
   successful InfoExt check into an unknown status.
+- Keep status and failure tracking scoped to the request identity; preserve
+  isolation of one-time queries. See the regression tests for behavior details.
 
 ## Scheduled runtime
 
-- Treat `install.sh` as the canonical deploy/redeploy path. It renders the
-  plist from TOML and performs `bootout` then `bootstrap`.
+- Treat `scripts/install.sh` as the canonical deploy/redeploy path. It renders the
+  plist from TOML and performs `bootout` then `bootstrap` through
+  `scripts/reload_launch_agent.sh`, the shared registration path. The latter
+  applies config-only changes without syncing code or installing dependencies.
 - Scheduled code, venv, Vision helper and shared process runtime are installed
   in `~/Library/Application Support/infoext_monitor_service`, matching the
   connector's deployment shape. Keep launchers and WorkingDirectory there.
@@ -47,8 +51,7 @@ then the relevant tests in [tests](./tests).
 - Treat installed runtime files as derived artifacts; edit the source and
   redeploy after application or shared `common/` changes. Never patch the
   Application Support copy directly.
-- `restart.sh` delegates to that same installer, so it is also a redeploy
-  operation. Do not manually edit the installed plist.
+- Do not manually edit the installed plist.
 - Keep `ProgramArguments[0]` as the stable launcher wrapper. Keep shell
   runners thin and delegate application behavior to `main.py`.
 - Keep one outer supervisor from `common/ttl_runner.py` for manual and scheduled

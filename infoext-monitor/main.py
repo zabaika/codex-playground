@@ -141,13 +141,20 @@ def record_failure(
     error: Exception,
     logger: logging.Logger,
     failure_alert_threshold: int,
+    *,
+    identity: dict[str, str],
 ) -> None:
+    failure_identity = state.get("failure_request_identity") or state.get("request_identity")
+    if failure_identity != identity:
+        state.update(consecutive_failures=0, failure_alerted=False)
+    state["failure_request_identity"] = identity
     failures = int(state.get("consecutive_failures", 0)) + 1
     state["consecutive_failures"] = failures
     if failures >= failure_alert_threshold and not state.get("failure_alerted", False):
         state["failure_alerted"] = True
         state["pending_notifications"].append(
-            {"kind": "health", "event": "failure", "count": str(failures), "detected_at": timestamp()}
+            {"kind": "health", "event": "failure", "nie": identity["nie"],
+             "count": str(failures), "detected_at": timestamp()}
         )
     store.save(state)
     logger.error("InfoExt check failed (%s): %s", error.__class__.__name__, error)
@@ -160,10 +167,20 @@ def handle_check_failure(
     error: Exception,
     logger: logging.Logger,
     failure_alert_threshold: int,
+    *,
+    identity: dict[str, str],
 ) -> None:
     """Persist the failed check before immediately attempting its health alert."""
-    record_failure(state, store, error, logger, failure_alert_threshold)
+    record_failure(state, store, error, logger, failure_alert_threshold, identity=identity)
     deliver_pending(state, store, notifier, logger)
+
+
+def request_identity(nie: str, fecha_presentacion: str) -> dict[str, str]:
+    return {"nie": nie.strip().upper(), "fecha_presentacion": fecha_presentacion}
+
+
+def previous_status_for_request(state: dict[str, object], identity: dict[str, str]) -> object:
+    return state.get("status") if state.get("request_identity") == identity else None
 
 
 def record_success(
@@ -174,13 +191,18 @@ def record_success(
     *,
     notify_on_unchanged_status: bool,
     nie: str,
+    fecha_presentacion: str,
 ) -> bool:
-    previous = state.get("status")
+    identity = request_identity(nie, fecha_presentacion)
+    previous = previous_status_for_request(state, identity)
     changed = bool(previous and normalize_status(str(previous)) != normalize_status(result.status))
-    had_failure_alert = bool(state.get("failure_alerted", False))
+    failure_identity = state.get("failure_request_identity") or state.get("request_identity")
+    had_failure_alert = failure_identity == identity and bool(state.get("failure_alerted", False))
 
     state.update(
         {
+            "request_identity": identity,
+            "failure_request_identity": identity,
             "last_successful_check": checked_at,
             "status": result.status,
             "expediente": result.expediente,
@@ -227,6 +249,7 @@ def record_success(
     store.append_history(
         {
             "timestamp": checked_at,
+            "request_identity": identity,
             "status": result.status,
             "expediente": result.expediente,
             "fecha_resolucion": result.fecha_resolucion,
@@ -300,6 +323,7 @@ def run_check(args: argparse.Namespace, settings: Settings, logger: logging.Logg
         else:
             handle_check_failure(
                 state, store, notifier, exc, logger, settings.failure_alert_threshold,
+                identity=request_identity(settings.nie, settings.fecha_presentacion),
             )
         print(f"InfoExt check failed: {exc}", file=sys.stderr)
         if captcha_dir.exists():
@@ -309,7 +333,9 @@ def run_check(args: argparse.Namespace, settings: Settings, logger: logging.Logg
     if interrupted_by_sleep():
         return process_config.sleep_interruption_exit_code
     checked_at = timestamp()
-    previous = None if args.query_stdin else state.get("status")
+    previous = None if args.query_stdin else previous_status_for_request(
+        state, request_identity(settings.nie, settings.fecha_presentacion),
+    )
     pending_before_check = len(state["pending_notifications"])
     if args.query_stdin:
         state["pending_notifications"].append({
@@ -324,6 +350,7 @@ def run_check(args: argparse.Namespace, settings: Settings, logger: logging.Logg
             state, store, result, checked_at,
             notify_on_unchanged_status=settings.notify_on_unchanged_status or args.notify,
             nie=settings.nie,
+            fecha_presentacion=settings.fecha_presentacion,
         )
     logger.info("Status: %s", result.status)
     logger.info("Status %s", "changed" if changed else "unchanged")

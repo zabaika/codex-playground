@@ -191,7 +191,7 @@ class AppleVisionCaptchaSolver(CaptchaSolver):
 
     def _run(self, image_bytes: bytes, candidate_limit: int) -> dict[str, object]:
         if not self.executable.is_file():
-            raise CaptchaSolverError("Apple Vision OCR helper is missing; run install.sh.")
+            raise CaptchaSolverError("Apple Vision OCR helper is missing; run bash scripts/install.sh.")
         try:
             completed = subprocess.run(
                 [

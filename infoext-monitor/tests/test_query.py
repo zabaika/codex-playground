@@ -48,7 +48,9 @@ def test_query_validation(runtime_config, tmp_path, overrides):
 def test_query_preserves_primary_state_and_history(monkeypatch, tmp_path, capsys, outcome):
     store = StateStore(tmp_path)
     initial = store.load()
-    initial.update(status="PRIMARY", expediente="PRIMARY_CASE", consecutive_failures=2, failure_alerted=True)
+    initial.update(status="PRIMARY", expediente="PRIMARY_CASE", consecutive_failures=2, failure_alerted=True,
+                   request_identity=monitor.request_identity("PRIMARY_SUBJECT", "01/02/2026"),
+                   failure_request_identity=monitor.request_identity("PRIMARY_SUBJECT", "01/02/2026"))
     store.save(initial)
     settings = SimpleNamespace(
         project_root=tmp_path, telegram_connector_dir=tmp_path, portal_min_check_interval_seconds=60,
@@ -74,7 +76,8 @@ def test_query_preserves_primary_state_and_history(monkeypatch, tmp_path, capsys
     code = monitor.run_check(SimpleNamespace(query_stdin=True), settings, logging.getLogger("query-test"))
     final = store.load()
     assert code == (1 if outcome == "failure" else 0)
-    for key in ("status", "expediente", "last_successful_check", "consecutive_failures", "failure_alerted"):
+    for key in ("request_identity", "failure_request_identity", "status", "expediente",
+                "last_successful_check", "consecutive_failures", "failure_alerted"):
         assert final[key] == initial[key]
     assert not store.history_file.exists()
     assert options[0]["submission_artifact_dir"] is None
@@ -94,7 +97,7 @@ def test_query_preserves_primary_state_and_history(monkeypatch, tmp_path, capsys
 def test_monitored_check_reports_delivery_and_preserves_retry(monkeypatch, tmp_path, capsys, delivery_fails):
     settings = SimpleNamespace(
         project_root=tmp_path, telegram_connector_dir=tmp_path, portal_min_check_interval_seconds=60,
-        nie="CONFIG_SUBJECT", masked_nie="****", debug_submitted_captcha_responses=False, notify_on_unchanged_status=False,
+        nie="CONFIG_SUBJECT", fecha_presentacion="01/02/2026", masked_nie="****", debug_submitted_captcha_responses=False, notify_on_unchanged_status=False,
     )
     def send(_):
         assert "NIE: CONFIG_SUBJECT" in _
@@ -138,6 +141,29 @@ def test_sleep_interruption_preserves_status_failures_and_history(monkeypatch, t
     assert monitor.run_check(SimpleNamespace(query_stdin=False), settings, logging.getLogger("test")) == 125
     final = store.load()
     for key in ("status", "consecutive_failures", "failure_alerted", "pending_notifications", "last_successful_check"):
+        assert final[key] == initial[key]
+    assert not store.history_file.exists()
+
+
+def test_failed_check_after_config_change_keeps_previous_identity(monkeypatch, tmp_path):
+    store = StateStore(tmp_path)
+    initial = store.load()
+    initial.update(status="OLD_STATUS", expediente="OLD_CASE",
+                   request_identity=monitor.request_identity("OLD_SUBJECT", "01/02/2026"))
+    store.save(initial)
+    settings = SimpleNamespace(
+        project_root=tmp_path, telegram_connector_dir=tmp_path, portal_min_check_interval_seconds=60,
+        nie="NEW_SUBJECT", fecha_presentacion="02/02/2026", masked_nie="****",
+        debug_submitted_captcha_responses=False, failure_alert_threshold=3,
+    )
+    def check(**_):
+        raise InfoExtError("Synthetic portal failure")
+    monkeypatch.setattr(monitor, "TelegramConnectorNotifier", lambda _: SimpleNamespace(send=lambda _: None))
+    monkeypatch.setattr(monitor, "create_captcha_solver", lambda _: None)
+    monkeypatch.setattr(monitor, "InfoExtClient", lambda *_: SimpleNamespace(check=check))
+    assert monitor.run_check(SimpleNamespace(query_stdin=False), settings, logging.getLogger("test")) == 1
+    final = store.load()
+    for key in ("request_identity", "status", "expediente", "last_successful_check"):
         assert final[key] == initial[key]
     assert not store.history_file.exists()
 

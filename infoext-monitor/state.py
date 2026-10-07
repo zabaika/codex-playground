@@ -22,6 +22,8 @@ class StateError(RuntimeError):
 
 
 DEFAULT_STATE: dict[str, Any] = {
+    "request_identity": None,
+    "failure_request_identity": None,
     "last_portal_check_started_at": None,
     "last_successful_check": None,
     "status": None,

@@ -17,7 +17,7 @@ cd /path/to/infoext-monitor
 cp config/runtime.example.toml config/runtime.local.toml
 chmod 600 config/runtime.local.toml
 # Fill the local config before installing.
-bash install.sh
+bash scripts/install.sh
 ```
 
 Set `infoext.nie` and `infoext.fecha_presentacion` (`DD/MM/YYYY`); add
@@ -112,13 +112,23 @@ Locking prevents concurrent checks. Process supervision follows the
 
 ## LaunchAgent
 
+After changing local configuration, reload the calendar without installing
+dependencies or copying runtime code:
+
 ```bash
-bash restart.sh
+bash scripts/reload_launch_agent.sh
+```
+
+Other settings are read on each new check. Reload requires an installed runtime
+and does not trigger a check. After code or dependency changes, use `scripts/install.sh`.
+
+```bash
+bash scripts/install.sh
 launchctl print "gui/$(id -u)/com.infoext.monitor"
 launchctl kickstart "gui/$(id -u)/com.infoext.monitor"
 ```
 
-`restart.sh` redeploys through `install.sh`; it does not trigger a check.
+`scripts/install.sh` deploys the runtime; it does not trigger a check.
 The `[launchd]` config defines weekdays and slots from `first_run_time` through
 `last_run_time` at `interval_hours` increments. Login loads the calendar without
 an immediate check. Sleep does not count as failure and the monitor does not wake
@@ -135,7 +145,7 @@ Confirm a fresh successful-check timestamp, `CAPTCHA accepted`, a status and
 Telegram delivery in the logs. Exit zero can also mean a portal-spacing skip;
 an idle agent between checks is normal. Delivery failure leaves a pending event.
 
-Stop or remove scheduling with `bash uninstall.sh`; resume with `bash install.sh`.
+Stop or remove scheduling with `bash scripts/uninstall.sh`; resume with `bash scripts/install.sh`.
 Uninstall preserves the runtime, config, state, history and logs.
 
 ## Observed InfoExt form
@@ -176,6 +186,6 @@ infoext-monitor/.venv/bin/python -m pytest infoext-monitor/tests -q
   undelivered notifications remain pending.
 - `Operation not permitted` or exit `126`: reinstall; launcher and working directory
   must point to the Application Support runtime. Old stderr entries may remain.
-- Missing InfoExt LaunchAgent in Telegram: run `bash install.sh`.
+- Missing InfoExt LaunchAgent in Telegram: run `bash scripts/install.sh`.
 - Terminal works but launchd fails: reinstall and inspect its audit and stderr;
   launchd does not inherit the interactive shell environment.

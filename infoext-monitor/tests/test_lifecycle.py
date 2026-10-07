@@ -35,7 +35,7 @@ def test_installer_renders_config_calendar_and_reloads_agent(tmp_path) -> None:
         'last_run_time = "20:00"', 'last_run_time = "19:30"'
     ).replace('weekdays = [1, 2, 3, 4, 5]', 'weekdays = [2, 4]')
     (root / "config/runtime.local.toml").write_text(local)
-    script = (PROJECT_ROOT / "install.sh").read_text()
+    script = (PROJECT_ROOT / "scripts/reload_launch_agent.sh").read_text()
     # Execute the production renderer with temporary output and the real loader.
     renderer = script.split("'\nplutil -lint", 1)[0].rsplit("-c '\n", 1)[1]
     target = tmp_path / "monitor.plist"
@@ -58,7 +58,7 @@ def test_installer_renders_config_calendar_and_reloads_agent(tmp_path) -> None:
     assert "__SERVICE_ROOT__" not in target.read_text()
 
     registration = script.split('USER_ID="$(id -u)"', 1)[1].split(
-        '\n"$PROJECT_ROOT/.venv/bin/python"', 1
+        '\necho ', 1
     )[0]
     env.update(USER_ID="test-user", LABEL="com.infoext.monitor")
     subprocess.run(["/bin/bash", "-c", "set -euo pipefail\n" + registration],
@@ -67,6 +67,51 @@ def test_installer_renders_config_calendar_and_reloads_agent(tmp_path) -> None:
         f"bootout gui/test-user {target}", f"bootstrap gui/test-user {target}",
         "print gui/test-user/com.infoext.monitor",
     ]
+
+
+def test_reload_uses_installed_python_without_installing_dependencies(tmp_path) -> None:
+    root = tmp_path / "project"
+    shutil.copytree(PROJECT_ROOT / "scripts", root / "scripts")
+    shutil.copytree(PROJECT_ROOT / "launchd", root / "launchd")
+    shutil.copy2(PROJECT_ROOT / "config.py", root / "config.py")
+    (root / "config").mkdir()
+    local = (PROJECT_ROOT / "config/runtime.example.toml").read_text().replace(
+        'nie = ""', 'nie = "SYNTHETIC-NIE"'
+    ).replace('fecha_presentacion = ""', 'fecha_presentacion = "01/02/2026"').replace(
+        'last_run_time = "20:00"', 'last_run_time = "10:00"'
+    )
+    config = root / "config/runtime.local.toml"
+    config.write_text(local)
+    home = tmp_path / "home"
+    service = home / "Library/Application Support/infoext_monitor_service"
+    (service / ".venv/bin").mkdir(parents=True)
+    (service / ".venv/bin/python").symlink_to(sys.executable)
+    (service / "launchd").mkdir()
+    launcher = service / "launchd/infoext-monitor-launcher"
+    launcher.write_text("#!/bin/sh\nexit 0\n")
+    launcher.chmod(0o700)
+    env, calls = isolated_launchctl(tmp_path)
+    env["HOME"] = str(home)
+    script = root / "scripts/reload_launch_agent.sh"
+    completed = subprocess.run(["/bin/bash", str(script)], cwd=tmp_path,
+                               env=env, check=True, capture_output=True, text=True)
+    assert "No check was triggered" in completed.stdout
+    target = home / "Library/LaunchAgents/com.infoext.monitor.plist"
+    payload = plistlib.loads(target.read_bytes())
+    assert all(slot["Hour"] == 10 and slot["Minute"] == 0
+               for slot in payload["StartCalendarInterval"])
+    assert len(payload["StartCalendarInterval"]) == 5
+    assert len(calls.read_text().splitlines()) == 3
+    assert not (root / ".venv").exists()
+    assert config.stat().st_mode & 0o777 == 0o600
+
+    calls.unlink()
+    config.write_text(local.replace('fecha_presentacion = "01/02/2026"',
+                                    'fecha_presentacion = "invalid"'))
+    failed = subprocess.run(["/bin/bash", str(script)], env=env,
+                            capture_output=True, text=True)
+    assert failed.returncode != 0
+    assert not calls.exists()
 
 
 def test_runtime_sync_keeps_project_config_and_installs_shared_assets(tmp_path) -> None:
@@ -85,7 +130,7 @@ def test_runtime_sync_keeps_project_config_and_installs_shared_assets(tmp_path) 
     shutil.copy2(PROJECT_ROOT / "config/runtime.example.toml", root / "config/runtime.local.toml")
     (service / "common").mkdir(parents=True)
     (service / "common/obsolete.py").touch()
-    script = (PROJECT_ROOT / "install.sh").read_text()
+    script = (PROJECT_ROOT / "scripts/install.sh").read_text()
     sync = script.split("# Keep executable code outside Documents", 1)[1].split(
         '\n"$PROJECT_ROOT/.venv/bin/python" -m venv', 1
     )[0]
@@ -108,25 +153,13 @@ def test_runtime_sync_keeps_project_config_and_installs_shared_assets(tmp_path) 
                    check=True, capture_output=True)
 
 
-def test_restart_delegates_to_canonical_installer(tmp_path) -> None:
-    restart = tmp_path / "restart.sh"
-    restart.write_text((PROJECT_ROOT / "restart.sh").read_text())
-    (tmp_path / "install.sh").write_text(
-        '#!/bin/bash\nset -eu\nprintf "redeployed" > "$REDEPLOY_MARKER"\n'
-    )
-    marker = tmp_path / "redeploy.txt"
-    subprocess.run(["/bin/bash", str(restart)], check=True, capture_output=True,
-                   env={**os.environ, "REDEPLOY_MARKER": str(marker)})
-    assert marker.read_text() == "redeployed"
-
-
 def test_uninstall_removes_only_agent_and_preserves_runtime_data(tmp_path) -> None:
     env, calls = isolated_launchctl(tmp_path)
     target = tmp_path / "monitor.plist"
     target.write_text("test plist")
     for name in ("state.json", "history.jsonl", "runtime.local.toml"):
         (tmp_path / name).write_text("preserved")
-    body = (PROJECT_ROOT / "uninstall.sh").read_text().split('if [[ -f', 1)[1]
+    body = (PROJECT_ROOT / "scripts/uninstall.sh").read_text().split('if [[ -f', 1)[1]
     env.update(PLIST_TARGET=str(target), USER_ID="test-user")
     subprocess.run(["/bin/bash", "-c", "set -euo pipefail\nif [[ -f" + body],
                    env=env, check=True, capture_output=True)
