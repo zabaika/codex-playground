@@ -10,6 +10,15 @@ user_session_name = "telegram_history_user"
 bot_session_name = "telegram_history_bot"
 api_id = "keychain://telegram-connector/api_id"
 phone = "keychain://telegram-connector/phone"
+# Maximum awake time for the entire client.start(), including Telegram initialization requests.
+# Minimum 1 second; host sleep does not consume the attempt budget.
+connection_timeout_seconds = 60
+# Total fresh-client attempts for transient connection errors; minimum 1.
+connection_attempts = 3
+# Delay between attempts in seconds; minimum 0.
+connection_retry_backoff_seconds = 2
+# Bounded cancellation/disconnect cleanup in seconds; minimum 1. Failed cleanup stops retries.
+connection_cleanup_timeout_seconds = 10
 
 [auth]
 default_mode = "user"

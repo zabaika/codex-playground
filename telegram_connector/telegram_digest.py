@@ -1893,6 +1893,21 @@ def cmd_run(args: argparse.Namespace) -> int:
                     timeout=sync_timeout_seconds,
                 )
             )
+        except history_client.TelegramConnectionError as exc:
+            summary = exc.operator_summary() + "; обработка каналов не началась"
+            errors.append(summary)
+            try:
+                token = bridge.require_token()
+                chat_id = history_client.get_config_value(config, "telegram", "default_chat_id")
+                if chat_id:
+                    send_digest_message(
+                        token, chat_id,
+                        build_digest_error_message(since=since, until=until, errors=errors, separator_text=digest_config.separator_text),
+                    )
+            except (Exception, SystemExit) as notification_exc:
+                # Do not replace the connection failure or expose credentials/provider payloads.
+                errors.append(f"Digest error notification failed: {type(notification_exc).__name__}")
+            raise SystemExit(summary) from exc
         except TimeoutError as exc:
             raise SystemExit(
                 f"Digest sync timed out after {digest_config.sync_total_timeout_seconds} seconds."

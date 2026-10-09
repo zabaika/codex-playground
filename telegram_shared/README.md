@@ -42,6 +42,8 @@ python3 telegram_shared/scripts/purge_openai_prompt_text.py
 
 ## Retry Boundary
 
+`async_retry` provides bounded retries and sleep-excluding timeouts. The caller owns budgets, error classification, cleanup, and logging. Failed cleanup must stop retries; the outer process TTL remains required.
+
 `telegram_shared.bot_api.call_bot_api_with_retry` accepts explicit `attempts` and `backoff_seconds` from the caller. It does not define operator-facing defaults.
 
 Current retryable Telegram Bot API failures are:

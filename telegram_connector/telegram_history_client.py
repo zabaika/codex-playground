@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 import argparse
 import csv
+import errno
 import json
 import os
 import re
 import shutil
+import socket
 import sqlite3
 import subprocess
 import sys
@@ -21,7 +23,9 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from common import sqlite as common_sqlite
+from common.process import awake_time
 from telegram_shared import secrets as shared_secrets
+from telegram_shared.async_retry import AsyncCleanupError, AsyncRetryError, await_with_awake_timeout, retry_async
 from telegram_shared.config import get_config_value as shared_get_config_value
 from telegram_shared.config import load_runtime_config as shared_load_runtime_config
 from telegram_shared.errors import SecretResolutionError
@@ -44,6 +48,16 @@ _SECRET_CACHE = shared_secrets._SECRET_CACHE
 DEFAULT_EXPORT_CSV_LIMIT = 100
 DEFAULT_OCR_PENDING_LIMIT = 100
 DEFAULT_TESSERACT_TIMEOUT_SECONDS = 60
+DEFAULT_CONNECTION_TIMEOUT_SECONDS = 60
+DEFAULT_CONNECTION_ATTEMPTS = 3
+DEFAULT_CONNECTION_RETRY_BACKOFF_SECONDS = 2
+DEFAULT_CONNECTION_CLEANUP_TIMEOUT_SECONDS = 10
+RETRYABLE_CONNECTION_ERRNOS = frozenset(
+    getattr(errno, name) for name in (
+        "ETIMEDOUT", "ECONNRESET", "ECONNABORTED", "ECONNREFUSED", "EPIPE",
+        "ENETDOWN", "ENETUNREACH", "EHOSTUNREACH", "EHOSTDOWN",
+    ) if hasattr(errno, name)
+) | frozenset({socket.EAI_AGAIN, socket.EAI_NONAME})
 SQLITE_CONFIG = common_sqlite.load_sqlite_config()
 
 
@@ -218,6 +232,10 @@ class RuntimeConfig:
     tesseract_timeout_seconds: int = DEFAULT_TESSERACT_TIMEOUT_SECONDS
     sync_total_limit: int = 0
     sync_mode_limits: dict[str, int] = field(default_factory=dict)
+    connection_timeout_seconds: int = DEFAULT_CONNECTION_TIMEOUT_SECONDS
+    connection_attempts: int = DEFAULT_CONNECTION_ATTEMPTS
+    connection_retry_backoff_seconds: int = DEFAULT_CONNECTION_RETRY_BACKOFF_SECONDS
+    connection_cleanup_timeout_seconds: int = DEFAULT_CONNECTION_CLEANUP_TIMEOUT_SECONDS
 
 
 @dataclass(slots=True)
@@ -380,6 +398,18 @@ def resolve_runtime() -> RuntimeConfig:
         ocr_pending_default_limit=ocr_pending_default_limit,
         sync_total_limit=sync_total_limit,
         sync_mode_limits=sync_mode_limits,
+        connection_timeout_seconds=parse_int_config_value(
+            config, "telethon", "connection_timeout_seconds", default=DEFAULT_CONNECTION_TIMEOUT_SECONDS, min_value=1,
+        ),
+        connection_attempts=parse_int_config_value(
+            config, "telethon", "connection_attempts", default=DEFAULT_CONNECTION_ATTEMPTS, min_value=1,
+        ),
+        connection_retry_backoff_seconds=parse_int_config_value(
+            config, "telethon", "connection_retry_backoff_seconds", default=DEFAULT_CONNECTION_RETRY_BACKOFF_SECONDS, min_value=0,
+        ),
+        connection_cleanup_timeout_seconds=parse_int_config_value(
+            config, "telethon", "connection_cleanup_timeout_seconds", default=DEFAULT_CONNECTION_CLEANUP_TIMEOUT_SECONDS, min_value=1,
+        ),
     )
 
 
@@ -607,6 +637,30 @@ def build_entity_lookup_reference(channel: str) -> Any:
     return normalized
 
 
+class TelegramConnectionError(AsyncRetryError):
+    def operator_summary(self) -> str:
+        cause = self.cause
+        if isinstance(cause, TimeoutError):
+            reason = "timeout"
+        elif isinstance(cause, AsyncCleanupError):
+            reason = "cleanup_error"
+        elif isinstance(cause, OSError) and cause.errno is not None:
+            reason = f"{type(cause).__name__}: {errno.errorcode.get(cause.errno, cause.errno)}"
+        else:
+            reason = type(cause).__name__
+        return f"Telegram connection {reason} (attempts: {self.attempts}/{self.max_attempts})"
+
+
+def is_retryable_connection_error(exc: Exception) -> bool:
+    if isinstance(exc, TimeoutError):
+        return True
+    if isinstance(exc, OSError):
+        return exc.errno in RETRYABLE_CONNECTION_ERRNOS or (
+            isinstance(exc, ConnectionError) and exc.errno is None
+        )
+    return False
+
+
 async def open_telethon_client(runtime: RuntimeConfig, auth_mode: str) -> Any:
     if not runtime.api_id or not runtime.api_hash:
         raise SystemExit(
@@ -614,16 +668,53 @@ async def open_telethon_client(runtime: RuntimeConfig, auth_mode: str) -> Any:
         )
 
     TelegramClient = require_telethon()
-    client = TelegramClient(str(make_session_path(runtime, auth_mode)), int(runtime.api_id), runtime.api_hash)
     if auth_mode == "bot":
         if not runtime.bot_token:
             raise SystemExit("Missing bot token for bot auth mode. Fill [secrets].bot_token in runtime.local.toml.")
-        await client.start(bot_token=runtime.bot_token)
+        start_args = {"bot_token": runtime.bot_token}
     else:
         if not runtime.phone:
             raise SystemExit("Missing phone for user auth mode. Fill [telethon].phone in runtime.local.toml.")
-        await client.start(phone=runtime.phone, password=(runtime.user_password or None))
-    return client
+        start_args = {"phone": runtime.phone, "password": runtime.user_password or None}
+
+    attempt_started = 0.0
+
+    async def connect_once() -> Any:
+        nonlocal attempt_started
+        attempt_started = awake_time()
+        client = TelegramClient(str(make_session_path(runtime, auth_mode)), int(runtime.api_id), runtime.api_hash)
+        try:
+            await await_with_awake_timeout(
+                client.start(**start_args), runtime.connection_timeout_seconds,
+                cleanup_timeout_seconds=runtime.connection_cleanup_timeout_seconds,
+            )
+            return client
+        except BaseException:
+            try:
+                await await_with_awake_timeout(
+                    client.disconnect(), runtime.connection_cleanup_timeout_seconds,
+                    cleanup_timeout_seconds=runtime.connection_cleanup_timeout_seconds,
+                )
+            except Exception as cleanup_exc:
+                raise AsyncCleanupError("Telegram disconnect did not complete") from cleanup_exc
+            raise
+
+    def log_failure(exc: Exception, attempt: int) -> None:
+        summary = TelegramConnectionError(exc, attempt, runtime.connection_attempts).operator_summary()
+        print(f"{summary}; awake_elapsed={awake_time() - attempt_started:.1f}s", file=sys.stderr, flush=True)
+
+    try:
+        return await retry_async(
+            connect_once, max_attempts=runtime.connection_attempts,
+            backoff_seconds=runtime.connection_retry_backoff_seconds,
+            is_retryable=is_retryable_connection_error, on_failure=log_failure,
+            on_recovery=lambda attempt: print(
+                f"Telegram connection recovered (attempts: {attempt}/{runtime.connection_attempts})",
+                file=sys.stderr, flush=True,
+            ),
+        )
+    except AsyncRetryError as exc:
+        raise TelegramConnectionError(exc.cause, exc.attempts, exc.max_attempts) from None
 
 
 def serialize_datetime(value: Any) -> str | None:

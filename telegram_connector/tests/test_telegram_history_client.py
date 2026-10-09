@@ -264,6 +264,10 @@ user_password = "pw_x"
         self.assertEqual(runtime.public_auth_mode, "bot")
         self.assertEqual(runtime.private_auth_mode, "user")
         self.assertEqual(runtime.default_channels, ["@vcnews", "@another_channel"])
+        self.assertEqual(runtime.connection_timeout_seconds, 60)
+        self.assertEqual(runtime.connection_attempts, 3)
+        self.assertEqual(runtime.connection_retry_backoff_seconds, 2)
+        self.assertEqual(runtime.connection_cleanup_timeout_seconds, 10)
 
     def test_allocate_sync_limits_applies_shared_total_limit_across_channels(self) -> None:
         self.assertEqual(

@@ -8,6 +8,7 @@ import sys
 import tempfile
 import tomllib
 import unittest
+from unittest.mock import patch
 from datetime import datetime, timezone
 from email.message import Message
 from pathlib import Path
@@ -2525,6 +2526,53 @@ batch_digest_template = "Batch={batch_index}; {cache_breakpoint_marker}"
                 )
 
         self.assertIn("Missing processing.model", str(context.exception))
+
+    def test_connection_failure_notifies_and_preserves_safe_audit(self) -> None:
+        for notification_fails in (False, True):
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                root = Path(tmp_dir)
+                prompt_file = self.write_prompt_bundle(root)
+                audit_file = root / "digest.last_attempt.json"
+                config = {
+                    "telegram": {"default_chat_id": "123"},
+                    "processing": {"model": "test-model"},
+                    "digest_prompts": {"file": str(prompt_file)},
+                    "digest_ai": {
+                        "reasoning_effort": "none", "reasoning_summary": "auto",
+                        "messages_per_ai_pass": "111", "message_text_max_chars": "450",
+                        "message_ocr_max_chars": "300", "message_block_max_chars": "100000",
+                    },
+                    "digest_limits": {"day": {"sync_limit": "6100"}},
+                }
+                notifications = []
+
+                async def fail_sync(*args, **kwargs):
+                    raise telegram_digest.history_client.TelegramConnectionError(TimeoutError("secret"), 3, 3)
+
+                def notify(token, chat_id, message):
+                    notifications.append(message)
+                    if notification_fails:
+                        raise RuntimeError("secret notification payload")
+
+                with patch.multiple(telegram_digest, PROJECT_ROOT=root, DIGEST_LAST_ATTEMPT_LOG=audit_file,
+                                    run_sync=fail_sync, send_digest_message=notify), \
+                     patch.object(telegram_digest.history_client, "resolve_runtime", return_value=type("Runtime", (), {"default_auth_mode": "user"})()), \
+                     patch.object(telegram_digest.history_client, "load_runtime_config", return_value=config), \
+                     patch.object(telegram_digest.history_client, "resolve_channels_argument", return_value=["@a"]), \
+                     patch.object(telegram_digest.bridge, "require_token", return_value="secret-token"):
+                    args = type("Args", (), {"channel": None, "since": "2026-10-08", "until": "2026-10-08", "auth_mode": None})()
+                    with self.assertRaises(SystemExit) as caught:
+                        telegram_digest.cmd_run(args)
+                payload = json.loads(audit_file.read_text())
+                self.assertEqual(payload["status"], "failed")
+                self.assertEqual(payload["phase"], "syncing")
+                self.assertIn("Telegram connection timeout (attempts: 3/3)", payload["error"])
+                self.assertEqual(len(notifications), 1)
+                self.assertIn("обработка каналов не началась", notifications[0])
+                self.assertIn("2026-10-08", notifications[0])
+                self.assertNotIn("secret", str(payload) + notifications[0] + str(caught.exception))
+                if notification_fails:
+                    self.assertIn("Digest error notification failed: RuntimeError", payload["errors"])
 
     def test_cmd_run_fails_when_sync_exceeds_total_timeout(self) -> None:
         temp_dir = tempfile.TemporaryDirectory()

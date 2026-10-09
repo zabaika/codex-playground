@@ -142,6 +142,7 @@ Digest runs are per channel: prep-sync, optional OCR, AI analysis, and Telegram 
 
 - output is delivered to `telegram.default_chat_id`
 - The scheduled digest uses the shared runner's `--sleep-policy pause`: it resumes after host sleep, and `digest.run_total_timeout_seconds` limits elapsed awake time rather than including sleep. This is an intentional exception to the default sleep-inclusive TTL; waits and retries while awake still consume the budget.
+- Telethon connection budgets live in `[telethon]` (see the example config). Sleep is excluded; transient failures retry with a fresh client after cleanup. Permanent errors or failed cleanup stop retries. Logs contain only failures and recovery; final failures reach the audit and Telegram.
 - channels below `digest.min_messages_for_ai` send a short loaded-without-analysis note
 - channels that fit `digest_ai.*` budgets use one direct OpenAI request; larger windows fall back to chronological batches and a final summary
 - hitting an effective digest `sync_limit` is called out in the delivered channel message
