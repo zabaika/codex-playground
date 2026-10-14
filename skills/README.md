@@ -32,6 +32,13 @@ Root skill docs in this folder should act as a catalog and navigation layer only
 - Local docs: [README.md](./convert-external-skills-to-codex/README.md)
 - Install: [install-local.sh](./convert-external-skills-to-codex/install-local.sh)
 
+### agents-best-practices
+
+- Designs, audits, and troubleshoots agent harnesses using a reviewed local conversion with gated upstream updates.
+- Entry: [SKILL.md](./agents-best-practices/SKILL.md)
+- Local docs: [README.md](./agents-best-practices/README.md)
+- Install: [install-local.sh](./agents-best-practices/install-local.sh)
+
 ### llm-council
 
 - Runs a structured multi-advisor decision review and produces one canonical verdict payload for downstream note writing.

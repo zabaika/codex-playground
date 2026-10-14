@@ -1,0 +1,4 @@
+interface:
+  display_name: "Agents Best Practices"
+  short_description: "Проектирование и проверка надёжности AI-агентов"
+  default_prompt: "Используй $agents-best-practices для аудита архитектуры агента и предложи минимальные проверяемые изменения."
