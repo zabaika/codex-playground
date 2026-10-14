@@ -2574,6 +2574,55 @@ batch_digest_template = "Batch={batch_index}; {cache_breakpoint_marker}"
                 if notification_fails:
                     self.assertIn("Digest error notification failed: RuntimeError", payload["errors"])
 
+    def test_empty_digest_distinguishes_complete_and_limited_history(self) -> None:
+        for incomplete in (False, True):
+            with self.subTest(incomplete=incomplete), tempfile.TemporaryDirectory() as tmp_dir:
+                root = Path(tmp_dir)
+                config = {
+                    "telegram": {"default_chat_id": "123"},
+                    "processing": {"model": "test-model"},
+                    "digest_prompts": {"file": str(self.write_prompt_bundle(root))},
+                    "digest_ai": {
+                        "reasoning_effort": "none", "reasoning_summary": "auto",
+                        "messages_per_ai_pass": "100", "message_text_max_chars": "450",
+                        "message_ocr_max_chars": "300", "message_block_max_chars": "100000",
+                    },
+                    "digest_limits": {"day": {"sync_limit": "100"}},
+                }
+                notifications = []
+
+                async def sync(*args, **kwargs):
+                    return [{"channel": "@fixture", "sync_limit_reached": incomplete}]
+
+                def connection(runtime):
+                    return sqlite3.connect(":memory:")
+
+                with patch.multiple(
+                    telegram_digest, DIGEST_LAST_ATTEMPT_LOG=root / "audit.json", run_sync=sync,
+                    send_digest_message=lambda token, chat, text: notifications.append(text),
+                    iter_channel_messages=lambda *args, **kwargs: iter([]),
+                    count_channel_messages=lambda *args, **kwargs: 0,
+                    resolve_display_channel_name=lambda *args: "Fixture",
+                ), patch.object(telegram_digest.history_client, "resolve_runtime",
+                                return_value=type("Runtime", (), {"default_auth_mode": "user"})()), \
+                     patch.object(telegram_digest.history_client, "load_runtime_config", return_value=config), \
+                     patch.object(telegram_digest.history_client, "resolve_channels_argument", return_value=["@fixture"]), \
+                     patch.object(telegram_digest.history_client, "connect_db", side_effect=connection), \
+                     patch.object(telegram_digest.bridge, "require_token", return_value="fixture-token"), \
+                     patch("sys.stdout", io.StringIO()):
+                    args = type("Args", (), {
+                        "channel": None, "since": "2026-03-16", "until": "2026-03-16", "auth_mode": None,
+                    })()
+                    self.assertEqual(telegram_digest.cmd_run(args), 0)
+                self.assertEqual(len(notifications), 1)
+                if incomplete:
+                    self.assertIn("В загруженной части выбранного периода сообщений нет", notifications[0])
+                    self.assertIn("результат может быть неполным", notifications[0])
+                    self.assertNotIn("Новых сообщений в выбранном периоде нет", notifications[0])
+                else:
+                    self.assertIn("Новых сообщений в выбранном периоде нет", notifications[0])
+                    self.assertNotIn("результат может быть неполным", notifications[0])
+
     def test_cmd_run_fails_when_sync_exceeds_total_timeout(self) -> None:
         temp_dir = tempfile.TemporaryDirectory()
         prompt_file = self.write_prompt_bundle(Path(temp_dir.name))

@@ -7,6 +7,7 @@ import sqlite3
 import subprocess
 import tempfile
 import unittest
+from unittest.mock import AsyncMock, patch
 from contextlib import redirect_stdout
 from datetime import datetime, timezone
 from pathlib import Path
@@ -1505,9 +1506,10 @@ user_password = "pw_x"
             async def get_entity(self, channel):
                 return Entity()
 
-            def iter_messages(self, entity, limit):
+            def iter_messages(self, entity, limit, offset_date=None):
                 async def generator():
-                    for item in messages:
+                    selected = [item for item in messages if offset_date is None or item.date < offset_date]
+                    for item in selected if limit is None else selected[:limit]:
                         yield item
                 return generator()
 
@@ -1533,6 +1535,65 @@ user_password = "pw_x"
         self.assertEqual(result["processed_messages"], 2)
         self.assertEqual(result["since"], "2026-03-15")
         self.assertEqual(result["until"], "2026-03-16")
+
+    def test_sync_one_channel_bounds_history_and_reports_unproven_coverage(self) -> None:
+        def at(value: str) -> datetime:
+            return datetime.fromisoformat(value).replace(tzinfo=timezone.utc)
+
+        newer = at("2026-03-17T00:00:00")
+        upper = at("2026-03-16T23:59:59")
+        middle = at("2026-03-16T12:00:00")
+        lower = at("2026-03-15T00:00:00")
+        older = at("2026-03-14T23:59:59")
+        cases = [
+            # Newer posts must not spend the cap; both UTC endpoints survive.
+            ("bounded-window", [newer] * 10 + [upper, lower, older], 3, False, 2, False),
+            ("dense-window", [upper, middle, lower], 2, False, 2, True),
+            # Exactly cap results cannot prove there are no further messages.
+            ("exact-cap", [upper, middle], 2, False, 2, True),
+            ("lower-bound-on-last-result", [lower, older], 2, False, 1, False),
+            ("empty-window", [newer, older], 2, False, 0, False),
+            ("empty-history", [], 2, False, 0, False),
+            # Count all returned results even if a backend ignores the offset.
+            ("out-of-window-cap", [newer, newer, upper], 2, True, 0, True),
+        ]
+        for name, dates, cap, ignore_offset, expected_count, expected_warning in cases:
+            with self.subTest(name=name):
+                messages = [types.SimpleNamespace(id=len(dates) - index, date=value)
+                            for index, value in enumerate(dates)]
+                requested_offsets = []
+
+                class FakeClient:
+                    async def get_entity(self, channel):
+                        return types.SimpleNamespace(id=1)
+
+                    def iter_messages(self, entity, limit, offset_date=None):
+                        requested_offsets.append(offset_date)
+                        selected = [item for item in messages
+                                    if ignore_offset or offset_date is None or item.date < offset_date]
+
+                        async def generator():
+                            for item in selected[:limit]:
+                                yield item
+                        return generator()
+
+                args = types.SimpleNamespace(
+                    limit=cap, auth_mode="user", download_media=False,
+                    ocr=False, mark_read=False, since="2026-03-15", until="2026-03-16",
+                )
+                with patch.object(telegram_history_client, "upsert_channel"), \
+                     patch.object(telegram_history_client, "update_sync_state"), \
+                     patch.object(telegram_history_client, "flush_staged_message_writes"), \
+                     patch.object(telegram_history_client, "message_exists", return_value=False), \
+                     patch.object(telegram_history_client, "resolve_sender_metadata",
+                                  AsyncMock(return_value=(None, None))):
+                    result = asyncio.run(telegram_history_client.sync_one_channel(
+                        object(), types.SimpleNamespace(sync_batch_size=1), args,
+                        "backfill", "@fixture", client=FakeClient(), auth_mode_override="user",
+                    ))
+                self.assertEqual(requested_offsets, [newer])
+                self.assertEqual(result["processed_messages"], expected_count)
+                self.assertEqual(result["sync_limit_reached"], expected_warning)
 
     def test_sync_one_channel_retries_numeric_group_id_after_get_dialogs(self) -> None:
         conn = sqlite3.connect(":memory:")
@@ -1601,7 +1662,7 @@ user_password = "pw_x"
                 self.dialogs_called = True
                 return []
 
-            def iter_messages(self, entity, limit):
+            def iter_messages(self, entity, limit, offset_date=None):
                 async def generator():
                     yield Message()
                 return generator()

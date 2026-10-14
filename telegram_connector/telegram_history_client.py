@@ -1358,8 +1358,15 @@ async def sync_one_channel(
         if scan_limit is not None and scan_limit <= 0:
             scan_limit = None
 
+        since_dt = parse_filter_datetime_value(getattr(args, "since", None))
+        until_dt = parse_filter_datetime_value(getattr(args, "until", None), end_of_day=True)
         if mode in {"backfill", "tail", "update"}:
-            iterator = active_client.iter_messages(entity, limit=scan_limit)
+            iterator_options = {"limit": scan_limit}
+            if until_dt is not None:
+                # Telethon's offset is exclusive; preserve our inclusive,
+                # second-resolution upper bound without scanning newer posts.
+                iterator_options["offset_date"] = until_dt + timedelta(seconds=1)
+            iterator = active_client.iter_messages(entity, **iterator_options)
         else:
             raise SystemExit(f"Unsupported sync mode: {mode}")
 
@@ -1368,10 +1375,9 @@ async def sync_one_channel(
         refreshed_existing_media = 0
         highest_message_id = None
         seen_messages = 0
+        scan_boundary_reached = False
         mark_read_target_id = latest_processed_message_id(conn, entity.id, mode) if getattr(args, "mark_read", False) else None
         existing_max_id = latest_stored_message_id(conn, entity.id) if mode == "update" else None
-        since_dt = parse_filter_datetime_value(getattr(args, "since", None))
-        until_dt = parse_filter_datetime_value(getattr(args, "until", None), end_of_day=True)
         staged_writes: list[StagedMessageWrite] = []
 
         def stage_write(
@@ -1396,16 +1402,18 @@ async def sync_one_channel(
                 staged_writes.clear()
 
         async for message in iterator:
+            seen_messages += 1
             message_dt = getattr(message, "date", None)
             if message_dt is not None and message_dt.tzinfo is None:
                 message_dt = message_dt.replace(tzinfo=timezone.utc)
             if until_dt is not None and message_dt is not None and message_dt > until_dt:
                 continue
             if since_dt is not None and message_dt is not None and message_dt < since_dt:
+                scan_boundary_reached = True
                 break
             if mode == "update" and existing_max_id is not None and message.id <= existing_max_id:
+                scan_boundary_reached = True
                 break
-            seen_messages += 1
             downloaded_path = None
             downloaded_size = None
             sender_username, sender_display_name = await resolve_sender_metadata(entity, message)
@@ -1480,7 +1488,9 @@ async def sync_one_channel(
             "auth_mode": auth_mode,
             "processed_messages": processed,
             "skipped_existing": skipped_existing,
-            "sync_limit_reached": bool(scan_limit is not None and seen_messages >= scan_limit),
+            "sync_limit_reached": bool(
+                scan_limit is not None and seen_messages >= scan_limit and not scan_boundary_reached
+            ),
             "refreshed_existing_media": refreshed_existing_media,
             "download_media": bool(args.download_media),
             "ocr_processed": ocr_processed,

@@ -1431,7 +1431,8 @@ def build_channel_digest_message(
         )
     if sync_limit_reached:
         warnings.append(
-            "<i>Предупреждение: по этому чату был достигнут sync_limit, поэтому Telegram-история для выбранного периода могла быть загружена не полностью.</i>"
+            "<i>Предупреждение: по этому чату был достигнут sync_limit; "
+            "загрузка периода ограничена, результат может быть неполным.</i>"
         )
     if output_token_limit_reached and output_token_limit is not None:
         warnings.append(f"ответ ИИ достиг лимита выходных токенов ({output_token_limit})")
@@ -1997,7 +1998,11 @@ def cmd_run(args: argparse.Namespace) -> int:
                         since=since,
                         until=until,
                         message_count=0,
-                        summary="Новых сообщений в выбранном периоде нет.",
+                        summary=(
+                            "В загруженной части выбранного периода сообщений нет."
+                            if sync_limit_reached
+                            else "Новых сообщений в выбранном периоде нет."
+                        ),
                         sync_limit_reached=sync_limit_reached,
                         separator_text=digest_config.separator_text,
                     ),

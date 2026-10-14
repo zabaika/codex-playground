@@ -145,7 +145,7 @@ Digest runs are per channel: prep-sync, optional OCR, AI analysis, and Telegram 
 - Telethon connection budgets live in `[telethon]` (see the example config). Sleep is excluded; transient failures retry with a fresh client after cleanup. Permanent errors or failed cleanup stop retries. Logs contain only failures and recovery; final failures reach the audit and Telegram.
 - channels below `digest.min_messages_for_ai` send a short loaded-without-analysis note
 - channels that fit `digest_ai.*` budgets use one direct OpenAI request; larger windows fall back to chronological batches and a final summary
-- hitting an effective digest `sync_limit` is called out in the delivered channel message
+- history reads start at the selected period's upper boundary, so newer posts do not spend its `sync_limit`; exhausting the cap before proving the lower boundary produces an incomplete-coverage warning, including for empty local results
 - transient OpenAI network/OS failures, `408`, retryable `429`, `500`/`502`/`503`/`504`, and edge/origin `520`–`525`/`530` use bounded retries; retryable rate limits honor `Retry-After`
 - failed OpenAI analysis for one channel is recorded with safe HTTP or network diagnostics, retry outcome, and a copyable channel selector for a manual rerun, then produces `status=partial` while the remaining channels continue
 - transient delivery failures are recorded as per-channel errors and produce `status=partial`
