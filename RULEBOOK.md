@@ -111,6 +111,7 @@ Keep documentation split by responsibility:
 - if more than one plausible interpretation exists, surface the alternatives instead of silently choosing one
 - if a simpler approach exists, say so and push back when the requested direction is overbuilt
 - if a key requirement is unclear, stop and name the exact confusion instead of filling the gap with guessed intent
+- when presenting findings or recommendations, distinguish observed project facts, requirements or guidance from named sources, and your own proposals or assumptions; do not attribute project-specific decisions or unmeasured defaults to a source that does not prescribe them
 
 #### 2. Simplicity First
 
@@ -159,6 +160,10 @@ Keep documentation split by responsibility:
 - for multi-step tasks, state a short plan where each step names its verification check
 - do not stop at `implemented`; stop only when the success criteria have been verified or a concrete blocker is surfaced
 - prefer strong, local success criteria over broad phrases like `make it work`, because weak criteria force repeated clarification and invite silent drift
+- before asserting a pipeline-wide property, inspect the relevant path from producer through transformations to consumers; a property of one component does not establish the same property for the whole workflow
+- limit each claim to the scope actually verified; distinguish code inspection from demonstrated runtime behavior
+- narrow discovery results to relevant files, symbols, and ranges before detailed reads; size tool output so the required content remains inspectable
+- treat truncated output as incomplete evidence; narrow the request or read the missing ranges before relying on omitted content; follow Skill Rule Context Loading when a complete rule-file read is required
 
 #### 5. External OS Services and Signing Agents
 

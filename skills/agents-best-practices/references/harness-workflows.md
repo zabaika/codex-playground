@@ -8,13 +8,13 @@ Use this skill when the user asks how to build, improve, debug, or evaluate an a
 
 ## Freshness and self-update
 
-The converted package's [freshness policy](../SKILL.md#freshness-and-self-update) is authoritative. Check upstream once, but continue using the recorded reviewed snapshot. Do not replace files or apply an unreviewed upstream snapshot during ordinary tasks. Updating requires a separate user request, renewed audit and conversion, validation, and the canonical repository installer after promotion.
+The converted package's [freshness policy](../SKILL.md#freshness-and-self-update) is authoritative: upstream checks are opt-in and require an explicit user request. Continue using the recorded reviewed snapshot during ordinary tasks. Do not replace files or apply an unreviewed upstream snapshot. Updating requires a separate user request, renewed audit and conversion, validation, and the canonical repository installer after promotion.
 
 ## Core stance
 
 An agent harness is the control plane around a model. The model proposes actions; the harness validates, authorizes, executes, records, summarizes, and returns observations. Keep the loop simple and make the runtime rigorous.
 
-Default architecture:
+Use the [execution-shape decision](architecture.md#execution-shape-and-design-justification) before selecting components. Fixed workflows use application-owned stage transitions. When model-directed action selection is needed, the baseline agent loop is:
 
 ```text
 user/task
@@ -69,20 +69,33 @@ First, identify the user's design problem:
 5. **Tool surface**: internal APIs, hosted tools, MCP/external connectors, browser, sandbox, filesystem, database, communication, or computation.
 6. **Validation**: what proves the task is complete.
 
-Then load the most relevant reference files, not all files by default. If the user asks to make or build an agent for a domain, default to MVP Builder Mode.
+Apply the [request routing and implementation gate](../SKILL.md#request-routing-and-implementation-gate) before selecting a mode. Load the selected route and the mechanism owners needed for its decisions, not all references or every section of the blueprint. Follow workspace rules for mandatory full instruction reads; never treat truncated output as complete evidence.
+
+## Requirements Refinement Mode
+
+Use this route to improve a specification or terms of reference for an agent or bounded LLM workflow. Diagnose gaps and contradictions in the supplied material first. Inspect a repository only when requested or necessary for correctness; otherwise label reuse and implementation claims as unverified instead of inventing project facts.
+
+Return a compact, actionable deliverable:
+
+1. Diagnosis: the goal, scope, significant ambiguities and conflicting requirements.
+2. Proposed specification edits: concrete wording or an amended specification preserving the user's intended product and constraints.
+3. Decisions and rationale: choose fixed stages or an agent loop as needed; distinguish observed facts, attributed guidance and proposed assumptions/defaults. Justify additions using the [design criteria](architecture.md#execution-shape-and-design-justification).
+4. Verification and implementation plan: acceptance/failure cases, smallest stages, dependencies, and questions only where correctness or authority depends on missing information.
+
+Use only relevant mechanisms; a specification edit does not require a complete harness blueprint, paid probe or runtime scaffold. Present the diagnosis and plan under the entrypoint's approval gate, then wait for explicit approval before implementation. Approval of a previously presented plan is execution authority within that scope, not a request to produce another plan.
 
 ## MVP Builder Mode
 
-When the user asks to make, build, design, scaffold, or specify an agent for a domain, produce a concrete domain-specific MVP harness blueprint, not only advice. Use [mvp-agent-blueprint.md](mvp-agent-blueprint.md) as the primary reference and load other references as needed.
+When the user asks for a new domain design, produce a concrete diagnosis and MVP plan under the entrypoint's approval gate. Use [mvp-agent-blueprint.md](mvp-agent-blueprint.md) for a new blueprint, the refinement route for supplied requirements, and other references only as needed. A request to make or scaffold the system does not bypass plan approval.
 
 Default behavior:
 
 1. Infer a reasonable first version from the user's domain and stated constraints.
 2. State assumptions briefly instead of blocking on missing details.
 3. Design the smallest safe harness that can accomplish useful work.
-4. Include the core agentic loop, tool registry, permission matrix, context/memory/compaction, planning mode, goal-like loop criteria, skills/connectors, prompt-cache/cost strategy, observability, evals, and launch path.
+4. Specify the chosen workflow or loop, model/application boundary, budgets, permission policy, context, observability, evals and implementation path. Include tools, persistent memory, compaction, goals or connectors only when required by the chosen design.
 5. Mark high-risk actions as draft-only or approval-gated by default.
-6. Keep the MVP to the smallest reliable single-loop harness unless the user explicitly asks for a broader architecture.
+6. Keep the MVP to the smallest reliable fixed workflow or single-agent loop unless the user explicitly asks for broader architecture or measured evidence requires it.
 
 ## Troubleshooting Mode
 
@@ -163,11 +176,11 @@ Require host-owned eligibility, permission at physical dispatch, isolated dispos
 
 ## Default answer structure when advising a user
 
-When the user asks for architecture guidance, produce a concrete architecture, not generic principles. For an existing failure, use [Troubleshooting Mode](#troubleshooting-mode):
+When the user asks for architecture guidance, produce a concrete diagnosis and plan, not generic principles, and apply the entrypoint's approval gate. For supplied requirements, use [Requirements Refinement Mode](#requirements-refinement-mode); for an existing failure, use [Troubleshooting Mode](#troubleshooting-mode). The topics below are a conditional menu, not mandatory sections or components for every response:
 
 0. **MVP boundary**: smallest useful version, assumptions, non-goals, and launch criteria.
 1. **Harness boundary**: what the model does versus what application code does.
-2. **Loop**: how model calls, tool calls, tool results, stopping, and retries work; when routing is requested, state selected/dispatched identities, compatibility, continuation policy, and routing-state semantics.
+2. **Execution shape**: fixed stages or model-directed actions, model calls, applicable tool results, stopping and retries; when model routing is requested, state selected/dispatched identities, compatibility, continuation policy and routing-state semantics.
 3. **Instructions**: system/developer/user instruction hierarchy and scoped memory; when runtime changes are requested, include the authorized configuration timeline, effective-state replay, and provider projection.
 4. **Tools**: tool registry, schemas, outputs, risk classes, permissions, and approval points.
 5. **Environment adaptation, when requested**: stable bootstrap, discovery, descriptor provenance, safe probes, exact bindings, drift invalidation, and fallback.
@@ -211,10 +224,13 @@ For voice requests, append the conditional output contract in [Realtime Voice Ag
 
 ## Common output template
 
-Use this template when the user wants a harness design. If the user asks to make/build an agent, use this as an MVP blueprint, not a purely conceptual answer:
+Use applicable sections of this template for a new design, not for a focused refinement or diagnosis. Omit unused mechanisms rather than inventing them to fill headings. The output remains a proposed plan until approved under the entrypoint's gate:
 
 ```markdown
-# MVP Agent Harness Blueprint: [domain/use case]
+# Proposed MVP Design and Plan: [domain/use case]
+
+## Diagnosis
+[Observed state or supplied requirements, gaps, and remaining uncertainty.]
 
 ## Objective
 [What the agent must accomplish and for whom.]
@@ -225,14 +241,14 @@ Use this template when the user wants a harness design. If the user asks to make
 ## Autonomy and risk level
 [Answer-only, draft-only, approval-gated, or autonomous within policy.]
 
-## Core loop
-[How the model, tools, observations, retries, and stopping rules work.]
+## Execution shape and rationale
+[Fixed stages or agent loop, checked reuse options, and justification for additions.]
 
 ## Instruction architecture
 [System/developer/user/scoped memory layout.]
 
-## Tool registry
-[Tools, schemas, risk classes, permissions, and result format.]
+## Tools, when applicable
+[Tools, schemas, risk classes, permissions, and result format. Omit when no model-selected tools are needed.]
 
 ## Planning and goal behavior
 [When to plan, when to ask, when to continue, when to stop.]
@@ -254,6 +270,9 @@ Use this template when the user wants a harness design. If the user asks to make
 
 ## Minimal implementation path
 [Smallest safe version first, implementation skeleton, validation path, then measured expansion.]
+
+## Approval boundary
+[Present this plan and wait for explicit approval before implementation; reuse existing approval when continuing the same agreed plan.]
 ```
 
 ## Gotchas

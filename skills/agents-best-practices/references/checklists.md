@@ -2,12 +2,17 @@
 
 ## MVP agent blueprint checklist
 
+Apply only items required by the chosen design; this checklist must not create unused components. Use the entrypoint's [implementation gate](../SKILL.md#request-routing-and-implementation-gate) for permission to act.
+
+- [ ] Diagnosis and a concrete plan are presented; implementation waits for explicit approval, or continues within an already approved plan.
+- [ ] Fixed workflow versus model-directed loop is chosen with a brief rationale.
+- [ ] Significant new components/settings are justified against checked reuse options; numbers are identified as constraints, measurements or proposed defaults.
 - [ ] Domain, primary user, and job-to-be-done are stated.
 - [ ] MVP scope, assumptions, non-goals, and deferred capabilities are explicit.
 - [ ] Autonomy level is the lowest level that still creates value.
-- [ ] Core model-tool-observation loop is specified.
+- [ ] Known workflow stages or the required model-tool-observation loop are specified.
 - [ ] Step, tool-call, time, token, and cost budgets are specified.
-- [ ] Minimal typed tool registry is defined.
+- [ ] A minimal typed registry is defined when model-selected tools are needed.
 - [ ] Permission matrix covers read, draft, write, external, financial, destructive, and privileged actions.
 - [ ] Risky actions use draft/commit separation.
 - [ ] Planning mode blocks mutation until approval.

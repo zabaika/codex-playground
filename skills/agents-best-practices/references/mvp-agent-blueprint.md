@@ -1,12 +1,12 @@
 # MVP Agent Blueprint Builder
 
-Use this reference when the user asks to make, build, design, scaffold, or specify an agent for a domain. The output should be a concrete MVP harness blueprint that can guide implementation across OpenAI, Anthropic, or OpenAI-compatible APIs.
+Use this reference for a new domain design, after selecting the [execution shape](architecture.md#execution-shape-and-design-justification). For edits to supplied requirements, start with [requirements refinement](harness-workflows.md#requirements-refinement-mode). The output is a diagnosis and concrete proposed MVP plan under the [implementation gate](../SKILL.md#request-routing-and-implementation-gate), not permission to start scaffolding.
 
 The goal is not to design every future feature. The goal is the smallest safe version that can do useful work, with clear upgrade paths.
 
 ## MVP definition
 
-An MVP agent harness includes:
+Consider the applicable responsibilities below. A fixed workflow uses known application stages; it does not need a model-tool-observation loop or registry solely to satisfy this inventory. Persistent memory, compaction, goals and connectors require a task-specific reason. Reuse existing components before proposing new ones, and distinguish measured limits from proposed defaults.
 
 1. A domain objective and user persona.
 2. A minimal but useful autonomy level.
@@ -101,10 +101,13 @@ That reference contains the concrete loop, task profiles, baseline tools, permis
 
 ## MVP output structure
 
-Use this structure when generating a domain-specific MVP agent.
+Use only applicable sections when proposing a new domain MVP; do not create unused mechanisms to fill this template. Apply the entrypoint's approval gate before implementation.
 
 ```markdown
 # MVP Agent Harness Blueprint: [domain/use case]
+
+## Diagnosis
+[Observed state or supplied requirements, significant gaps, and unverified assumptions.]
 
 ## 1. Objective
 [What the agent does, for whom, and what output counts as useful.]
@@ -115,14 +118,14 @@ Use this structure when generating a domain-specific MVP agent.
 ## 3. Autonomy and risk level
 [Answer-only, draft-only, approval-gated action, or policy-bounded action.]
 
-## 4. Core agentic loop
-[Provider-neutral loop, model calls, tool calls, observations, retries, budgets, and stopping.]
+## 4. Execution shape
+[Known workflow stages or an agent loop; model calls, applicable tools, retries, budgets and stopping. Explain why this shape is sufficient.]
 
 ## 5. Context and instruction architecture
 [System/developer/user instructions, scoped domain memory, source-of-truth retrieval, trust boundaries.]
 
-## 6. Tool registry
-[Minimal tools, schemas, risk classes, permission policy, structured outputs.]
+## 6. Tools, when applicable
+[Minimal tools, schemas, risk classes, permission policy, structured outputs. Omit when the model does not select tools.]
 
 ## 7. Planning behavior
 [When the agent must plan, what is allowed during planning, plan artifact, approval to execute.]
@@ -157,7 +160,7 @@ Use this structure when generating a domain-specific MVP agent.
 
 ## Core loop template
 
-A domain MVP should include an explicit loop.
+An agent-loop MVP should include an explicit bounded loop. A fixed-workflow MVP specifies its known stages and transitions instead; it does not need the tool-selection template below.
 
 ```python
 def run_agent(task, session):
@@ -301,7 +304,7 @@ Separate trusted instructions from untrusted data. Retrieved documents, emails, 
 
 ## Planning mode
 
-Planning mode should activate when:
+This section describes planning policy in the application being designed; use of this skill always follows the separate entrypoint approval gate. The application's planning mode should activate when:
 
 ```text
 task is ambiguous
@@ -530,7 +533,7 @@ Launch only when the MVP passes critical safety and reliability evals for its au
 
 ## Minimal implementation path
 
-Recommended build order:
+After the proposed plan is approved, use the applicable parts of this build order, reusing existing implementations. Fixed workflows do not need a tool-selection loop; durable memory, compaction, skills and connectors are conditional additions, not prerequisites for every MVP:
 
 1. Implement typed event/session state.
 2. Implement context builder with stable prompt prefix.
@@ -554,7 +557,7 @@ Recommended build order:
 
 ## First release checklist
 
-The first limited release should pass these checks:
+The first limited release should pass the checks applicable to its declared capabilities; absent optional capabilities do not require new components merely to satisfy this list:
 
 ```text
 [ ] The agent has one primary job-to-be-done.

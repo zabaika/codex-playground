@@ -25,9 +25,22 @@ Harness responsibilities
 - enforce budgets and stop conditions
 ```
 
+## Execution shape and design justification
+
+Choose the control flow before proposing components:
+
+- **Fixed workflow:** application code already knows the stages and their transitions. Use bounded model calls for extraction, classification or synthesis inside that workflow; the model does not need to select arbitrary tools or invent the next stage.
+- **Agent loop:** the next useful action cannot be predetermined and the model must select among scoped actions based on observations. Start with one bounded loop and host-owned validation, permissions and stopping rules.
+
+Durability, cancellation, external effects and risk are independent choices: a fixed workflow may need checkpoints and delivery reconciliation, while a short agent loop may not need persistent memory. Explain the choice briefly; do not create a classification framework or new runtime merely to name it.
+
+For each significant new component or public setting, connect the requirement or observed limitation to checked reuse options, explain why reuse is insufficient, and propose the smallest addition. Label numeric values as external constraints, measurements or proposed defaults. Preserve operator-tunable limits at the project's canonical configuration owner rather than hiding them in constants to reduce the apparent config surface.
+
+Follow applicable repository evidence and reading rules. A producer's iterator does not prove bounded memory downstream: inspect the relevant transformations and consumer before making that claim. Keep observations, attributed guidance and proposed choices distinguishable; a source recommending budgets does not prescribe your chosen token cap.
+
 ## Component model
 
-A robust harness contains these components:
+A harness may need the following responsibilities. This is a design inventory, not a requirement for sixteen separate components; reuse existing owners and include only what the selected execution shape and task require:
 
 ```text
 1. Instruction manager
@@ -202,7 +215,7 @@ Always-on describes a service that remains available to accept events and resume
 
 ## Minimal viable harness
 
-Start with:
+For a model-directed agent loop, start with the applicable responsibilities below. A fixed workflow uses its known stage transitions instead of adding a tool-selection loop or tool registry just to match this list:
 
 1. one model adapter;
 2. one context builder;
@@ -330,9 +343,9 @@ Continuous cleanup is cheaper than waiting until drift becomes systemic.
 
 ## MVP harness default
 
-When building a new domain agent, start with an MVP harness rather than a full autonomy platform. The MVP should include one primary job-to-be-done, a minimal typed tool registry, approval-gated risky actions, explicit budgets, a deterministic context builder, planning mode, auto-compaction, tracing, and a small eval set. Add goal-like loops, more connectors, skills, or subagents only after the single-agent MVP has measured gaps.
+When designing a new domain application, choose the execution shape first and start with one primary job-to-be-done, explicit boundaries and budgets, a context builder, tracing and a small eval set. Add a typed tool registry for model-selected actions, and memory, compaction or goal loops only when the task requires them. Add more connectors, skills or subagents only after the simpler baseline has measured gaps.
 
-The recommended MVP sequence is:
+For agent loops, the following sequence describes possible growth, not mandatory stages for every application:
 
 ```text
 manual loop -> tools -> permissions -> structured observations -> budgets -> tracing -> planning -> context/memory -> compaction -> skills/connectors -> goal loop -> subagents
