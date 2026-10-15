@@ -156,12 +156,18 @@ Keep documentation split by responsibility:
 **Define success criteria. Loop until verified.**
 
 - translate vague tasks into verifiable outcomes before implementation
+- before substantial planning, consolidate the current mandatory requirements, latest corrections, scope exclusions, and open decisions; distinguish user decisions, observed facts, and proposed assumptions
 - prefer checks that can prove the change, such as a reproducing test, a contract check, or an explicit observable behavior change
 - for multi-step tasks, state a short plan where each step names its verification check
+- for substantial multi-step implementation, organize the plan into small, independently verifiable steps
+- each step must state its outcome, prerequisites, relevant contracts/settings, mandatory conditions, test scenarios, and completion checks; verify that it can be followed using the shared contract, the step, and its precise references, with dependencies and checks available at that point
+- keep shared contracts, defaults, and repeated execution rules under one canonical owner; include critical step-specific conditions directly, reference shared details, and map every mandatory requirement to an implementation step and a verification check
+- when several components must compose, plan an early observable end-to-end slice using bounded fixtures where appropriate, then extend it; distinguish fixture integration from working external integrations
+- after each completed step or interruption, record verified progress, decisions, remaining work, and the exact next action so execution can resume without relying on chat memory
 - do not stop at `implemented`; stop only when the success criteria have been verified or a concrete blocker is surfaced
 - prefer strong, local success criteria over broad phrases like `make it work`, because weak criteria force repeated clarification and invite silent drift
 - before asserting a pipeline-wide property, inspect the relevant path from producer through transformations to consumers; a property of one component does not establish the same property for the whole workflow
-- limit each claim to the scope actually verified; distinguish code inspection from demonstrated runtime behavior
+- limit each claim to the scope actually verified; distinguish self-review, automated checks, independent review, code inspection, and demonstrated runtime behavior, naming the applicable method and remaining limits in substantial verification reports
 - narrow discovery results to relevant files, symbols, and ranges before detailed reads; size tool output so the required content remains inspectable
 - treat truncated output as incomplete evidence; narrow the request or read the missing ranges before relying on omitted content; follow Skill Rule Context Loading when a complete rule-file read is required
 

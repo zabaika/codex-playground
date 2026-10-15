@@ -2,7 +2,7 @@
 name: agents-best-practices
 description: "Design, audit, troubleshoot, or refine requirements for an agent harness or bounded LLM workflow. Default to diagnosis and a plan; implement after explicit plan approval. Use for concrete architecture and reliability work, including voice and scheduled agents; not routine code edits or general Q&A."
 metadata:
-  version: "1.16.0-codex.3"
+  version: "1.16.0-codex.6"
   scope: "agent-harness-design-and-review"
 ---
 
@@ -47,7 +47,9 @@ If an explicitly requested upstream check is unavailable, say freshness is unver
 3. For requirements, return concrete edits, gaps, tradeoffs and acceptance criteria using the refinement route. For a new design, choose the [execution shape](references/architecture.md#execution-shape-and-design-justification) first: fixed application stages or model-directed action selection. State purpose, model/application boundary, budgets, permissions, state/context, validation and minimal implementation path; add tools, memory, compaction or orchestration only when needed. For an audit, prioritize the smallest evidence-backed changes. For a failure, identify the earliest failing boundary, one safe discriminating probe, a proposed correction and regression case.
 4. Justify significant new components and public settings against a concrete requirement and checked reuse options. Distinguish source-prescribed constraints, measured values and proposed defaults; do not present an unmeasured number as a best-practice optimum. Verify a claimed property across its relevant producer/transformation/consumer path and keep project observations, source guidance and your proposals distinguishable in the explanation.
 5. For applicable model/tool stages, preserve every result, including denial, timeout and cancellation. Design bounded retries inside total budgets, durable state where recovery matters, action-bound approvals, and uncertain-outcome reconciliation. Read advanced invariants from their owning reference before using that profile.
-6. Verify the requested deliverable against its success criteria. Select applicable [checklist](references/checklists.md) items and meaningful [eval](references/evals.md) cases without inventing unused subsystems. Report observed evidence, untested guarantees and the next step. Before approval, deliver the diagnosis/plan and stop; after approval, implement and verify within the agreed scope. A blueprint or successful upload alone does not prove runtime health.
+6. For substantial multi-step implementation, use the [implementation plan structure](references/harness-workflows.md#implementation-plan-structure): reconcile requirements first, check step-local executability, and plan an early observable integration slice. Keep shared rules canonical and focused work compact. Verify the deliverable against its success criteria with applicable [checklist](references/checklists.md) items and meaningful [eval](references/evals.md) cases.
+7. After drafting each final skill result, including revisions, perform the mandatory [final deliverable review](references/harness-workflows.md#final-deliverable-review) on the complete current result. Correct contradictions, obsolete remnants, dependency/contract gaps and unjustified or missing settings before presenting it; scale the review to the content rather than forcing a large plan for a short answer.
+8. Report observed evidence, untested guarantees and the next step. Before approval, deliver the reviewed diagnosis/plan and stop; after approval, implement and verify within the agreed scope. A document review or successful upload alone does not prove runtime health.
 
 ## Primary routes
 

@@ -5,6 +5,7 @@
 Apply only items required by the chosen design; this checklist must not create unused components. Use the entrypoint's [implementation gate](../SKILL.md#request-routing-and-implementation-gate) for permission to act.
 
 - [ ] Diagnosis and a concrete plan are presented; implementation waits for explicit approval, or continues within an already approved plan.
+- [ ] The complete current deliverable received the mandatory [final review](harness-workflows.md#final-deliverable-review) after drafting or revision; corrections and unverified assumptions are reflected consistently.
 - [ ] Fixed workflow versus model-directed loop is chosen with a brief rationale.
 - [ ] Significant new components/settings are justified against checked reuse options; numbers are identified as constraints, measurements or proposed defaults.
 - [ ] Domain, primary user, and job-to-be-done are stated.
