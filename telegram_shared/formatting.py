@@ -4,6 +4,21 @@ from __future__ import annotations
 
 import html
 import re
+from typing import Any
+
+
+def build_message_link(message: dict[str, Any]) -> str | None:
+    """Construct a message URL from already resolved metadata (legacy contract)."""
+    username = (message.get("username") or "").strip().lstrip("@")
+    message_id = message.get("message_id")
+    if not message_id:
+        return None
+    if username:
+        return f"https://t.me/{username}/{message_id}"
+    channel_id = message.get("channel_id")
+    if channel_id is None:
+        return None
+    return f"https://t.me/c/{channel_id}/{message_id}"
 
 
 def format_telegram_html(text: str) -> str:

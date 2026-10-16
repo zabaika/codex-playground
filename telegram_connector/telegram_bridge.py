@@ -1,14 +1,21 @@
 #!/usr/bin/env python3
 import argparse
+import fcntl
+import hashlib
 import json
 import os
 import plistlib
+import queue
 import re
 import shlex
+import sqlite3
 import subprocess
 import sys
 import time
+from threading import Event, Thread
 import uuid
+from dataclasses import asdict, dataclass
+from contextlib import ExitStack, contextmanager
 from datetime import datetime, timezone
 from functools import partial
 from pathlib import Path
@@ -74,6 +81,8 @@ EXPORT_DIR = DATA_DIR / "exports"
 OP_REFERENCE_PREFIX = shared_secrets.OP_REFERENCE_PREFIX
 _SECRET_CACHE = shared_secrets._SECRET_CACHE
 SUPPORTED_BRIDGE_COMMANDS = {"help", "agent-stats", "top-models", "ocr", "exportcsv", "ocrhistory", "backfill", "tail", "update", "digest", "infoext"}
+ANALYSIS_COMMANDS = {"topics", "search", "qa"}
+ANALYSIS_CONTROLS = {"status", "cancel", "resume"}
 INFOEXT_LAUNCH_AGENT = Path.home() / "Library/LaunchAgents/com.infoext.monitor.plist"
 AUTH_MODES = {"auto", "bot", "user"}
 DIGEST_WINDOW_TOKEN_RE = re.compile(r"(today|yesterday|week|month|-?\d+d|\d{4}-\d{2}-\d{2})")
@@ -219,6 +228,12 @@ def parse_allowed_usernames(config: dict[str, Any]) -> set[str]:
     )
 
 
+def resolve_bridge_access(config: dict[str, Any]) -> dict[str, frozenset[str]]:
+    return {"chats": frozenset(parse_allowed_chat_ids(config)),
+            "users": frozenset(parse_allowed_user_ids(config)),
+            "usernames": frozenset(parse_allowed_usernames(config))}
+
+
 def resolve_sync_mode_limit(config: dict[str, Any], mode: str) -> str:
     raw = get_config_value(config, "sync", f"{mode}_limit")
     if not raw:
@@ -357,6 +372,32 @@ def normalize_bridge_command_text(text: str) -> str:
     return shared_normalize_bridge_command_text(text, supported_commands=SUPPORTED_BRIDGE_COMMANDS)
 
 
+def bridge_command_name(text: str) -> str:
+    """Classify only a known first token; never parse or log its arguments."""
+    first = text.split(maxsplit=1)[0] if text.strip() else ""
+    name = first.removeprefix("/").split("@", 1)[0].lower()
+    return name if name in SUPPORTED_BRIDGE_COMMANDS | ANALYSIS_COMMANDS | ANALYSIS_CONTROLS else ""
+
+
+def parse_analysis_control(text: str) -> tuple[str, str]:
+    parts = shlex.split(text)
+    command = bridge_command_name(parts[0]) if parts else ""
+    if len(parts) != 2 or command not in ANALYSIS_CONTROLS or not re.fullmatch(r"[a-f0-9]{32}", parts[1]):
+        raise ValueError("Invalid analysis control")
+    return command, parts[1]
+
+
+def format_analysis_status(view: dict[str, Any]) -> str:
+    lines = [f"Задача: {view['job_id']}", f"Статус: {view['status']}",
+             f"Этап: {view['phase']}", f"Доставка: {view['delivery']}",
+             f"LLM-вызовы: {view['llm_calls']}; токены: {view['used_tokens']}; резерв: {view['reserved_tokens']}"]
+    if view["cancel_requested"] and view["status"] == "running":
+        lines.append("Отмена запрошена; остановка worker ещё не подтверждена.")
+    if view.get("error"):
+        lines.append(view["error"])
+    return "\n".join(lines)
+
+
 def sanitize_text_for_storage(text: str) -> str:
     sanitized_chars: list[str] = []
     for char in text:
@@ -399,6 +440,124 @@ def consume_channel_argument(parts: list[str]) -> tuple[str | None, list[str]]:
         return None, parts
     normalized = re.sub(r"\s*,\s*", ", ", " ".join(consumed)).strip()
     return normalized, remaining
+
+
+@dataclass(frozen=True)
+class AnalysisRequest:
+    command: str
+    channels: tuple[str, ...]
+    since: datetime
+    until: datetime
+    accepted_at: datetime
+    cutoff_at: datetime
+    query: str | None
+    detail: str
+    limit: int
+    sources: int
+    mode: str | None
+
+    def to_payload(self) -> dict[str, Any]:
+        payload = asdict(self)
+        payload["channels"] = list(self.channels)
+        for field in ("since", "until", "accepted_at", "cutoff_at"):
+            payload[field] = payload[field].isoformat()
+        return payload
+
+
+def _parse_analysis_options(parts: list[str], command: str) -> tuple[dict[str, str], list[str]]:
+    options: dict[str, str] = {}
+    positional: list[str] = []
+    allowed = {"since", "until", "detail", "limit", "sources"}
+    if command == "search":
+        allowed.add("mode")
+    index = 1
+    while index < len(parts):
+        part = parts[index]
+        key, separator, value = part.partition("=")
+        if part.startswith("--"):
+            key = key[2:].lower()
+            if key not in allowed:
+                raise ValueError("Unsupported analysis option")
+            if not separator:
+                index += 1
+                if index >= len(parts) or parts[index].startswith("--"):
+                    raise ValueError("Missing analysis option value")
+                value = parts[index]
+        elif separator and key.lower() in {"since", "until"}:
+            key = key.lower()
+        else:
+            positional.append(part)
+            index += 1
+            continue
+        if key in options or not value.strip():
+            raise ValueError("Repeated or empty analysis option")
+        options[key] = value
+        index += 1
+    return options, positional
+
+
+def parse_analysis_request(text: str | list[str], *, policy: dict[str, Any], now: datetime) -> AnalysisRequest:
+    """Parse raw input once; policy and admission clock are supplied by the caller."""
+    parts = shlex.split(text) if isinstance(text, str) else list(text)
+    command = parts[0].removeprefix("/").split("@", 1)[0].lower() if parts else ""
+    if command not in ANALYSIS_COMMANDS:
+        raise ValueError("Unsupported analysis command")
+    options, positional = _parse_analysis_options(parts, command)
+    query = positional.pop() if command == "search" and positional else None
+    channel_arg, remaining = consume_channel_argument(positional)
+    if not channel_arg:
+        raise ValueError("Channels must be explicitly specified")
+    channels = tuple(token for token in re.split(r"[\s,]+", channel_arg) if token)
+    analysis = policy["analysis"]
+    if not channels or len(channels) > analysis["max_channels"]:
+        raise ValueError("Channel count is outside the configured limit")
+    if not all(is_channel_token(channel) for channel in channels):
+        raise ValueError("Invalid channel reference")
+    if command == "search" and (query is None or not query.strip() or len(query) > analysis["search"]["max_query_chars"]):
+        raise ValueError("Query is empty or exceeds the configured limit")
+    if len(remaining) > 1 or (remaining and not DIGEST_WINDOW_TOKEN_RE.fullmatch(remaining[0].lower())):
+        raise ValueError("Unsupported analysis period or positional argument")
+    shorthand = remaining[0] if remaining else None
+    if __package__:
+        from . import telegram_history_client as history_client
+    else:
+        import telegram_history_client as history_client
+    current = now.replace(tzinfo=timezone.utc) if now.tzinfo is None else now.astimezone(timezone.utc)
+    since_raw = shorthand or options.get("since", policy["digest"]["since"])
+    until_raw = shorthand or options.get("until", policy["digest"]["until"])
+    try:
+        since = history_client.parse_filter_datetime_value(
+            history_client.resolve_relative_date_token(since_raw, current.date()),
+        ).astimezone(timezone.utc)
+        until = history_client.parse_filter_datetime_value(
+            history_client.resolve_relative_date_token(until_raw, current.date()), end_of_day=True,
+        ).astimezone(timezone.utc)
+    except (ValueError, OverflowError) as exc:
+        raise ValueError("Invalid analysis period") from exc
+    if since > until or since > current:
+        raise ValueError("Analysis period is reversed or entirely in the future")
+    output = analysis["output"]
+    detail = options.get("detail", output["default_detail"]).lower()
+    if detail not in output["profiles"]:
+        raise ValueError("Unsupported analysis detail")
+    profile = output["profiles"][detail]
+    limit_raw = options.get("limit", str(profile["default_limit"]))
+    sources_raw = options.get("sources", str(output["sources_per_item"]))
+    if not limit_raw.isdecimal() or not sources_raw.isdecimal():
+        raise ValueError("Analysis limit and sources must be positive integers")
+    limit, sources = int(limit_raw), int(sources_raw)
+    if not 1 <= limit <= min(output["max_items"], profile["max_items"]):
+        raise ValueError("Analysis limit exceeds the configured profile")
+    if not 1 <= sources <= output["sources_per_item"]:
+        raise ValueError("Analysis sources exceed the configured limit")
+    mode = options.get("mode", analysis["search"]["mode"]).lower() if command == "search" else None
+    if mode is not None and mode not in {"fast", "full"}:
+        raise ValueError("Unsupported analysis search mode")
+    return AnalysisRequest(
+        command=command, channels=channels, since=since, until=until,
+        accepted_at=current, cutoff_at=current, query=query, detail=detail,
+        limit=limit, sources=sources, mode=mode,
+    )
 
 
 def resolve_history_client_path(config: dict[str, Any]) -> Path:
@@ -454,7 +613,16 @@ def redact_update_for_storage(update: dict[str, Any]) -> dict[str, Any]:
         "has_text": bool(text),
         "text_length": len(text),
     }
-    normalized = normalize_bridge_command_text(text)
+    command = bridge_command_name(text)
+    if not command:
+        return redacted
+    if command in ANALYSIS_COMMANDS | ANALYSIS_CONTROLS:
+        redacted["command"] = f"/{command}"
+        return redacted
+    try:
+        normalized = normalize_bridge_command_text(text)
+    except ValueError:
+        normalized = f"/{command}"
     if normalized.startswith("/"):
         redacted["command"] = normalized.split(maxsplit=1)[0]
         redacted["command_text"] = "/infoext" if redacted["command"] == "/infoext" else sanitize_text_for_storage(normalized)
@@ -496,6 +664,14 @@ def extract_date(update: dict[str, Any]) -> str:
     if not unix_ts:
         return "-"
     return datetime.fromtimestamp(unix_ts, tz=timezone.utc).isoformat()
+
+
+def send_analysis_text_once(token, chat_id, text, parse_mode, *, timeout_seconds):
+    """One tracked physical send; the analytics owner persists intent and receipt."""
+    payload = {"chat_id": str(chat_id), "text": text}
+    if parse_mode:
+        payload.update(parse_mode=parse_mode, disable_web_page_preview=True)
+    return shared_api_call(token, "sendMessage", payload, timeout_seconds=timeout_seconds)
 
 
 def send_text_message(
@@ -687,13 +863,28 @@ def command_help_text() -> str:
         "  tail + media download + OCR\n"
         "/digest [channel] [since=YYYY-MM-DD] [until=YYYY-MM-DD] [today|yesterday|week|month|-Nd] [bot|user|auto]\n"
         "  config-driven morning AI digest and Telegram delivery\n"
+        "/topics <channels> [since=...] [until=...] [options]\n"
+        "  key events, changes and topics from saved channel history\n"
+        "/search <channels> \"query\" [since=...] [until=...] [options]\n"
+        "  find and combine source-backed answers to a question\n"
+        "/qa <channels> [since=...] [until=...] [options]\n"
+        "  practical questions and answers, including non-reply discussions\n"
+        "/status <job_id>\n"
+        "  show analytic job progress and coverage\n"
+        "/cancel <job_id>\n"
+        "  cancel an analytic job\n"
+        "/resume <job_id>\n"
+        "  resume an eligible analytic job with its saved budget\n"
         "/exportcsv [channel] [limit|since=... until=...] [bot|user|auto]\n"
         "  export saved history to CSV\n"
         "/ocr [limit] [channel] [since=YYYY-MM-DD] [until=YYYY-MM-DD]\n"
         "  OCR only for already-downloaded pending images\n"
         "\nNotes:\n"
-        "- channel may be omitted to use default channels from config\n"
+        "- channel may be omitted to use default channels from config, except /topics, /search and /qa\n"
         "- channel may be a comma-separated list\n"
+        "- analytics options: --detail short|normal|full (default normal), --limit N, --sources N\n"
+        "- --detail full saves Markdown in scratch; the bot returns only its relative path\n"
+        "- /search --mode fast|full (default fast): search candidates or scan the available window\n"
         "- auth defaults to user\n"
         "- since = start of day UTC, until = end of day UTC\n"
         "- since/until aliases: today, yesterday, week, month, -Nd\n"
@@ -708,6 +899,9 @@ def command_help_text() -> str:
         "/digest -3d\n"
         "/digest since=week\n"
         "/digest @vcnews since=2026-03-15 until=2026-03-16\n"
+        "/topics @vcnews since=week --detail short\n"
+        "/search @vcnews since=month \"What changed?\" --mode fast\n"
+        "/qa @vcnews since=week --detail full\n"
         "/agent-stats\n"
         "/top-models\n"
         "/top-models 10\n"
@@ -1116,12 +1310,14 @@ def build_history_command(text: str, *, infoext_paths: tuple[Path, Path] | None 
     raise ValueError(f"Unsupported command: {parts[0]}")
 
 
-def handle_history_command(token: str, config: dict[str, Any], update: dict[str, Any], secret_env: dict[str, str] | None = None) -> None:
+def handle_history_command(token: str, config: dict[str, Any], update: dict[str, Any], secret_env: dict[str, str] | None = None,
+                           *, access: dict[str, frozenset[str]] | None = None) -> None:
     chat_id = extract_chat_id(update)
     if chat_id is None:
         return
 
-    allowed_chat_ids = parse_allowed_chat_ids(config)
+    active_access = access if access is not None else resolve_bridge_access(config)
+    allowed_chat_ids = active_access["chats"]
     if not allowed_chat_ids:
         send_text_message(token, chat_id, "Bridge chat allowlist is not configured; command execution is disabled.")
         return
@@ -1130,8 +1326,8 @@ def handle_history_command(token: str, config: dict[str, Any], update: dict[str,
         return
     if not is_user_allowed(
         update,
-        allowed_user_ids=parse_allowed_user_ids(config),
-        allowed_usernames=parse_allowed_usernames(config),
+        allowed_user_ids=active_access["users"],
+        allowed_usernames=active_access["usernames"],
     ):
         send_text_message(token, chat_id, "This Telegram user is not allowed to run bot commands.")
         return
@@ -1299,8 +1495,8 @@ def print_update(update: dict[str, Any]) -> None:
     username = extract_username(update)
     text = extract_text(update)
     date = extract_date(update)
-    normalized = normalize_bridge_command_text(text)
-    command = normalized.split(maxsplit=1)[0] if normalized.startswith("/") else "<message>"
+    name = bridge_command_name(text)
+    command = f"/{name}" if name else "<message>"
     print(f"[{date}] chat_id={chat_id} from={username} event={command} text_length={len(text)}")
 
 
@@ -1313,49 +1509,406 @@ def is_retryable_listen_error(exc: BaseException) -> bool:
     return "timed out" in message
 
 
+@contextmanager
+def analysis_ownership_lock(db_path: Path, *, owner: str):
+    if owner != "supervisor" and not re.fullmatch(r"[a-f0-9]{32}", owner):
+        raise ValueError("Invalid analysis lock owner")
+    db_path = db_path.resolve()
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = db_path.with_name(f"{db_path.name}.analysis-{owner}.lock")
+    with lock_path.open("a+b") as handle:
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            yield None
+            return
+        try:
+            yield handle.fileno()
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+    # Keep the inode: unlinking could let contenders lock different files.
+
+
+def recover_analysis_jobs(store, db_path: Path, *, now: datetime, exclude_job_ids=()) -> None:
+    if __package__:
+        from .analysis_store import StaleGenerationError
+    else:
+        from analysis_store import StaleGenerationError
+    for job in store.iter_jobs("running"):
+        if job["job_id"] in exclude_job_ids:
+            continue
+        with analysis_ownership_lock(db_path, owner=job["job_id"]) as owned:
+            if owned is not None:
+                try:
+                    store.finish_job(job["job_id"], generation=job["generation"],
+                                     status="cancelled" if job["cancel_requested"] else "interrupted", now=now)
+                except StaleGenerationError:
+                    # A terminal state won before this recovery acquired ownership.
+                    continue
+
+
+@contextmanager
+def open_analysis_store(config: dict[str, Any], *, initialize: bool = True):
+    from common import sqlite as common_sqlite
+    if __package__:
+        from . import telegram_history_client as history_client
+        from .analysis_store import AnalysisStore
+    else:
+        import telegram_history_client as history_client
+        from analysis_store import AnalysisStore
+    conn = common_sqlite.connect_sqlite(resolve_history_db_path(config))
+    try:
+        if initialize:
+            history_client.init_db(conn)
+        yield AnalysisStore(conn)
+    finally:
+        conn.close()
+
+
+class BridgeSupervisor:
+    """Own queue scheduling and a serial legacy lane outside long polling."""
+
+    def __init__(self, config, secret_env, access, *, launch=None, legacy_handler=None,
+                 progress_api=None, access_provider=None):
+        if __package__:
+            from . import telegram_analysis as analysis
+        else:
+            import telegram_analysis as analysis
+        from common import process as common_process
+        self.analysis = analysis
+        self.config, self.secret_env, self.access = config, secret_env, access
+        self.db_path = resolve_history_db_path(config).resolve()
+        self.token = require_bot_token_from_secrets(secret_env)
+        self.namespace = f"telegram:{self.token.partition(':')[0]}"
+        self.analysis_enabled = True
+        try:
+            self.policy = analysis.resolve_analysis_policy(config)["analysis"]
+        except ValueError:
+            # Invalid analytics options must not disable existing bridge commands.
+            self.policy = analysis.resolve_analysis_policy({})["analysis"]
+            self.analysis_enabled = False
+            print("Analytics configuration is invalid; analytics scheduling disabled.", file=sys.stderr)
+        self.interval = common_process.load_process_config().poll_interval_seconds
+        self.launch = launch or self._launch
+        self.legacy_handler = legacy_handler or handle_history_command
+        self.legacy_queue = queue.Queue(maxsize=self.policy["max_queued_jobs"])
+        self.stopping, self.wakeup, self.ready = Event(), Event(), Event()
+        self.error = False
+        self.schema_ready = False
+        self.active = {}
+        self.progress_api = progress_api or shared_api_call
+        self.access_provider = access_provider or (lambda: resolve_bridge_access(load_runtime_config()))
+        self.progress_pending = set()
+        self.progress_initialized = False
+        self.scheduler = Thread(target=self._run, name="connector-analysis-supervisor")
+        self.legacy = Thread(target=self._run_legacy, name="connector-legacy-commands")
+
+    def __enter__(self):
+        self.scheduler.start()
+        self.legacy.start()
+        self.ready.wait()
+        if self.error:
+            self.__exit__(None, None, None)
+            raise RuntimeError("Analytics supervisor could not start")
+        return self
+
+    def __exit__(self, *exc):
+        self.stopping.set()
+        self.wakeup.set()
+        self.scheduler.join()
+        # Preserve accepted legacy command order and --once completion semantics.
+        self.legacy.join()
+
+    def wake(self):
+        self.wakeup.set()
+
+    def submit_legacy(self, update):
+        try:
+            self.legacy_queue.put_nowait(update)
+        except queue.Full:
+            return False
+        return True
+
+    def _run_legacy(self):
+        while not self.stopping.is_set() or not self.legacy_queue.empty():
+            try:
+                update = self.legacy_queue.get(timeout=self.interval)
+            except queue.Empty:
+                continue
+            try:
+                self.legacy_handler(self.token, self.config, update, secret_env=self.secret_env, access=self.access)
+            except (Exception, SystemExit):
+                print("Legacy bridge command failed.", file=sys.stderr)
+            finally:
+                self.legacy_queue.task_done()
+
+    def _launch(self, job):
+        return subprocess.Popen(
+            [sys.executable, str(APP_DIR / "telegram_analysis.py"), "--db", str(self.db_path),
+             "--job-id", job["job_id"], "--generation", str(job["generation"])],
+            cwd=str(BASE_DIR), env=build_history_client_subprocess_env(self.secret_env),
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True,
+        )
+
+    def _run(self):
+        try:
+            if not self.analysis_enabled:
+                return
+            with analysis_ownership_lock(self.db_path, owner="supervisor") as owned:
+                if owned is None:
+                    return
+                # This connection is created, used and closed by this thread alone.
+                with open_analysis_store(self.config) as store:
+                    self.schema_ready = True
+                    self._tick(store)
+                    self.ready.set()
+                    while not self.stopping.is_set():
+                        self.wakeup.wait(self.interval)
+                        self.wakeup.clear()
+                        if not self.stopping.is_set():
+                            self._tick(store)
+        except (Exception, SystemExit):
+            self.error = True
+            print("Analytics supervisor failed; durable jobs retained.", file=sys.stderr)
+        finally:
+            self.ready.set()
+
+    def _tick(self, store):
+        now = datetime.now(timezone.utc)
+        self.progress_pending.update(self.active)
+        for job_id, (job, process) in list(self.active.items()):
+            code = process.poll()
+            if code is None:
+                continue
+            del self.active[job_id]
+            current = store.get_job(job_id)
+            if current and current["status"] == "running" and current["generation"] == job["generation"]:
+                with analysis_ownership_lock(self.db_path, owner=job_id) as owned:
+                    if owned is not None:
+                        store.finish_job(job_id, generation=job["generation"],
+                                         status="cancelled" if current["cancel_requested"] else ("failed" if code else "interrupted"), now=now)
+        # A newly spawned child may not have acquired its lock yet. Its live
+        # Popen handle is authoritative within this supervisor's ownership.
+        recover_analysis_jobs(store, self.db_path, now=now, exclude_job_ids=self.active)
+        for candidate in store.iter_jobs("queued"):
+            if self.stopping.is_set():
+                return
+            internal = (candidate["kind"] == "fts_backfill"
+                        and candidate["admission_key"] == self.analysis.history_client.FTS_INDEX_ADMISSION_KEY)
+            if not internal:
+                if (candidate["kind"] != "analysis"
+                        or candidate["request"].get("principal", {}).get("namespace") != self.namespace):
+                    continue
+            with analysis_ownership_lock(self.db_path, owner=candidate["job_id"]) as owned:
+                if owned is None:
+                    continue
+                job = store.claim_job(candidate["job_id"], max_running_jobs=self.policy["max_running_jobs"], now=now)
+            if job is None:
+                continue
+            self.progress_pending.add(job["job_id"])
+            frozen = job["request"].get("settings", {})
+            valid_version = (frozen.get("schema_version") == self.analysis.ANALYSIS_SCHEMA_VERSION
+                             and frozen.get("algorithm_version") == self.analysis.ANALYSIS_ALGORITHM_VERSION)
+            principal = job["request"].get("principal", {})
+            event = {"message": {"chat": {"id": job["destination"]},
+                                 "from": {"id": job["requester_id"], "username": principal.get("username") or ""}}}
+            try:
+                if internal:
+                    self.analysis.validate_fts_backfill_job(job)
+                else:
+                    self.analysis.require_analysis_access(event, self.access)
+                if not valid_version:
+                    raise ValueError("Incompatible admitted version")
+                process = self.launch(job)
+            except (self.analysis.AnalysisRejection, ValueError, OSError):
+                store.finish_job(job["job_id"], generation=job["generation"], status="failed", now=now)
+                continue
+            self.active[job["job_id"]] = (job, process)
+        self.progress_pending.update(self.active)
+        if not self.progress_initialized:
+            for job in store.iter_progress_jobs():
+                self._progress_tick(store, job, now)
+            self.progress_initialized = True
+        for job_id in list(self.progress_pending):
+            job = store.get_job(job_id)
+            self.progress_pending.discard(job_id)
+            if job is not None:
+                self._progress_tick(store, job, now)
+
+    def _progress_tick(self, store, job, now):
+        try:
+            if self._report_progress(store, job, now):
+                self.progress_pending.add(job["job_id"])
+        except (Exception, SystemExit):
+            # Progress is derived UX: neither an uncertain receipt nor a failed
+            # UI checkpoint may kill scheduling or expose provider diagnostics.
+            print("Analytics progress unavailable; analysis continues.", file=sys.stderr)
+
+    def _report_progress(self, store, job, now):
+        principal = job["request"].get("principal", {})
+        if job["kind"] != "analysis" or principal.get("namespace") != self.namespace:
+            return False
+        previous = job["checkpoint"].get("progress")
+        if previous and previous["outcome"] in {"unknown", "disabled"}:
+            return False
+        if previous and previous["outcome"] == "pending" and previous["message_id"] is None:
+            return False  # Restart after a physical create with a missing receipt.
+        event = {"message": {"chat": {"id": job["destination"]},
+            "from": {"id": job["requester_id"], "username": principal.get("username") or ""}}}
+        try:
+            self.analysis.require_analysis_access(event, self.access_provider())
+        except self.analysis.AnalysisRejection:
+            return True
+        view = self.analysis.analysis_status_view(job)
+        signature = [view[key] for key in ("status", "phase", "cancel_requested", "delivery")]
+        digest = hashlib.sha256(self.analysis.canonical_json(signature).encode("utf-8")).hexdigest()
+        if previous and previous["view_digest"] == digest and previous["outcome"] == "confirmed":
+            return False
+        interval = job["request"]["settings"]["analysis"]["progress_min_interval_seconds"]
+        if previous:
+            elapsed = (now - datetime.fromisoformat(previous["updated_at"])).total_seconds()
+            if 0 <= elapsed < interval:
+                return True
+        identity = previous["message_id"] if previous else None
+        pending = {"outcome": "pending", "message_id": identity,
+            "view_digest": previous["view_digest"] if previous else None, "updated_at": now.isoformat()}
+        if not store.update_progress(job["job_id"], generation=job["generation"], expected=previous, value=pending):
+            return True
+        payload = {"chat_id": job["destination"], "text": format_analysis_status(view)}
+        if identity is not None:
+            payload["message_id"] = identity
+        try:
+            from telegram_shared.bot_api import DEFAULT_API_TIMEOUT_SECONDS
+            receipt = self.progress_api(self.token, "editMessageText" if identity is not None else "sendMessage",
+                payload, timeout_seconds=min(interval, DEFAULT_API_TIMEOUT_SECONDS))
+            message_id = receipt.get("message_id") if isinstance(receipt, dict) else None
+            chat = receipt.get("chat") if isinstance(receipt, dict) else None
+            if (type(message_id) is not int or message_id <= 0 or not isinstance(chat, dict)
+                    or str(chat.get("id")) != job["destination"] or (identity is not None and message_id != identity)):
+                raise ValueError("Invalid progress receipt")
+            outcome = {**pending, "outcome": "confirmed", "message_id": message_id, "view_digest": digest}
+        except (Exception, SystemExit):
+            outcome = {**pending, "outcome": "unknown" if identity is None else "disabled"}
+            print("Analytics progress unavailable; analysis continues.", file=sys.stderr)
+        store.update_progress(job["job_id"], generation=job["generation"], expected=pending, value=outcome)
+        return False
+
+
+def create_bridge_supervisor(config, secret_env, access):
+    return BridgeSupervisor(config, secret_env, access)
+
+
 def cmd_listen(args: argparse.Namespace) -> int:
     config = load_runtime_config()
     secret_env = resolve_bridge_secrets(config)
     token = require_bot_token_from_secrets(secret_env)
+    access = resolve_bridge_access(config) if args.run_commands else None
     offset = None if args.from_scratch else load_offset()
     print("Listening for Telegram updates.")
 
-    while True:
-        try:
-            updates = fetch_updates(token, offset, args.timeout)
-        except BaseException as exc:
-            if not is_retryable_listen_error(exc):
-                raise
-            print(
-                f"Telegram long poll timed out or failed transiently; continuing listen loop: {str(exc) or exc.__class__.__name__}",
-                file=sys.stderr,
-            )
-            if args.once:
+    with ExitStack() as resources:
+        store = None
+        supervisor = resources.enter_context(create_bridge_supervisor(config, secret_env, access)) if args.run_commands else None
+        while True:
+            if supervisor is not None and supervisor.error:
                 return 1
-            time.sleep(2)
-            continue
-        if not updates:
+            try:
+                updates = fetch_updates(token, offset, args.timeout)
+            except BaseException as exc:
+                if not is_retryable_listen_error(exc):
+                    raise
+                print(
+                    f"Telegram long poll timed out or failed transiently; continuing listen loop: {str(exc) or exc.__class__.__name__}",
+                    file=sys.stderr,
+                )
+                if args.once:
+                    return 1
+                time.sleep(2)
+                continue
+            if not updates:
+                if args.once:
+                    return 0
+                continue
+
+            for update in updates:
+                append_inbox(update)
+                print_update(update)
+                name = bridge_command_name(extract_text(update))
+                if args.run_commands and name in ANALYSIS_COMMANDS | ANALYSIS_CONTROLS:
+                    if __package__:
+                        from . import telegram_analysis as analysis
+                    else:
+                        import telegram_analysis as analysis
+                    try:
+                        try:
+                            # Denied callers cannot open or initialize analytics storage.
+                            analysis.require_analysis_access(update, access)
+                            bot_id = token.partition(":")[0]
+                            if not bot_id.isdecimal():
+                                raise ValueError("Invalid bot namespace")
+                            if name in ANALYSIS_CONTROLS:
+                                try:
+                                    control_name, job_id = parse_analysis_control(extract_text(update))
+                                except ValueError as exc:
+                                    raise analysis.AnalysisRejection("invalid_control") from exc
+                            if store is None:
+                                store = resources.enter_context(open_analysis_store(
+                                    config, initialize=supervisor is None or not supervisor.schema_ready,
+                                ))
+                            if name in ANALYSIS_CONTROLS:
+                                view = analysis.control_analysis_job(
+                                    store, config, update, command=control_name, job_id=job_id, access=access,
+                                    now=datetime.now(timezone.utc), config_dir=CONFIG_DIR,
+                                )
+                                acknowledgement = format_analysis_status(view)
+                            else:
+                                job, _ = analysis.admit_analysis_job(
+                                    store, config, update, access=access, bot_namespace=f"telegram:{bot_id}",
+                                    now=datetime.now(timezone.utc), config_dir=CONFIG_DIR,
+                                )
+                                acknowledgement = f"Задача аналитики принята в очередь: {job['job_id']}"
+                        except analysis.AnalysisRejection as exc:
+                            acknowledgement = exc.public_message
+                        next_offset = update["update_id"] + 1
+                        save_offset(next_offset)
+                        offset = next_offset
+                        if supervisor is not None:
+                            supervisor.wake()
+                    except (sqlite3.Error, OSError, ValueError):
+                        # Fail closed: no larger offset can hide this unaccepted update.
+                        # Restart/replay reuses a job already committed before an offset failure.
+                        print("Analytics admission or offset persistence failed; stopping listener before acknowledgement.", file=sys.stderr)
+                        return 1
+                    chat_id = extract_chat_id(update)
+                    if chat_id is not None:
+                        try:
+                            send_text_message(
+                                token, chat_id, acknowledgement,
+                                retry_attempts=resolve_send_message_retry_attempts(config),
+                                retry_backoff_seconds=resolve_send_message_retry_backoff_seconds(config),
+                            )
+                        except (SystemExit, OSError, TelegramApiError):
+                            print("Analytics acknowledgement failed; durable admission and offset are retained.", file=sys.stderr)
+                    continue
+
+                next_offset = update["update_id"] + 1
+                save_offset(next_offset)
+                offset = next_offset
+                if args.echo:
+                    chat_id = extract_chat_id(update)
+                    if chat_id is not None:
+                        send_text_message(token, chat_id, f"Echo: {extract_text(update)}")
+                if args.run_commands:
+                    if (supervisor is None or str(extract_chat_id(update)) not in access["chats"]
+                            or not is_user_allowed(update, allowed_user_ids=access["users"], allowed_usernames=access["usernames"])):
+                        handle_history_command(token, config, update, secret_env=secret_env, access=access)
+                    elif not supervisor.submit_legacy(update):
+                        chat_id = extract_chat_id(update)
+                        if chat_id is not None:
+                            send_text_message(token, chat_id, "Очередь команд заполнена. Повторите позже.")
+
             if args.once:
                 return 0
-            continue
-
-        for update in updates:
-            append_inbox(update)
-            print_update(update)
-            update_id = update["update_id"]
-            offset = update_id + 1
-            save_offset(offset)
-
-            if args.echo:
-                chat_id = extract_chat_id(update)
-                if chat_id is not None:
-                    send_text_message(token, chat_id, f"Echo: {extract_text(update)}")
-
-            if args.run_commands:
-                handle_history_command(token, config, update, secret_env=secret_env)
-
-        if args.once:
-            return 0
 
 
 def build_parser() -> argparse.ArgumentParser:

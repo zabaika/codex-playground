@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 import argparse
+import asyncio
 import csv
 import errno
+import fcntl
 import json
 import os
 import re
@@ -10,8 +12,11 @@ import socket
 import sqlite3
 import subprocess
 import sys
+import uuid
 from dataclasses import dataclass
 from dataclasses import field
+from dataclasses import replace
+from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -23,6 +28,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from common import sqlite as common_sqlite
+from common import process as common_process
 from common.process import awake_time
 from telegram_shared import secrets as shared_secrets
 from telegram_shared.async_retry import AsyncCleanupError, AsyncRetryError, await_with_awake_timeout, retry_async
@@ -52,6 +58,9 @@ DEFAULT_CONNECTION_TIMEOUT_SECONDS = 60
 DEFAULT_CONNECTION_ATTEMPTS = 3
 DEFAULT_CONNECTION_RETRY_BACKOFF_SECONDS = 2
 DEFAULT_CONNECTION_CLEANUP_TIMEOUT_SECONDS = 10
+# Internal index protocol version, independent of operator sizing settings.
+FTS_INDEX_VERSION = 1
+FTS_INDEX_ADMISSION_KEY = f"internal:fts:v{FTS_INDEX_VERSION}"
 RETRYABLE_CONNECTION_ERRNOS = frozenset(
     getattr(errno, name) for name in (
         "ETIMEDOUT", "ECONNRESET", "ECONNABORTED", "ECONNREFUSED", "EPIPE",
@@ -160,10 +169,88 @@ CREATE TABLE IF NOT EXISTS ai_usage_log (
     error TEXT
 );
 
-CREATE INDEX IF NOT EXISTS idx_messages_channel_date ON messages(channel_id, date_utc DESC);
+CREATE INDEX IF NOT EXISTS idx_messages_channel_date ON messages(channel_id, date_utc DESC, message_id DESC);
 CREATE INDEX IF NOT EXISTS idx_media_assets_ocr_status ON media_assets(ocr_status, created_at);
 CREATE INDEX IF NOT EXISTS idx_ai_usage_log_created_at ON ai_usage_log(created_at DESC);
 """
+
+ANALYSIS_SCHEMA_STATEMENTS = (
+    """CREATE TABLE IF NOT EXISTS analysis_jobs (
+        job_id TEXT NOT NULL PRIMARY KEY CHECK(length(trim(job_id)) > 0),
+        kind TEXT NOT NULL CHECK(kind IN ('analysis','fts_backfill')),
+        command TEXT,
+        requester_id TEXT,
+        destination TEXT,
+        admission_key TEXT UNIQUE,
+        request_json TEXT NOT NULL,
+        request_hash TEXT NOT NULL,
+        accepted_at TEXT NOT NULL,
+        cutoff_at TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        finished_at TEXT,
+        status TEXT NOT NULL DEFAULT 'queued'
+            CHECK(status IN ('queued','running','completed','partial','failed','timed_out','cancelled','interrupted')),
+        phase TEXT NOT NULL DEFAULT 'sync',
+        generation INTEGER NOT NULL DEFAULT 0 CHECK(typeof(generation)='integer' AND generation >= 0),
+        cancel_requested INTEGER NOT NULL DEFAULT 0 CHECK(cancel_requested IN (0,1)),
+        llm_calls INTEGER NOT NULL DEFAULT 0 CHECK(typeof(llm_calls)='integer' AND llm_calls >= 0),
+        provider_requests INTEGER NOT NULL DEFAULT 0 CHECK(typeof(provider_requests)='integer' AND provider_requests >= 0),
+        used_tokens INTEGER NOT NULL DEFAULT 0 CHECK(typeof(used_tokens)='integer' AND used_tokens >= 0),
+        reserved_tokens INTEGER NOT NULL DEFAULT 0 CHECK(typeof(reserved_tokens)='integer' AND reserved_tokens >= 0),
+        downloaded_messages INTEGER NOT NULL DEFAULT 0 CHECK(typeof(downloaded_messages)='integer' AND downloaded_messages >= 0),
+        intermediate_bytes INTEGER NOT NULL DEFAULT 0 CHECK(typeof(intermediate_bytes)='integer' AND intermediate_bytes >= 0),
+        evidence_records INTEGER NOT NULL DEFAULT 0 CHECK(typeof(evidence_records)='integer' AND evidence_records >= 0),
+        checkpoint_json TEXT NOT NULL DEFAULT '{}',
+        result_json TEXT,
+        delivery_json TEXT NOT NULL DEFAULT '{}',
+        full_path TEXT,
+        full_hash TEXT,
+        CHECK((kind='analysis' AND command IS NOT NULL AND command IN ('topics','search','qa'))
+              OR (kind='fts_backfill' AND command IS NULL)),
+        CHECK((full_path IS NULL) = (full_hash IS NULL))
+    )""",
+    """CREATE TABLE IF NOT EXISTS analysis_batches (
+        batch_id TEXT NOT NULL PRIMARY KEY CHECK(length(trim(batch_id)) > 0),
+        job_id TEXT NOT NULL REFERENCES analysis_jobs(job_id) ON DELETE CASCADE,
+        step_key TEXT NOT NULL CHECK(length(trim(step_key)) > 0),
+        kind TEXT NOT NULL CHECK(kind IN ('select','expand_query','extract','link','merge','synthesize')),
+        state TEXT NOT NULL DEFAULT 'planned' CHECK(state IN ('planned','running','succeeded','failed','skipped')),
+        input_digest TEXT,
+        cache_key TEXT,
+        payload_json TEXT NOT NULL DEFAULT '{}',
+        attempts_json TEXT NOT NULL DEFAULT '[]',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE(job_id,step_key)
+    )""",
+    """CREATE TABLE IF NOT EXISTS analysis_evidence (
+        record_id TEXT NOT NULL PRIMARY KEY CHECK(length(trim(record_id)) > 0),
+        batch_id TEXT NOT NULL REFERENCES analysis_batches(batch_id) ON DELETE CASCADE,
+        record_type TEXT NOT NULL CHECK(record_type IN ('event','claim','problem','question','answer','experience','opinion')),
+        topic_key TEXT,
+        payload_json TEXT NOT NULL
+    )""",
+    """CREATE TABLE IF NOT EXISTS analysis_inputs (
+        batch_id TEXT NOT NULL REFERENCES analysis_batches(batch_id) ON DELETE CASCADE,
+        channel_id INTEGER NOT NULL CHECK(typeof(channel_id)='integer'),
+        message_id INTEGER NOT NULL CHECK(typeof(message_id)='integer' AND message_id > 0),
+        fragment_start INTEGER NOT NULL DEFAULT 0 CHECK(typeof(fragment_start)='integer' AND fragment_start >= 0),
+        fragment_end INTEGER NOT NULL DEFAULT 0 CHECK(typeof(fragment_end)='integer' AND fragment_end >= 0),
+        role TEXT NOT NULL CHECK(role IN ('selected','context')),
+        date_utc TEXT NOT NULL,
+        content_digest TEXT NOT NULL,
+        PRIMARY KEY(batch_id,channel_id,message_id,fragment_start,fragment_end,role),
+        CHECK((fragment_start=0 AND fragment_end=0) OR fragment_start < fragment_end)
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_analysis_jobs_queue ON analysis_jobs(status,created_at)",
+    "CREATE INDEX IF NOT EXISTS idx_analysis_batches_job_state ON analysis_batches(job_id,state,step_key)",
+    "CREATE INDEX IF NOT EXISTS idx_analysis_batches_cache ON analysis_batches(cache_key,state)",
+    "CREATE INDEX IF NOT EXISTS idx_analysis_evidence_batch ON analysis_evidence(batch_id)",
+    "CREATE INDEX IF NOT EXISTS idx_analysis_evidence_topic ON analysis_evidence(topic_key,record_id)",
+    "CREATE INDEX IF NOT EXISTS idx_analysis_inputs_source ON analysis_inputs(channel_id,message_id)",
+)
+
 
 MESSAGES_TABLE_SQL = """
 CREATE TABLE messages (
@@ -434,6 +521,131 @@ def init_db(conn: sqlite3.Connection) -> None:
     conn.executescript(SCHEMA_SQL)
     migrate_sqlite_schema(conn)
     conn.commit()
+    # Execute DDL statements individually: executescript would implicitly commit
+    # an enclosing transaction and expose a partially created analytic schema.
+    with common_sqlite.write_tx(conn, immediate=True):
+        for statement in ANALYSIS_SCHEMA_STATEMENTS:
+            conn.execute(statement)
+        key = [row for row in conn.execute("PRAGMA index_xinfo(idx_messages_channel_date)") if row[5]]
+        if [row[2] for row in key] != ["channel_id", "date_utc", "message_id"] or key[1][3] != key[2][3]:
+            conn.execute("DROP INDEX IF EXISTS idx_messages_channel_date")
+            conn.execute("CREATE INDEX idx_messages_channel_date ON messages(channel_id,date_utc DESC,message_id DESC)")
+        if fts5_available(conn):
+            conn.execute("""CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
+                channel_id UNINDEXED,message_id UNINDEXED,text,ocr_text,tokenize='unicode61')""")
+            row = conn.execute("SELECT checkpoint_json FROM analysis_jobs WHERE admission_key=?", (FTS_INDEX_ADMISSION_KEY,)).fetchone()
+            if row and json.loads(row[0]).get("fts", {}).get("schema_version") != conn.execute("PRAGMA schema_version").fetchone()[0]:
+                _invalidate_fts_index_no_tx(conn, "schema_changed")
+        else:
+            _invalidate_fts_index_no_tx(conn, "fts_unavailable")
+
+
+def fts5_available(conn: sqlite3.Connection) -> bool:
+    return any(row[0] == "fts5" for row in conn.execute("PRAGMA module_list"))
+
+
+def _message_fts_enabled(conn: sqlite3.Connection) -> bool:
+    return fts5_available(conn) and conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='messages_fts'",
+    ).fetchone() is not None
+
+
+def _invalidate_fts_index_no_tx(conn: sqlite3.Connection, reason: str) -> None:
+    if conn.execute("SELECT 1 FROM sqlite_master WHERE name='analysis_jobs'").fetchone() is None:
+        return
+    row = conn.execute("SELECT job_id,checkpoint_json FROM analysis_jobs WHERE kind='fts_backfill' AND admission_key=?",
+                       (FTS_INDEX_ADMISSION_KEY,)).fetchone()
+    if row is None:
+        return
+    checkpoint = json.loads(row[1])
+    state = checkpoint.setdefault("fts", {})
+    if state.get("state") == "invalid" and state.get("reason") == reason:
+        return
+    state.update(state="invalid", reason=reason)
+    conn.execute("UPDATE analysis_jobs SET checkpoint_json=?,updated_at=? WHERE job_id=?",
+                 (json.dumps(checkpoint, ensure_ascii=False, allow_nan=False, sort_keys=True, separators=(",", ":")), now_utc(), row[0]))
+
+
+def require_fts_ready(conn: sqlite3.Connection) -> dict[str, Any]:
+    if not fts5_available(conn):
+        raise ValueError("fts_unavailable")
+    if not _message_fts_enabled(conn):
+        raise ValueError("fts_not_ready")
+    row = conn.execute("SELECT status,checkpoint_json FROM analysis_jobs WHERE admission_key=? AND kind='fts_backfill'",
+                       (FTS_INDEX_ADMISSION_KEY,)).fetchone()
+    if row is None:
+        raise ValueError("fts_not_ready")
+    state = json.loads(row[1]).get("fts", {})
+    if (state.get("version") != FTS_INDEX_VERSION or state.get("state") == "invalid"
+            or state.get("schema_version") != conn.execute("PRAGMA schema_version").fetchone()[0]):
+        raise ValueError("fts_rebuild_required")
+    if row[0] != "completed" or state.get("state") != "ready":
+        raise ValueError("fts_not_ready")
+    return state
+
+
+def backfill_fts_page(store, job_id: str, *, generation: int) -> dict[str, Any]:
+    """Read and replace the current source revision under one short writer lock."""
+    conn = store.conn
+    with common_sqlite.write_tx(conn, immediate=True):
+        job = store.require_running(job_id, generation=generation)
+        if job["kind"] != "fts_backfill" or job["admission_key"] != FTS_INDEX_ADMISSION_KEY:
+            raise ValueError("Invalid internal index job")
+        if not _message_fts_enabled(conn):
+            raise ValueError("fts_unavailable")
+        state = job["checkpoint"]["fts"]
+        if (state["state"] != "building" or state["version"] != FTS_INDEX_VERSION
+                or state["schema_version"] != conn.execute("PRAGMA schema_version").fetchone()[0]):
+            raise ValueError("fts_rebuild_required")
+        if state["needs_clear"]:
+            conn.execute("DELETE FROM messages_fts")
+            state["upper_rowid"] = conn.execute("SELECT COALESCE(MAX(rowid),0) FROM messages").fetchone()[0]
+            state["needs_clear"] = False
+        size = max(1, job["request"]["settings"]["sync"]["batch_size"])
+        rows = conn.execute("""SELECT rowid,channel_id,message_id FROM messages
+            WHERE rowid>? AND rowid<=? ORDER BY rowid LIMIT ?""", (state["cursor"], state["upper_rowid"], size)).fetchall()
+        for row in rows:
+            _refresh_message_fts_no_tx(conn, row[1], row[2])
+        state["indexed_messages"] += len(rows)
+        if rows:
+            state["cursor"] = rows[-1][0]
+        if len(rows) < size:
+            state["state"] = "ready"
+        _save_history_checkpoint_no_tx(store, job)
+        if state["state"] == "ready":
+            conn.execute("UPDATE analysis_jobs SET status='completed',finished_at=? WHERE job_id=?", (now_utc(), job_id))
+    return state
+
+
+def _refresh_message_fts_no_tx(conn: sqlite3.Connection, channel_id: int, message_id: int) -> None:
+    if not _message_fts_enabled(conn):
+        _invalidate_fts_index_no_tx(conn, "writer_without_index")
+        return
+    conn.execute("""INSERT OR REPLACE INTO messages_fts(rowid,channel_id,message_id,text,ocr_text)
+        SELECT m.rowid,m.channel_id,m.message_id,m.text,
+            COALESCE((SELECT group_concat(ocr_text,char(10)) FROM
+                (SELECT ocr_text FROM media_assets WHERE channel_id=m.channel_id AND message_id=m.message_id
+                 AND ocr_text IS NOT NULL ORDER BY ordinal)), '')
+        FROM messages m WHERE m.channel_id=? AND m.message_id=?""", (channel_id, message_id))
+
+
+def delete_history_message(conn: sqlite3.Connection, channel_id: int, message_id: int) -> bool:
+    with common_sqlite.write_tx(conn):
+        if _message_fts_enabled(conn):
+            conn.execute("""DELETE FROM messages_fts WHERE rowid=(
+                SELECT rowid FROM messages WHERE channel_id=? AND message_id=?)""", (channel_id, message_id))
+        else:
+            _invalidate_fts_index_no_tx(conn, "writer_without_index")
+        return conn.execute("DELETE FROM messages WHERE channel_id=? AND message_id=?", (channel_id, message_id)).rowcount == 1
+
+
+def delete_media_asset(conn: sqlite3.Connection, channel_id: int, message_id: int, ordinal: int) -> bool:
+    with common_sqlite.write_tx(conn):
+        changed = conn.execute("DELETE FROM media_assets WHERE channel_id=? AND message_id=? AND ordinal=?",
+                               (channel_id, message_id, ordinal)).rowcount == 1
+        if changed:
+            _refresh_message_fts_no_tx(conn, channel_id, message_id)
+        return changed
 
 
 def optional_text(value: Any) -> str | None:
@@ -480,6 +692,9 @@ def migrate_ai_usage_log_schema(conn: sqlite3.Connection) -> None:
         "output_chars": "INTEGER",
         "response_status": "TEXT",
         "incomplete_reason": "TEXT",
+        "job_id": "TEXT",
+        "batch_id": "TEXT",
+        "attempt_id": "TEXT",
     }
     for column_name, column_type in ai_usage_additions.items():
         if ai_usage_columns and column_name not in ai_usage_columns:
@@ -545,7 +760,7 @@ def migrate_sqlite_schema(conn: sqlite3.Connection) -> None:
     )
     conn.execute("DROP TABLE media_assets_old")
     conn.execute("DROP TABLE messages_old")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_messages_channel_date ON messages(channel_id, date_utc DESC)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_messages_channel_date ON messages(channel_id, date_utc DESC, message_id DESC)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_media_assets_ocr_status ON media_assets(ocr_status, created_at)")
     conn.execute("UPDATE channels SET access_hash = NULL WHERE access_hash = ''")
     conn.execute("PRAGMA foreign_keys = ON")
@@ -593,6 +808,75 @@ def require_tesseract(runtime: RuntimeConfig) -> str:
 def make_session_path(runtime: RuntimeConfig, auth_mode: str) -> Path:
     session_name = runtime.user_session_name if auth_mode == "user" else runtime.bot_session_name
     return SESSION_DIR / session_name
+
+
+def canonical_session_identity(runtime: RuntimeConfig, auth_mode: str) -> Path:
+    path = str(make_session_path(runtime, auth_mode))
+    # SQLiteSession appends .session, rather than replacing an existing suffix.
+    return Path(path if path.endswith(".session") else path + ".session").resolve()
+
+
+async def _acquire_session_lock(runtime: RuntimeConfig, auth_mode: str) -> int:
+    identity = canonical_session_identity(runtime, auth_mode)
+    identity.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(str(identity) + ".lock", os.O_CREAT | os.O_RDWR, 0o600)
+    deadline = common_process.continuous_time() + runtime.connection_timeout_seconds
+    interval = common_process.load_process_config().poll_interval_seconds
+    try:
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                return fd
+            except BlockingIOError:
+                remaining = deadline - common_process.continuous_time()
+                if remaining <= 0:
+                    raise TimeoutError("Telegram session is already in use") from None
+                await asyncio.sleep(min(interval, remaining))
+    except BaseException:
+        os.close(fd)
+        raise
+
+
+@asynccontextmanager
+async def open_telethon_session(runtime: RuntimeConfig, auth_mode: str, *, managed_requests: bool = False):
+    fd = await _acquire_session_lock(runtime, auth_mode)
+    release = True
+    try:
+        try:
+            client = (await open_telethon_client(runtime, auth_mode, managed_requests=True)
+                      if managed_requests else await open_telethon_client(runtime, auth_mode))
+        except TelegramConnectionError as exc:
+            if isinstance(exc.cause, AsyncCleanupError):
+                release = False
+            raise
+        try:
+            try:
+                if not managed_requests:
+                    await await_with_awake_timeout(client.__aenter__(), runtime.connection_timeout_seconds,
+                                                   cleanup_timeout_seconds=runtime.connection_cleanup_timeout_seconds)
+            except AsyncCleanupError:
+                release = False
+                raise
+            try:
+                yield client
+            except AsyncCleanupError:
+                release = False
+                raise
+        finally:
+            try:
+                cleanup = client.disconnect() if managed_requests else client.__aexit__(*sys.exc_info())
+                await await_with_awake_timeout(cleanup, runtime.connection_cleanup_timeout_seconds,
+                                               cleanup_timeout_seconds=runtime.connection_cleanup_timeout_seconds)
+            except BaseException as exc:
+                release = False
+                if isinstance(exc, (KeyboardInterrupt, SystemExit)):
+                    raise
+                raise AsyncCleanupError("Telegram session cleanup did not complete") from None
+    finally:
+        if release:
+            os.close(fd)
+        # On uncertain cleanup keep this raw OS descriptor owned until the fatal
+        # worker exits. Releasing it would permit another still-overlapping client.
 
 
 def normalize_auth_mode(auth_mode: str) -> str:
@@ -661,7 +945,7 @@ def is_retryable_connection_error(exc: Exception) -> bool:
     return False
 
 
-async def open_telethon_client(runtime: RuntimeConfig, auth_mode: str) -> Any:
+async def open_telethon_client(runtime: RuntimeConfig, auth_mode: str, *, managed_requests: bool = False) -> Any:
     if not runtime.api_id or not runtime.api_hash:
         raise SystemExit(
             "Missing Telethon credentials. Fill [telethon].api_id and [secrets].api_hash in runtime.local.toml."
@@ -682,10 +966,26 @@ async def open_telethon_client(runtime: RuntimeConfig, auth_mode: str) -> Any:
     async def connect_once() -> Any:
         nonlocal attempt_started
         attempt_started = awake_time()
-        client = TelegramClient(str(make_session_path(runtime, auth_mode)), int(runtime.api_id), runtime.api_hash)
+        # Analytics owns page retries, FloodWait and the outer TTL. Zero disables
+        # SDK retry multiplication; legacy callers retain Telethon defaults.
+        options = {"request_retries": 0, "connection_retries": 0, "retry_delay": 0,
+                   "auto_reconnect": False, "flood_sleep_threshold": 0,
+                   "raise_last_call_error": True, "receive_updates": False} if managed_requests else {}
+        client = TelegramClient(str(make_session_path(runtime, auth_mode)), int(runtime.api_id), runtime.api_hash, **options)
+
+        async def start_client():
+            if managed_requests and auth_mode == "user":
+                # A background analytics task may reuse an authenticated session,
+                # but must not initiate phone/OTP prompts through .start().
+                await client.connect()
+                if await client.get_me() is None:
+                    raise PermissionError("Telegram user session is not authorized")
+            else:
+                await client.start(**start_args)
+
         try:
             await await_with_awake_timeout(
-                client.start(**start_args), runtime.connection_timeout_seconds,
+                start_client(), runtime.connection_timeout_seconds,
                 cleanup_timeout_seconds=runtime.connection_cleanup_timeout_seconds,
             )
             return client
@@ -703,11 +1003,19 @@ async def open_telethon_client(runtime: RuntimeConfig, auth_mode: str) -> Any:
         summary = TelegramConnectionError(exc, attempt, runtime.connection_attempts).operator_summary()
         print(f"{summary}; awake_elapsed={awake_time() - attempt_started:.1f}s", file=sys.stderr, flush=True)
 
+    def retryable_startup(exc: Exception) -> bool:
+        if is_retryable_connection_error(exc):
+            return True
+        if managed_requests:
+            from telethon import errors
+            return isinstance(exc, (errors.ServerError, errors.InvalidDCError))
+        return False
+
     try:
         return await retry_async(
             connect_once, max_attempts=runtime.connection_attempts,
             backoff_seconds=runtime.connection_retry_backoff_seconds,
-            is_retryable=is_retryable_connection_error, on_failure=log_failure,
+            is_retryable=retryable_startup, on_failure=log_failure,
             on_recovery=lambda attempt: print(
                 f"Telegram connection recovered (attempts: {attempt}/{runtime.connection_attempts})",
                 file=sys.stderr, flush=True,
@@ -981,6 +1289,14 @@ def minimal_message_json(message: Any, media_kind: str | None, text: str) -> str
         "forwards": getattr(message, "forwards", None),
         "replies": getattr(getattr(message, "replies", None), "replies", None),
     }
+    reply_id = getattr(getattr(message, "reply_to", None), "reply_to_msg_id", None)
+    if type(reply_id) is int and reply_id > 0:
+        payload["reply_to"] = {"reply_to_msg_id": reply_id}
+        peer = getattr(message.reply_to, "reply_to_peer_id", None)
+        if peer is not None:
+            identity = {key: getattr(peer, key) for key in ("channel_id", "chat_id", "user_id")
+                        if type(getattr(peer, key, None)) is int}
+            payload["reply_to"]["reply_to_peer_id"] = identity or {"type": type(peer).__name__}
     return safe_to_json(payload)
 
 
@@ -1027,6 +1343,16 @@ async def download_media_if_present(runtime: RuntimeConfig, client: Any, message
     return str(path), size
 
 
+class TelegramPeerIdentityError(ValueError):
+    """The legacy numeric storage key is already owned by another peer kind."""
+
+
+def _telegram_peer_kind(name: str) -> str | None:
+    return {"channel": "channel", "channelforbidden": "channel",
+            "chat": "chat", "chatempty": "chat", "chatforbidden": "chat",
+            "user": "user", "userempty": "user"}.get(name.casefold())
+
+
 def upsert_channel(conn: sqlite3.Connection, entity: Any) -> None:
     now = now_utc()
     with common_sqlite.write_tx(conn):
@@ -1035,6 +1361,11 @@ def upsert_channel(conn: sqlite3.Connection, entity: Any) -> None:
 
 def _upsert_channel_no_tx(conn: sqlite3.Connection, entity: Any, now: str | None = None) -> None:
     effective_now = now or now_utc()
+    kind = _telegram_peer_kind(type(entity).__name__)
+    previous = conn.execute("SELECT channel_type FROM channels WHERE channel_id=?", (entity.id,)).fetchone()
+    previous_kind = _telegram_peer_kind(previous[0]) if previous else None
+    if kind is not None and previous_kind is not None and kind != previous_kind:
+        raise TelegramPeerIdentityError("Telegram peer identifier belongs to another peer kind")
     conn.execute(
         """
         INSERT INTO channels (
@@ -1083,13 +1414,39 @@ def _upsert_message_no_tx(
     downloaded_path: str | None,
     downloaded_size: int | None,
 ) -> None:
+    prepared = prepare_history_write(StagedMessageWrite(
+        entity, message, sender_username, sender_display_name, downloaded_path, downloaded_size,
+    ))
+    _upsert_prepared_message_no_tx(conn, prepared)
+
+
+def prepare_history_write(item: StagedMessageWrite) -> dict[str, Any]:
+    """Normalize once so a bounded pending page can survive process restart."""
+    entity, message = item.entity, item.message
     text = message_text(message)
     media_kind = message_media_kind(message)
     imported_at = now_utc()
     content_hash = f"{getattr(message, 'id')}:{serialize_datetime(getattr(message, 'edit_date', None))}:{len(text)}:{media_kind or '-'}"
     grouped_id = getattr(message, "grouped_id", None)
-    grouped_id_value = str(grouped_id) if grouped_id is not None else None
+    values = [
+        entity.id, message.id, str(grouped_id) if grouped_id is not None else None,
+        serialize_datetime(getattr(message, "date", None)) or imported_at,
+        serialize_datetime(getattr(message, "edit_date", None)), optional_text(getattr(message, "sender_id", None)),
+        optional_text(item.sender_username), optional_text(item.sender_display_name), text,
+        getattr(message, "views", None), getattr(message, "forwards", None),
+        getattr(getattr(message, "replies", None), "replies", None),
+        1 if getattr(message, "media", None) else 0, media_kind,
+        minimal_message_json(message, media_kind, text), content_hash, imported_at,
+    ]
+    media = None
+    if item.downloaded_path or media_kind:
+        media = [entity.id, message.id, media_kind or "media", optional_text(item.downloaded_path),
+                 optional_text(media_kind), item.downloaded_size,
+                 "pending" if item.downloaded_path else "skipped", imported_at]
+    return {"message": values, "media": media}
 
+
+def _upsert_prepared_message_no_tx(conn: sqlite3.Connection, prepared: dict[str, Any]) -> None:
     conn.execute(
         """
         INSERT INTO messages (
@@ -1113,28 +1470,9 @@ def _upsert_message_no_tx(
             content_hash = excluded.content_hash,
             imported_at = excluded.imported_at
         """,
-        (
-            entity.id,
-            message.id,
-            grouped_id_value,
-            serialize_datetime(getattr(message, "date", None)) or imported_at,
-            serialize_datetime(getattr(message, "edit_date", None)),
-            optional_text(getattr(message, "sender_id", None)),
-            optional_text(sender_username),
-            optional_text(sender_display_name),
-            text,
-            getattr(message, "views", None),
-            getattr(message, "forwards", None),
-            getattr(getattr(message, "replies", None), "replies", None),
-            1 if getattr(message, "media", None) else 0,
-            media_kind,
-            minimal_message_json(message, media_kind, text),
-            content_hash,
-            imported_at,
-        ),
+        prepared["message"],
     )
-
-    if downloaded_path or media_kind:
+    if prepared["media"] is not None:
         conn.execute(
             """
             INSERT INTO media_assets (
@@ -1151,17 +1489,13 @@ def _upsert_message_no_tx(
                     ELSE media_assets.ocr_status
                 END
             """,
-            (
-                entity.id,
-                message.id,
-                media_kind or "media",
-                optional_text(downloaded_path),
-                optional_text(media_kind),
-                downloaded_size,
-                "pending" if downloaded_path else "skipped",
-                imported_at,
-            ),
+            prepared["media"],
         )
+    elif not prepared["message"][12]:
+        # A confirmed media removal must not leave old OCR attached to the new
+        # source revision. Local files remain operator-owned artifacts.
+        conn.execute("DELETE FROM media_assets WHERE channel_id=? AND message_id=?", tuple(prepared["message"][:2]))
+    _refresh_message_fts_no_tx(conn, prepared["message"][0], prepared["message"][1])
 
 
 def update_sync_state(
@@ -1226,6 +1560,668 @@ def flush_staged_message_writes(conn: sqlite3.Connection, staged_writes: list[St
                 item.downloaded_path,
                 item.downloaded_size,
             )
+
+
+# Telethon's GetHistory iterator uses physical chunks of at most 100 messages.
+TELEGRAM_HISTORY_PAGE_LIMIT = 100
+
+
+def _active_analysis_history_source(store, job_id: str, generation: int, channel_id: int):
+    if __package__:
+        from .analysis_store import StaleGenerationError
+    else:
+        from analysis_store import StaleGenerationError
+    job = store.get_job(job_id)
+    if job is None or job["generation"] != generation or job["status"] != "running":
+        raise StaleGenerationError("Analysis history generation changed")
+    if job["cancel_requested"]:
+        raise InterruptedError("Analysis history cancelled")
+    source = job["checkpoint"].get("history", {}).get("sources", {}).get(str(channel_id))
+    if not isinstance(source, dict) or source.get("mode") not in {"backfill", "update"}:
+        raise ValueError("Invalid analysis history source plan")
+    return job, source
+
+
+def _analysis_download_cap(settings: dict[str, Any]) -> int:
+    cap, sync_cap = settings["analysis"]["max_messages"], settings["sync"]["sync_limit"]
+    return min(cap, sync_cap) if sync_cap > 0 else cap
+
+
+def _save_history_checkpoint_no_tx(store, job, *, downloaded_delta=0, downloaded_release=0):
+    if __package__:
+        from .analysis_store import encode_payload
+    else:
+        from analysis_store import encode_payload
+    encoded = encode_payload(job["checkpoint"], max_bytes=job["request"]["settings"]["analysis"]["max_intermediate_bytes"])
+    store._write_checkpoint_no_tx(job["job_id"], encoded, generation=job["generation"],
+                                  downloaded_delta=downloaded_delta, downloaded_release=downloaded_release)
+
+
+def reserve_analysis_history_page(store, job_id: str, *, generation: int, channel_id: int, limit: int):
+    if type(limit) is not int or limit < 1:
+        raise ValueError("Invalid history page limit")
+    with common_sqlite.write_tx(store.conn, immediate=True):
+        job, source = _active_analysis_history_source(store, job_id, generation, channel_id)
+        if "page" in source:
+            raise ValueError("A received history page is still pending")
+        if source["state"] == "complete":
+            return None
+        previous = source.pop("reservation", None)
+        if previous is not None:
+            history = job["checkpoint"]["history"]
+            history["unknown_download_messages"] = history.get("unknown_download_messages", 0) + previous["allowance"]
+        settings = job["request"]["settings"]
+        remaining = _analysis_download_cap(settings) - job["downloaded_messages"]
+        if remaining <= 0:
+            source.update(state="partial", reason="download_cap")
+            _save_history_checkpoint_no_tx(store, job)
+            return None
+        allowance = min(limit, settings["analysis"]["history_page_size"], TELEGRAM_HISTORY_PAGE_LIMIT, remaining)
+        reservation = {"token": uuid.uuid4().hex, "allowance": allowance, "cursor": source["cursor"]}
+        source["reservation"] = reservation
+        source["state"] = "running"
+        _save_history_checkpoint_no_tx(store, job, downloaded_delta=allowance)
+        return reservation
+
+
+def stage_analysis_history_page(store, job_id: str, *, generation: int, channel_id: int,
+                                token: str, items: list[dict[str, Any]], complete: bool):
+    if __package__:
+        from .analysis_store import StaleGenerationError
+    else:
+        from analysis_store import StaleGenerationError
+    if not isinstance(items, list) or type(complete) is not bool or (not items and not complete):
+        raise ValueError("Invalid received history page")
+    with common_sqlite.write_tx(store.conn, immediate=True):
+        job, source = _active_analysis_history_source(store, job_id, generation, channel_id)
+        reservation = source.get("reservation")
+        if not reservation or reservation["token"] != token or reservation["cursor"] != source["cursor"]:
+            raise StaleGenerationError("Analysis history reservation changed")
+        if len(items) > reservation["allowance"]:
+            raise ValueError("Received history page exceeds its allowance")
+        previous = source["cursor"] or None
+        for item in items:
+            message_id = item.get("id")
+            row = item.get("row")
+            if type(message_id) is not int or message_id < 1 or (previous is not None and message_id >= previous):
+                raise ValueError("History page IDs must be strictly descending")
+            previous = message_id
+            if row is not None and (not isinstance(row, dict) or set(row) != {"message", "media"}
+                    or not isinstance(row["message"], list) or len(row["message"]) != 17
+                    or row["message"][:2] != [channel_id, message_id]
+                    or (row["media"] is not None and (not isinstance(row["media"], list) or len(row["media"]) != 8
+                                                       or row["media"][:2] != [channel_id, message_id]))):
+                raise ValueError("Invalid prepared history message")
+        source["page"] = {"items": items, "position": 0, "complete": complete}
+        source["returned_messages"] = source.get("returned_messages", 0) + len(items)
+        del source["reservation"]
+        _save_history_checkpoint_no_tx(store, job, downloaded_release=reservation["allowance"] - len(items))
+
+
+def _mark_history_source_complete_no_tx(conn, entity, source):
+    now = now_utc()
+    previous = conn.execute("SELECT last_backfill_message_id,last_tail_message_id FROM sync_state WHERE channel_id=?", (entity.id,)).fetchone()
+    backfill = source["mode"] == "backfill"
+    old_id = previous[0 if backfill else 1] if previous else None
+    highest = max(old_id or 0, source.get("highest_seen_id") or 0) or None
+    _update_sync_state_no_tx(conn, entity.id,
+                             last_backfill_message_id=highest if backfill else None,
+                             last_tail_message_id=highest if not backfill else None,
+                             last_full_sync_at=now if backfill else None,
+                             last_tail_at=now if not backfill else None)
+
+
+def drain_analysis_history_page(store, job_id: str, *, generation: int, entity: Any):
+    with common_sqlite.write_tx(store.conn, immediate=True):
+        job, source = _active_analysis_history_source(store, job_id, generation, entity.id)
+        pending = source.get("page")
+        if pending is None:
+            return source
+        start = pending["position"]
+        batch = max(1, job["request"]["settings"]["sync"]["batch_size"])
+        part = pending["items"][start:start + batch]
+        _upsert_channel_no_tx(store.conn, entity)
+        for item in part:
+            if item["row"] is not None:
+                _upsert_prepared_message_no_tx(store.conn, item["row"])
+                source["highest_seen_id"] = max(source.get("highest_seen_id") or 0, item["id"])
+        if part:
+            source["cursor"] = part[-1]["id"]
+        pending["position"] += len(part)
+        if pending["position"] >= len(pending["items"]):
+            if pending["complete"]:
+                source["state"] = "complete"
+                _mark_history_source_complete_no_tx(store.conn, entity, source)
+            del source["page"]
+        _save_history_checkpoint_no_tx(store, job)
+    return source
+
+
+class AnalysisHistoryRequestError(RuntimeError):
+    def __init__(self, reason: str, *, state: str = "partial"):
+        super().__init__(reason)
+        self.reason, self.state = reason, state
+
+
+def _analysis_source_access_error(entity):
+    name = type(entity).__name__
+    if name in {"ChatForbidden", "ChannelForbidden"}:
+        return AnalysisHistoryRequestError("source_unavailable", state="failed")
+    if _telegram_peer_kind(name) == "user":
+        return AnalysisHistoryRequestError("unsupported_source_type", state="failed")
+    return None
+
+
+def _analysis_history_job(store, job_id, generation):
+    if __package__:
+        from .analysis_store import StaleGenerationError
+    else:
+        from analysis_store import StaleGenerationError
+    job = store.get_job(job_id)
+    if job is None or job["generation"] != generation or job["status"] != "running":
+        raise StaleGenerationError("Analysis history generation changed")
+    if job["cancel_requested"]:
+        raise InterruptedError("Analysis history cancelled")
+    return job
+
+
+def _begin_analysis_source(store, job_id, generation, channel, entity, mode):
+    if mode not in {"backfill", "update"}:
+        raise ValueError("Invalid analysis history mode")
+    with common_sqlite.write_tx(store.conn, immediate=True):
+        job = _analysis_history_job(store, job_id, generation)
+        history = job["checkpoint"].setdefault("history", {})
+        refs = history.setdefault("refs", {})
+        if channel in refs and refs[channel] != entity.id:
+            raise ValueError("Analysis source identity changed")
+        refs[channel] = entity.id
+        sources = history.setdefault("sources", {})
+        source = sources.get(str(entity.id))
+        kind = _telegram_peer_kind(type(entity).__name__)
+        if source is not None and source.get("peer_kind") is not None and kind is not None and source["peer_kind"] != kind:
+            raise TelegramPeerIdentityError("Analysis source peer kind changed")
+        if source is None:
+            source = {"mode": mode, "stop_id": latest_stored_message_id(store.conn, entity.id) if mode == "update" else None,
+                      "cursor": 0, "state": "running", "returned_messages": 0, "peer_kind": kind}
+            sources[str(entity.id)] = source
+        elif source["mode"] != mode:
+            raise ValueError("Analysis source mode changed")
+        elif source["state"] != "complete":
+            source["state"] = "running"
+            source.pop("reason", None)
+        _upsert_channel_no_tx(store.conn, entity)
+        _save_history_checkpoint_no_tx(store, job)
+    return source
+
+
+def _record_analysis_source_error(store, job_id, generation, channel, error, channel_id=None):
+    with common_sqlite.write_tx(store.conn, immediate=True):
+        job = _analysis_history_job(store, job_id, generation)
+        history = job["checkpoint"].setdefault("history", {})
+        channel_id = channel_id if channel_id is not None else history.get("refs", {}).get(channel)
+        source = history.get("sources", {}).get(str(channel_id))
+        if source is None:
+            source = {"state": error.state, "reason": error.reason, "channel": channel}
+            history.setdefault("failed_refs", {})[channel] = source
+        else:
+            source.update(state=error.state, reason=error.reason)
+        _save_history_checkpoint_no_tx(store, job)
+    return source
+
+
+def _settle_analysis_page_failure(store, job_id, generation, channel_id, reservation, *, known_count=None):
+    if __package__:
+        from .analysis_store import StaleGenerationError
+    else:
+        from analysis_store import StaleGenerationError
+    with common_sqlite.write_tx(store.conn, immediate=True):
+        job, source = _active_analysis_history_source(store, job_id, generation, channel_id)
+        current = source.get("reservation")
+        if not current or current["token"] != reservation["token"]:
+            raise StaleGenerationError("Analysis history reservation changed")
+        allowance = current["allowance"]
+        if known_count is not None and not 0 <= known_count <= allowance:
+            raise ValueError("Invalid received history count")
+        del source["reservation"]
+        if known_count is None:
+            history = job["checkpoint"]["history"]
+            history["unknown_download_messages"] = history.get("unknown_download_messages", 0) + allowance
+        else:
+            source["returned_messages"] = source.get("returned_messages", 0) + known_count
+        _save_history_checkpoint_no_tx(store, job, downloaded_release=0 if known_count is None else allowance - known_count)
+
+
+async def _analysis_rpc_retry(store, job_id, generation, settings, deadline, operation, *, before=None, failed=None):
+    from telethon import errors
+    attempts = settings["analysis"]["telegram_retry_attempts"]
+    backoff = settings["telethon"]["connection_retry_backoff_seconds"]
+    for attempt in range(attempts):
+        if store.worker_stop_requested(job_id, generation=generation):
+            raise InterruptedError("Analysis history cancelled")
+        remaining = deadline - common_process.continuous_time()
+        if remaining <= 0:
+            raise AnalysisHistoryRequestError("run_deadline")
+        context = before() if before is not None else None
+        if before is not None and context is None:
+            raise AnalysisHistoryRequestError("download_cap")
+        try:
+            timeout = min(settings["analysis"]["telegram_request_timeout_seconds"], remaining)
+            result = await await_with_awake_timeout(operation(context), timeout,
+                                                    cleanup_timeout_seconds=settings["telethon"]["connection_cleanup_timeout_seconds"])
+            return result, context
+        except (errors.RPCError, OSError, TimeoutError, ValueError) as exc:
+            if failed is not None:
+                failed(context, known_count=0 if isinstance(exc, errors.RPCError) else None)
+            if isinstance(exc, errors.UnauthorizedError):
+                raise
+            remaining = deadline - common_process.continuous_time()
+            if remaining <= 0:
+                raise AnalysisHistoryRequestError("run_deadline") from None
+            flood = isinstance(exc, (errors.FloodWaitError, errors.FloodPremiumWaitError,
+                                     errors.SlowModeWaitError, errors.FloodTestPhoneWaitError))
+            transient = flood or isinstance(exc, (errors.ServerError, errors.InvalidDCError)) or is_retryable_connection_error(exc)
+            if not transient:
+                raise AnalysisHistoryRequestError("source_unavailable", state="failed") from None
+            if attempt + 1 >= attempts:
+                raise AnalysisHistoryRequestError("request_retries_exhausted") from None
+            delay = max(backoff * (2 ** attempt), exc.seconds if flood else 0)
+            if delay >= remaining:
+                raise AnalysisHistoryRequestError("flood_wait_exceeds_deadline" if flood else "retry_exceeds_deadline") from None
+            until = common_process.continuous_time() + delay
+            while common_process.continuous_time() < until:
+                if store.worker_stop_requested(job_id, generation=generation):
+                    raise InterruptedError("Analysis history cancelled")
+                await asyncio.sleep(min(common_process.load_process_config().poll_interval_seconds,
+                                        max(0, until - common_process.continuous_time())))
+    raise AnalysisHistoryRequestError("request_retries_exhausted")
+
+
+async def resolve_channel_entity(client, channel: str):
+    reference = build_entity_lookup_reference(channel)
+    try:
+        return await client.get_entity(reference)
+    except ValueError:
+        if not (channel.startswith("-100") and channel[1:].isdigit()):
+            raise
+        await client.get_dialogs()
+        return await client.get_entity(reference)
+
+
+async def sync_analysis_source(store, job_id: str, runtime: RuntimeConfig, *, generation: int,
+                                channel: str, mode: str = "backfill", client=None, deadline=None, resolved_entity=None):
+    job = _analysis_history_job(store, job_id, generation)
+    settings, request = job["request"]["settings"], job["request"]["request"]
+    if channel not in request["channels"]:
+        raise ValueError("Analysis channel is outside the admitted scope")
+    deadline = deadline if deadline is not None else common_process.continuous_time() + settings["bridge"]["worker_process_timeout_seconds"]
+    profile = replace(runtime, **settings["telethon"], default_auth_mode=settings["auth"]["default_mode"],
+                      public_auth_mode=settings["auth"]["public_channel_mode"], private_auth_mode=settings["auth"]["private_channel_mode"])
+    if client is None:
+        auth = resolve_auth_mode(profile, profile.default_auth_mode, channel)
+        async with open_telethon_session(profile, auth, managed_requests=True) as owned_client:
+            return await sync_analysis_source(store, job_id, profile, generation=generation, channel=channel,
+                                              mode=mode, client=owned_client, deadline=deadline)
+    entity = resolved_entity
+    if entity is None:
+        try:
+            entity, _ = await _analysis_rpc_retry(store, job_id, generation, settings, deadline,
+                                                  lambda _: resolve_channel_entity(client, channel))
+        except AnalysisHistoryRequestError as exc:
+            return _record_analysis_source_error(store, job_id, generation, channel, exc)
+    access_error = _analysis_source_access_error(entity)
+    if access_error is not None:
+        return _record_analysis_source_error(store, job_id, generation, channel, access_error)
+    try:
+        source = _begin_analysis_source(store, job_id, generation, channel, entity, mode)
+    except TelegramPeerIdentityError:
+        return _record_analysis_source_error(store, job_id, generation, channel,
+                                              AnalysisHistoryRequestError("source_identity_conflict", state="failed"))
+    since = max(datetime.fromisoformat(request["since"]), datetime.fromisoformat(source.get("since", request["since"])))
+    upper = min(datetime.fromisoformat(request["until"]), datetime.fromisoformat(request["cutoff_at"]),
+                datetime.fromisoformat(source.get("until", request["until"])))
+    offset_date = upper.replace(microsecond=0) + timedelta(seconds=1)
+    while source["state"] != "complete":
+        if common_process.continuous_time() >= deadline:
+            return _record_analysis_source_error(store, job_id, generation, channel,
+                                                  AnalysisHistoryRequestError("run_deadline"), entity.id)
+        if "page" in source:
+            try:
+                source = drain_analysis_history_page(store, job_id, generation=generation, entity=entity)
+            except TelegramPeerIdentityError:
+                return _record_analysis_source_error(store, job_id, generation, channel,
+                                                      AnalysisHistoryRequestError("source_identity_conflict", state="failed"), entity.id)
+            continue
+
+        def reserve():
+            return reserve_analysis_history_page(store, job_id, generation=generation, channel_id=entity.id,
+                                                   limit=settings["analysis"]["history_page_size"])
+
+        def failed(reservation, **kwargs):
+            return _settle_analysis_page_failure(store, job_id, generation, entity.id, reservation, **kwargs)
+
+        try:
+            messages, reservation = await _analysis_rpc_retry(
+                store, job_id, generation, settings, deadline,
+                lambda reserved: client.get_messages(entity, limit=reserved["allowance"],
+                                                       offset_id=reserved["cursor"], offset_date=offset_date, wait_time=0),
+                before=reserve, failed=failed,
+            )
+        except AnalysisHistoryRequestError as exc:
+            return _record_analysis_source_error(store, job_id, generation, channel, exc, entity.id)
+        items, complete = [], not messages
+        try:
+            for message in messages:
+                date = getattr(message, "date", None)
+                if not isinstance(date, datetime):
+                    raise ValueError("History message date is unavailable")
+                date = date.replace(tzinfo=timezone.utc) if date.tzinfo is None else date.astimezone(timezone.utc)
+                selected = since <= date <= upper
+                if date < since or (source["stop_id"] is not None and message.id <= source["stop_id"]):
+                    selected, complete = False, True
+                row = None
+                if selected:
+                    try:
+                        sender, _ = await _analysis_rpc_retry(store, job_id, generation, settings, deadline,
+                                                               lambda _: resolve_sender_metadata(entity, message))
+                        username, display_name = sender
+                    except AnalysisHistoryRequestError as exc:
+                        if exc.reason == "run_deadline":
+                            raise
+                        username, display_name = direct_sender_metadata(message)
+                    media_path, media_size = None, None
+                    if (settings["processing"]["ocr"] and is_image_media_kind(message_media_kind(message))
+                            and media_needs_download(store.conn, entity.id, message.id)):
+                        media, _ = await _analysis_rpc_retry(store, job_id, generation, settings, deadline,
+                                                              lambda _: download_media_if_present(profile, client, message, entity.id))
+                        media_path, media_size = media
+                    row = prepare_history_write(StagedMessageWrite(entity, message, username, display_name, media_path, media_size))
+                items.append({"id": message.id, "row": row})
+        except AnalysisHistoryRequestError as exc:
+            failed(reservation, known_count=len(messages))
+            return _record_analysis_source_error(store, job_id, generation, channel, exc, entity.id)
+        stage_analysis_history_page(store, job_id, generation=generation, channel_id=entity.id,
+                                     token=reservation["token"], items=items, complete=complete)
+        source = store.get_job(job_id)["checkpoint"]["history"]["sources"][str(entity.id)]
+    return source
+
+
+def _analysis_history_bounds(request):
+    return (datetime.fromisoformat(request["since"]),
+            min(datetime.fromisoformat(request["until"]), datetime.fromisoformat(request["cutoff_at"])))
+
+
+def _coalesce_analysis_history_windows(windows):
+    merged = []
+    for window in sorted(windows, key=lambda item: item["since"]):
+        if not merged or datetime.fromisoformat(window["since"]) > datetime.fromisoformat(merged[-1]["until"]) + timedelta(microseconds=1):
+            merged.append(dict(window))
+            continue
+        previous = merged[-1]
+        previous["until"] = max(previous["until"], window["until"])
+        if previous["mode"] != "update" or window["mode"] != "update":
+            previous.update(mode="backfill", stop_id=None)
+        else:
+            left, right = previous["stop_id"], window["stop_id"]
+            previous["stop_id"] = min(left, right) if left is not None and right is not None else None
+    return merged
+
+
+def _previous_analysis_history(store, job, entity):
+    """Inspect retained checkpoints one at a time, newest first (no interval ledger)."""
+    since, upper = _analysis_history_bounds(job["request"]["request"])
+    fresh = datetime.fromisoformat(job["accepted_at"]).replace(hour=0, minute=0, second=0, microsecond=0)
+    closed_upper = min(upper, fresh - timedelta(microseconds=1))
+    kind = _telegram_peer_kind(type(entity).__name__)
+    sync = store.conn.execute("SELECT last_error FROM sync_state WHERE channel_id=?", (entity.id,)).fetchone()
+    sync_error = sync is not None and bool(sync[0])
+    has_messages = store.conn.execute(
+        "SELECT 1 FROM messages WHERE channel_id=? AND date_utc>=? AND date_utc<=? LIMIT 1",
+        (entity.id, since.isoformat(), upper.isoformat()),
+    ).fetchone() is not None
+    rows = store.conn.execute("""SELECT job_id,request_json,checkpoint_json FROM analysis_jobs WHERE kind='analysis'
+        AND rowid < (SELECT rowid FROM analysis_jobs WHERE job_id=?) ORDER BY rowid DESC""", (job["job_id"],))
+    for row in rows:
+        source = json.loads(row[2]).get("history", {}).get("sources", {}).get(str(entity.id))
+        if source is None or (source.get("peer_kind") is not None and kind is not None and source["peer_kind"] != kind):
+            continue
+        old_since, old_upper = _analysis_history_bounds(json.loads(row[1])["request"])
+        if old_upper < since or old_since > upper:
+            continue
+        if source["state"] == "complete" and not source.get("pending_windows"):
+            if not has_messages and source.get("mode") == "reuse":
+                # Reusing archive edges never proved an empty range was fetched.
+                continue
+            if not sync_error and old_since <= since and old_upper >= closed_upper:
+                return {"complete": True}
+            continue
+        start = datetime.fromisoformat(source.get("since", old_since.isoformat()))
+        end = datetime.fromisoformat(source.get("until", old_upper.isoformat()))
+        windows = [{"since": start.isoformat(), "until": end.isoformat()}] + source.get("pending_windows", [])
+        if not any(datetime.fromisoformat(w["since"]) <= upper and datetime.fromisoformat(w["until"]) >= since for w in windows):
+            continue
+        return {"complete": False, "source": source, "job_id": row[0],
+                "same_scope": (since, upper) == (old_since, old_upper), "windows": windows}
+    if sync_error:
+        return {"complete": False, "same_scope": False,
+                "windows": [{"since": since.isoformat(), "until": upper.isoformat()}]}
+    return None
+
+
+def _analysis_history_windows(conn, entity, request, *, previous=None):
+    """Plan at most two missing day edges; do not audit holes inside the archive."""
+    since, upper = _analysis_history_bounds(request)
+    if since > upper:
+        return []
+    first = conn.execute("SELECT date_utc FROM messages WHERE channel_id=? ORDER BY date_utc LIMIT 1", (entity.id,)).fetchone()
+    last = conn.execute("SELECT date_utc FROM messages WHERE channel_id=? ORDER BY date_utc DESC LIMIT 1", (entity.id,)).fetchone()
+    windows = []
+
+    def append(start, end, mode="backfill"):
+        if start > end:
+            return
+        stop = None
+        if mode == "update":
+            stop = conn.execute("SELECT MAX(message_id) FROM messages WHERE channel_id=? AND date_utc<=?",
+                                (entity.id, end.isoformat())).fetchone()[0]
+        windows.append({"mode": mode, "since": start.isoformat(), "until": end.isoformat(), "stop_id": stop})
+
+    fresh_day = datetime.fromisoformat(request["accepted_at"]).replace(hour=0, minute=0, second=0, microsecond=0)
+    if previous and previous["complete"]:
+        if upper >= fresh_day:
+            append(max(since, fresh_day), upper, "update")
+        return windows
+    has_messages = conn.execute(
+        "SELECT 1 FROM messages WHERE channel_id=? AND date_utc>=? AND date_utc<=? LIMIT 1",
+        (entity.id, since.isoformat(), upper.isoformat()),
+    ).fetchone() is not None
+    if first is None or not has_messages:
+        append(since, upper)
+        return windows
+    oldest_day = datetime.fromisoformat(first[0]).replace(hour=0, minute=0, second=0, microsecond=0)
+    newest_day = datetime.fromisoformat(last[0]).replace(hour=0, minute=0, second=0, microsecond=0)
+    if oldest_day > upper:
+        append(since, upper)
+        return windows
+    if since.date() < oldest_day.date():
+        append(since, min(upper, oldest_day - timedelta(microseconds=1)))
+    if upper.date() >= fresh_day.date():
+        # Include any missing closed days before refreshing today's head.
+        append(max(since, min(newest_day + timedelta(days=1), fresh_day)), upper, "update")
+    elif upper.date() > newest_day.date():
+        append(max(since, newest_day + timedelta(days=1)), upper)
+    return windows
+
+
+def _new_analysis_history_source(store, job, entity):
+    request = job["request"]["request"]
+    previous = _previous_analysis_history(store, job, entity)
+    if previous and not previous["complete"] and previous["same_scope"]:
+        source = previous["source"]
+        source.setdefault("since", request["since"])
+        source.setdefault("until", _analysis_history_bounds(request)[1].isoformat())
+        source.update(returned_messages=0, resumed_from_job=previous["job_id"])
+        # Pending received rows are reusable; a lost physical reply is not.
+        source.pop("reservation", None)
+        return source
+    windows = _analysis_history_windows(store.conn, entity, request, previous=previous)
+    if previous and not previous["complete"]:
+        since, upper = _analysis_history_bounds(request)
+        for window in previous["windows"]:
+            start = max(since, datetime.fromisoformat(window["since"]))
+            end = min(upper, datetime.fromisoformat(window["until"]))
+            if start <= end:
+                windows.append({"mode": "backfill", "since": start.isoformat(), "until": end.isoformat(), "stop_id": None})
+    windows = _coalesce_analysis_history_windows(windows)
+    source = {"mode": "reuse", "state": "complete", "cursor": 0, "stop_id": None,
+              "returned_messages": 0, "peer_kind": _telegram_peer_kind(type(entity).__name__)}
+    if windows:
+        source.update(windows[0], state="running", pending_windows=windows[1:])
+    return source
+
+
+def _plan_analysis_history_source(store, job_id, generation, channel, entity):
+    job = _analysis_history_job(store, job_id, generation)
+    planned = None
+    if str(entity.id) not in job["checkpoint"].get("history", {}).get("sources", {}):
+        planned = _new_analysis_history_source(store, job, entity)
+    with common_sqlite.write_tx(store.conn, immediate=True):
+        job = _analysis_history_job(store, job_id, generation)
+        history = job["checkpoint"].setdefault("history", {})
+        refs, sources = history.setdefault("refs", {}), history.setdefault("sources", {})
+        if channel in refs and refs[channel] != entity.id:
+            raise TelegramPeerIdentityError("Analysis source identity changed")
+        _upsert_channel_no_tx(store.conn, entity)
+        kind = _telegram_peer_kind(type(entity).__name__)
+        source = sources.get(str(entity.id))
+        if source is not None and source.get("peer_kind") is not None and kind is not None and source["peer_kind"] != kind:
+            raise TelegramPeerIdentityError("Analysis source peer kind changed")
+        refs[channel] = entity.id
+        history.get("failed_refs", {}).pop(channel, None)
+        if source is None:
+            source = planned
+            sources[str(entity.id)] = source
+        if source["mode"] == "reuse":
+            source["state"] = "complete"
+            source.pop("reason", None)
+        _save_history_checkpoint_no_tx(store, job)
+    return source
+
+
+def _next_analysis_history_window(store, job_id, generation, channel_id):
+    with common_sqlite.write_tx(store.conn, immediate=True):
+        job = _analysis_history_job(store, job_id, generation)
+        source = job["checkpoint"]["history"]["sources"][str(channel_id)]
+        pending = source.get("pending_windows", [])
+        if source["state"] == "complete" and pending:
+            source.update(pending.pop(0), cursor=0, state="running")
+            source.pop("reason", None)
+            _save_history_checkpoint_no_tx(store, job)
+            return True
+    return False
+
+
+async def ensure_analysis_history(store, job_id, runtime, *, generation, client=None, deadline=None):
+    """Resolve explicit sources, reuse closed days and load only missing/fresh edges."""
+    job = _analysis_history_job(store, job_id, generation)
+    settings, request = job["request"]["settings"], job["request"]["request"]
+    deadline = deadline if deadline is not None else common_process.continuous_time() + settings["bridge"]["worker_process_timeout_seconds"]
+    profile = replace(runtime, **settings["telethon"], default_auth_mode=settings["auth"]["default_mode"],
+                      public_auth_mode=settings["auth"]["public_channel_mode"], private_auth_mode=settings["auth"]["private_channel_mode"])
+
+    async def one(channel, owned_client):
+        try:
+            entity, _ = await _analysis_rpc_retry(store, job_id, generation, settings, deadline,
+                                                  lambda _: resolve_channel_entity(owned_client, channel))
+        except AnalysisHistoryRequestError as exc:
+            return _record_analysis_source_error(store, job_id, generation, channel, exc)
+        access_error = _analysis_source_access_error(entity)
+        if access_error is not None:
+            return _record_analysis_source_error(store, job_id, generation, channel, access_error)
+        try:
+            source = _plan_analysis_history_source(store, job_id, generation, channel, entity)
+        except TelegramPeerIdentityError:
+            return _record_analysis_source_error(store, job_id, generation, channel,
+                                                  AnalysisHistoryRequestError("source_identity_conflict", state="failed"))
+        while True:
+            if source["mode"] != "reuse":
+                source = await sync_analysis_source(store, job_id, profile, generation=generation, channel=channel,
+                                                     mode=source["mode"], client=owned_client, deadline=deadline,
+                                                     resolved_entity=entity)
+            if not _next_analysis_history_window(store, job_id, generation, entity.id):
+                return source
+            source = store.get_job(job_id)["checkpoint"]["history"]["sources"][str(entity.id)]
+
+    for channel in request["channels"]:
+        _analysis_history_job(store, job_id, generation)
+        if common_process.continuous_time() >= deadline:
+            _record_analysis_source_error(store, job_id, generation, channel,
+                                            AnalysisHistoryRequestError("run_deadline"))
+            continue
+        if client is not None:
+            await one(channel, client)
+        else:
+            auth = resolve_auth_mode(profile, profile.default_auth_mode, channel)
+            try:
+                async with open_telethon_session(profile, auth, managed_requests=True) as owned_client:
+                    await one(channel, owned_client)
+            except TelegramConnectionError as exc:
+                from telethon import errors
+                if not (is_retryable_connection_error(exc.cause) or isinstance(exc.cause, (errors.ServerError, errors.InvalidDCError))):
+                    raise
+                _record_analysis_source_error(store, job_id, generation, channel,
+                                                AnalysisHistoryRequestError("session_unavailable"))
+            except TimeoutError:
+                _record_analysis_source_error(store, job_id, generation, channel,
+                                                AnalysisHistoryRequestError("session_wait_timeout"))
+    return store.get_job(job_id)["checkpoint"].get("history", {})
+
+
+def commit_analysis_history_page(store, job_id: str, *, generation: int, entity: Any,
+                                  writes: list[StagedMessageWrite], expected_cursor: int, next_cursor: int,
+                                  returned_messages: int, complete: bool = False) -> dict[str, Any]:
+    if __package__:
+        from .analysis_store import StaleGenerationError, encode_payload
+    else:
+        from analysis_store import StaleGenerationError, encode_payload
+    if (any(type(value) is not int or value < 0 for value in (expected_cursor, next_cursor, returned_messages))
+            or type(complete) is not bool or returned_messages < len(writes)
+            or any(item.entity.id != entity.id for item in writes)):
+        raise ValueError("Invalid analysis history page")
+    if returned_messages:
+        if next_cursor == 0 or (expected_cursor and next_cursor >= expected_cursor):
+            raise ValueError("Analysis history cursor must advance")
+    elif not complete or next_cursor != expected_cursor:
+        raise ValueError("Only a completed empty page may retain its cursor")
+    conn = store.conn
+    with common_sqlite.write_tx(conn, immediate=True):
+        job = store.get_job(job_id)
+        if job is None or job["generation"] != generation or job["status"] != "running":
+            raise StaleGenerationError("Analysis history generation changed")
+        if job["cancel_requested"]:
+            raise InterruptedError("Analysis history cancelled")
+        checkpoint = job["checkpoint"]
+        source = checkpoint.get("history", {}).get("sources", {}).get(str(entity.id))
+        if not isinstance(source, dict) or source.get("cursor") != expected_cursor or source.get("state") != "running":
+            raise StaleGenerationError("Analysis history cursor changed")
+        if source.get("mode") not in {"backfill", "update"}:
+            raise ValueError("Invalid analysis history mode")
+        settings = job["request"]["settings"]
+        cap = _analysis_download_cap(settings)
+        if job["downloaded_messages"] + returned_messages > cap:
+            raise ValueError("Analysis download budget exhausted")
+        source.update(cursor=next_cursor, state="complete" if complete else "running",
+                      returned_messages=source.get("returned_messages", 0) + returned_messages)
+        if writes:
+            source["highest_seen_id"] = max(source.get("highest_seen_id") or 0, *(item.message.id for item in writes))
+        encoded = encode_payload(checkpoint, max_bytes=settings["analysis"]["max_intermediate_bytes"])
+        _upsert_channel_no_tx(conn, entity)
+        for item in writes:
+            _upsert_message_no_tx(conn, entity, item.message, item.sender_username, item.sender_display_name,
+                                  item.downloaded_path, item.downloaded_size)
+        if complete:
+            _mark_history_source_complete_no_tx(conn, entity, source)
+        store._write_checkpoint_no_tx(job_id, encoded, generation=generation, downloaded_delta=returned_messages)
+    return source
 
 
 def message_exists(conn: sqlite3.Connection, channel_id: int, message_id: int) -> bool:
@@ -1342,15 +2338,7 @@ async def sync_one_channel(
     auth_mode = auth_mode_override or resolve_auth_mode(runtime, args.auth_mode, channel)
 
     async def _sync_with_client(active_client: Any) -> dict[str, Any]:
-        entity_ref = build_entity_lookup_reference(channel)
-        try:
-            entity = await active_client.get_entity(entity_ref)
-        except ValueError:
-            if channel.startswith("-100") and channel[1:].isdigit():
-                await active_client.get_dialogs()
-                entity = await active_client.get_entity(entity_ref)
-            else:
-                raise
+        entity = await resolve_channel_entity(active_client, channel)
         upsert_channel(conn, entity)
         batch_size = int(getattr(args, "batch_size", 0) or runtime.sync_batch_size or 0)
         flush_threshold = batch_size if batch_size > 0 else 1
@@ -1505,8 +2493,7 @@ async def sync_one_channel(
     if client is not None:
         return await _sync_with_client(client)
 
-    client = await open_telethon_client(runtime, auth_mode)
-    async with client:
+    async with open_telethon_session(runtime, auth_mode) as client:
         return await _sync_with_client(client)
 async def sync_messages(runtime: RuntimeConfig, args: argparse.Namespace, mode: str) -> int:
     conn = connect_db(runtime)
@@ -1601,37 +2588,30 @@ def process_pending_ocr(
     for row in rows:
         try:
             if not is_image_media_kind(row["media_kind"]):
-                conn.execute(
-                    """
-                    UPDATE media_assets
-                    SET ocr_status = ?, ocr_error = ?, ocr_processed_at = ?
-                    WHERE channel_id = ? AND message_id = ? AND ordinal = ?
-                    """,
-                    ("skipped", optional_text("OCR is only supported for image media."), now_utc(), row["channel_id"], row["message_id"], row["ordinal"]),
-                )
-                processed += 1
-                continue
-            text = run_tesseract(binary, row["local_path"], timeout_seconds=tesseract_timeout_seconds)
-            conn.execute(
-                """
-                UPDATE media_assets
-                SET ocr_status = ?, ocr_text = ?, ocr_error = NULL, ocr_processed_at = ?
-                WHERE channel_id = ? AND message_id = ? AND ordinal = ?
-                """,
-                ("done", optional_text(text), now_utc(), row["channel_id"], row["message_id"], row["ordinal"]),
-            )
-        except Exception as exc:
-            conn.execute(
-                """
-                UPDATE media_assets
-                SET ocr_status = ?, ocr_error = ?, ocr_processed_at = ?
-                WHERE channel_id = ? AND message_id = ? AND ordinal = ?
-                """,
-                ("error", optional_text("OCR processing failed."), now_utc(), row["channel_id"], row["message_id"], row["ordinal"]),
-            )
+                status, text, error = "skipped", None, "OCR is only supported for image media."
+            else:
+                text = run_tesseract(binary, row["local_path"], timeout_seconds=tesseract_timeout_seconds)
+                status, error = "done", None
+        except Exception:
+            status, text, error = "error", None, "OCR processing failed."
+        # Database/index failures must roll back and propagate, rather than be
+        # relabelled as an OCR recognition failure by the broad handler above.
+        save_media_ocr_result(conn, row["channel_id"], row["message_id"], row["ordinal"],
+                              status=status, text=text, error=error)
         processed += 1
-    conn.commit()
     return processed
+
+
+def save_media_ocr_result(conn: sqlite3.Connection, channel_id: int, message_id: int, ordinal: int,
+                           *, status: str, text: str | None = None, error: str | None = None) -> None:
+    if status not in {"done", "error", "skipped"}:
+        raise ValueError("Invalid OCR result status")
+    with common_sqlite.write_tx(conn):
+        conn.execute("""UPDATE media_assets SET ocr_status=?,
+            ocr_text=CASE WHEN ?='done' THEN ? ELSE ocr_text END,ocr_error=?,ocr_processed_at=?
+            WHERE channel_id=? AND message_id=? AND ordinal=?""",
+            (status, status, optional_text(text), optional_text(error), now_utc(), channel_id, message_id, ordinal))
+        _refresh_message_fts_no_tx(conn, channel_id, message_id)
 
 
 def resolve_channel_filter(conn: sqlite3.Connection, channel: str) -> sqlite3.Row | None:
@@ -1781,17 +2761,8 @@ def export_channel_csv(
 
 async def fetch_and_export_message(runtime: RuntimeConfig, conn: sqlite3.Connection, url: str, output_dir: str | None) -> dict[str, Any]:
     channel, message_id = parse_message_url(url)
-    client = await open_telethon_client(runtime, "user")
-    async with client:
-        entity_ref = build_entity_lookup_reference(channel)
-        try:
-            entity = await client.get_entity(entity_ref)
-        except ValueError:
-            if channel.startswith("-100") and channel[1:].isdigit():
-                await client.get_dialogs()
-                entity = await client.get_entity(entity_ref)
-            else:
-                raise
+    async with open_telethon_session(runtime, "user") as client:
+        entity = await resolve_channel_entity(client, channel)
         message = await client.get_messages(entity, ids=message_id)
         if message is None:
             raise SystemExit(f"Message {message_id} was not found for '{channel}'.")
@@ -1814,6 +2785,30 @@ def cmd_init_db(args: argparse.Namespace) -> int:
     init_db(conn)
     print(json.dumps({"status": "initialized"}, ensure_ascii=False, indent=2))
     return 0
+
+
+def cmd_index_history(args: argparse.Namespace) -> int:
+    if __package__:
+        from . import telegram_analysis as analysis
+    else:
+        import telegram_analysis as analysis
+    config = load_runtime_config()
+    conn = common_sqlite.connect_sqlite(analysis.bridge.resolve_history_db_path(config))
+    try:
+        init_db(conn)
+        job = analysis.enqueue_fts_backfill(analysis.AnalysisStore(conn), config, rebuild=args.rebuild,
+                                            now=datetime.now(timezone.utc))
+        print(json.dumps({"job_id": job["job_id"], "status": job["status"]}, ensure_ascii=False))
+        return 0
+    except analysis.QueueFullError:
+        print(json.dumps({"error": "queue_full"}), file=sys.stderr)
+        return 1
+    except ValueError as exc:
+        reason = str(exc) if str(exc) in {"fts_unavailable", "fts_rebuild_required"} else "index_configuration_error"
+        print(json.dumps({"error": reason}), file=sys.stderr)
+        return 1
+    finally:
+        conn.close()
 
 
 def cmd_ocr_pending(args: argparse.Namespace) -> int:
@@ -1947,6 +2942,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     init_db = subparsers.add_parser("init-db", help="Create or migrate the local SQLite database.")
     init_db.set_defaults(func=cmd_init_db)
+
+    index_history = subparsers.add_parser("index-history", help="Queue or resume the local FTS index build for the bridge supervisor.")
+    index_history.add_argument("--rebuild", action="store_true", help="Invalidate readiness and rebuild the derived index from the start.")
+    index_history.set_defaults(func=cmd_index_history)
 
     doctor = subparsers.add_parser("doctor", help="Check local configuration and dependency availability.")
     doctor.set_defaults(func=cmd_doctor)

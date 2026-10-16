@@ -121,6 +121,8 @@ def log_openai_usage(
     response_id: str | None = None,
     error: str | None = None,
     store_prompt_text: bool = False,
+    correlation: tuple[str, str, str] | None = None,
+    latency_ms: int | None = None,
 ) -> None:
     previous = conn.execute(
         """
@@ -138,7 +140,7 @@ def log_openai_usage(
     prefix_match_chars_with_previous = 0
     if previous and previous["prompt_text"]:
         prefix_match_chars_with_previous = common_prefix_length(previous["prompt_text"], prompt_text)
-    conn.execute(
+    inserted = conn.execute(
         """
         INSERT INTO ai_usage_log (
             created_at, feature, stage, channel, since, until, model, response_id,
@@ -180,11 +182,13 @@ def log_openai_usage(
             usage.reasoning_tokens if usage else None,
             usage.output_chars if usage else None,
             usage.total_tokens if usage else None,
-            usage.latency_ms if usage else None,
+            usage.latency_ms if usage else latency_ms,
             usage.response_status if usage else None,
             usage.incomplete_reason if usage else None,
             status,
             error or None,
         ),
     )
+    if correlation is not None:
+        conn.execute("UPDATE ai_usage_log SET job_id=?,batch_id=?,attempt_id=? WHERE id=?", (*correlation, inserted.lastrowid))
     conn.commit()

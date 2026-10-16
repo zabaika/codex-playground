@@ -10,7 +10,7 @@ For repo-level orientation, see:
 
 ## Purpose
 
-`telegram_connector` is the standalone Telegram history, OCR, export, and digest project.
+`telegram_connector` owns Telegram history, OCR, export, digest and bounded channel analytics.
 It must stay operationally separate from `telegram_agent_bot`.
 
 ## Architecture
@@ -19,8 +19,10 @@ It must stay operationally separate from `telegram_agent_bot`.
   - `telegram_bridge.py`: Bot API bridge and command surface
   - `telegram_history_client.py`: Telethon ingestion, OCR, export, and SQLite system of record
   - `telegram_digest.py`: digest orchestration and Telegram delivery
+  - `telegram_analysis.py`: the shared `/topics`, `/search`, `/qa` workflow and supervised worker
+  - `analysis_store.py` and `analysis_evidence.py`: analytics persistence, budgets, provenance and evidence contracts
 - Keep `telegram_shared` limited to infrastructure primitives.
-- Do not move digest, history, OCR, export, or Telethon business logic into `telegram_shared`.
+- Do not move digest, history, OCR, analytics, export, or Telethon business logic into `telegram_shared`.
 
 ## Source Of Truth
 
@@ -48,6 +50,11 @@ If README, code, and tests disagree, update them together.
 - Keep bridge access-control docs aligned with runtime behavior for `allowed_chat_ids`, `allowed_user_ids`, and `allowed_usernames`.
 - Keep `/agent-stats` local to the bridge and bounded to a recent-window query.
 - Keep digest HTML formatting owned by `telegram_digest.py`; the bridge must not reformat already-prepared HTML payloads.
+- Keep analytics commands on one shared workflow; channels remain explicit and linked discussion comments stay outside scope.
+- When changing analytics extraction, linking, merge or synthesis, use [analysis_prompts.toml](./config/analysis_prompts.toml) for task semantics and the existing schemas, validators and regression tests for executable contracts; verify required information and source support in the actual final synthesis request, including after context packing or reduction, rather than only in stored intermediate records.
+- Run enabled, bounded OCR before freezing a new input manifest; resume must preserve existing manifest digests.
+- Keep result provenance and recovery dependencies separate from evictable cross-job reuse; invalidate dependent unsent delivery plans when results change, preserving confirmed/unknown send history.
+- Keep public analytics workers and evaluation `run` behind the shared outer hard TTL; private worker entrypoints are supervisor implementation details.
 
 ## Security And Runtime Rules
 

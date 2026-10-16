@@ -14,8 +14,21 @@ from .errors import TelegramApiError
 
 # Telegram Bot API text messages are capped at 4096 characters.
 TELEGRAM_TEXT_MESSAGE_MAX_CHARS = 4096
+DEFAULT_API_TIMEOUT_SECONDS = 65
 # Avoid splitting at the very beginning of a chunk; short prefixes read worse than a hard cut.
 MIN_NEWLINE_SPLIT_INDEX = 100
+
+
+def _refusal_metadata(response, *, http_status=None):
+    if not isinstance(response, dict) or response.get("ok") is not False:
+        return {}
+    code = response.get("error_code")
+    if type(code) is not int or not 400 <= code < 500 or (http_status is not None and code != http_status):
+        return {}
+    parameters = response.get("parameters")
+    delay = parameters.get("retry_after") if isinstance(parameters, dict) else None
+    return {"request_outcome": "refused", "error_code": code,
+            "retry_after": delay if type(delay) is int and delay >= 0 else None}
 
 
 def api_call(
@@ -23,7 +36,7 @@ def api_call(
     method: str,
     payload: dict[str, Any] | None = None,
     *,
-    timeout_seconds: int = 65,
+    timeout_seconds: int = DEFAULT_API_TIMEOUT_SECONDS,
     urlopen_func: Callable[..., Any] = request.urlopen,
 ) -> Any:
     url = f"https://api.telegram.org/bot{token}/{method}"
@@ -39,14 +52,20 @@ def api_call(
     except TimeoutError as exc:
         raise TelegramApiError(f"Telegram API request timed out while calling {method}.") from exc
     except error.HTTPError as exc:
-        raise TelegramApiError(f"Telegram API HTTP {exc.code} while calling {method}.") from exc
+        try:
+            # Metadata is optional: truncated/non-JSON/proxy errors remain unknown.
+            body = json.loads(exc.read(4096).decode("utf-8"))
+        except (ValueError, OSError):
+            body = None
+        raise TelegramApiError(f"Telegram API HTTP {exc.code} while calling {method}.",
+                               **_refusal_metadata(body, http_status=exc.code)) from exc
     except error.URLError as exc:
         reason = getattr(exc, "reason", None)
         details = f": {reason}" if reason else ""
         raise TelegramApiError(f"Telegram API request failed while calling {method}{details}.") from exc
     if not response.get("ok"):
         description = response.get("description") or "request failed"
-        raise TelegramApiError(f"Telegram API error while calling {method}: {description}")
+        raise TelegramApiError(f"Telegram API error while calling {method}: {description}", **_refusal_metadata(response))
     return response["result"]
 
 

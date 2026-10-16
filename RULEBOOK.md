@@ -161,6 +161,7 @@ Keep documentation split by responsibility:
 - for multi-step tasks, state a short plan where each step names its verification check
 - for substantial multi-step implementation, organize the plan into small, independently verifiable steps
 - each step must state its outcome, prerequisites, relevant contracts/settings, mandatory conditions, test scenarios, and completion checks; verify that it can be followed using the shared contract, the step, and its precise references, with dependencies and checks available at that point
+- after inspecting the necessary contracts, implement the nearest small, testable behavior through RED -> GREEN -> REFACTOR before moving to the next behavior; do not postpone feedback to design every remaining substep in detail; coordinated schema, transaction, or public-interface changes still require defining their shared contract first, and shorter cycles must preserve all requirements and acceptance criteria
 - keep shared contracts, defaults, and repeated execution rules under one canonical owner; include critical step-specific conditions directly, reference shared details, and map every mandatory requirement to an implementation step and a verification check
 - when several components must compose, plan an early observable end-to-end slice using bounded fixtures where appropriate, then extend it; distinguish fixture integration from working external integrations
 - after each completed step or interruption, record verified progress, decisions, remaining work, and the exact next action so execution can resume without relying on chat memory
@@ -266,6 +267,9 @@ Use the architecture rules in this order:
 - do not require empty placeholder operational records just to satisfy a theoretical schema; create touchpoints, reminders, interviews, reconciliation items, or similar records only when the corresponding real-world event or intent exists
 - when a system suppresses rediscovery, deduplicates history, or routes changed records into review buckets, encode that as canonical business logic in one owning layer instead of reimplementing it independently in UI filters, agent prompts, or report scripts
 - when a new surface needs a queue, dashboard, or operator list, build it as a projection over canonical entities and states rather than as a second mutable state store
+- when sources or results change, assess dependent artifacts against the project's version, freshness and snapshot contract; invalidate only dependent artifacts made unsuitable for the intended operation, and verify the applicable source/result version at publication or restoration; a valid historical snapshot need not become stale when its source changes
+- preserve required dependencies or a supported reconstruction path for promised reading, verification, redelivery or restoration, even after a task completes or fails; distinguish these obligations from ordinary reuse-cache retention; after dependency expiry, apply the declared restoration/recomputation policy or explicitly refuse an operation that can no longer be supported
+- preserve confirmed and uncertain external-effect history independently of result validity; recomputing or invalidating a result does not authorize repeating an external effect
 
 ### Surface Independence and Degraded Mode
 
@@ -484,6 +488,7 @@ Rules:
 Rules:
 
 - normalize only deliberately supported command invocations
+- readiness of a new or changed public capability includes its discoverability and supported invocation in the project's designated help and operator documentation; examples must match the supported interface; intentionally private implementation entrypoints do not become public documentation requirements
 - ambiguous free-form input must not trigger execution
 - only allow command execution from explicitly authorized callers or contexts
 - access-control helpers for command execution must fail closed when the required allowlist or authorization config is empty
@@ -517,8 +522,10 @@ Rules:
 
 ## 9. AI Processing Guidance
 
-- prefer hierarchical batching for large inputs:
-  summarize smaller batches first, then summarize the batch summaries
+- before freezing analysis inputs, satisfy the project's input-readiness contract for the requested scope and verify the required output is available to the next stage; a missing or disabled required stage is a configuration/readiness issue, handled under the declared stop/degraded policy; do not invent dependencies on unrelated pending data or bypass shared resource limits
+- when resuming from frozen inputs or a manifest/checkpoint, preserve that input version; rerunning prerequisite processing must not silently change it; any rebuild follows the project's explicit policy and consistently invalidates results/artifacts that are no longer compatible
+- choose intermediate representations for large or multi-stage inputs according to the task contract, using bounded hierarchical processing where needed; summaries are appropriate only when they preserve the information required by that contract
+- when transforming, combining or reducing data, verify preservation of required information and its provenance where needed; permitted information loss and coverage limits belong to the project contract, and results must not claim completeness beyond the evidence
 - do not mix unrelated sources inside one AI batch if source-level context matters
 - include lightweight provenance in prompts when it improves quality, such as source name, sender identity, timestamp, and message id
 - if per-source AI results are independently readable, emit them progressively and send a final status summary only when something failed or was skipped
@@ -684,7 +691,7 @@ The macOS `launchd` bullets are platform-specific examples. The broader rule is 
 
 ## 13. Test Rules
 
-Before shipping changes, run automated tests.
+Before shipping changes, run the applicable verification below and all mandatory project checks.
 
 Minimum expectations:
 
@@ -705,6 +712,22 @@ Rules:
 - every new config nuance should have a config test
 - every security hardening rule should have at least one regression test
 - when a project defines a canonical project-local virtualenv for tests, install dependencies and run the suite through that environment instead of the system Python
+- within a TDD cycle, run tests of the changed behavior; before closing a step, also check direct consumers of the changed contract; completing a small step alone does not require a full regression run
+- run the full applicable code regression suite at designated integration checkpoints, before committing code and before code release, and after a coherent change with broad or uncertain impact, such as shared runtime, schema compatibility, authorization, process lifecycle, dependencies, or test configuration; distinguish this gate from model evaluations and resource measurements; explicit mandatory project checks take precedence
+
+Choose verification by the meaning and impact of the change, not its file extension:
+
+| Change | Applicable verification |
+| --- | --- |
+| Documentation presentation without a semantic change | Structure, links and affected examples; this alone does not require repeating code regression unless project policy requires it. |
+| Skill instructions or behavioral rules | Fresh application to affected and neighboring scenarios; distinguish self-application from independent evaluation and state what remains unverified. |
+| Application model or prompt behavior | Fresh executions of selected model-evaluation cases against the changed behavior; stored outputs and deterministic mocks do not establish current model quality. |
+| Code behavior | Changed-behavior tests and direct consumers; apply the full-regression gates above. |
+| Expected or uncertain resource impact | Corresponding measurements under stated conditions; functional tests do not substitute for resource evidence. |
+
+- when calling for a full check, name the suite type, applicable scope and integration/acceptance/release boundary; do not interpret "full suite" as every available deterministic, model and resource test on every edit
+- record the checked scope, revision and relevant inputs, code, settings and runtime conditions; reuse successful evidence while these remain applicable and no new risk appears, rerunning affected checks after relevant changes; an unrelated edit does not by itself invalidate all prior evidence
+- fresh model runs and other costly or external checks remain subject to their existing authorization and budget boundaries; if required verification cannot run, record the gap and leave the corresponding acceptance condition unverified rather than treating another check as a substitute
 
 ## 14. Documentation Rules
 

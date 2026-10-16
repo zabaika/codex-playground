@@ -1,4 +1,5 @@
 import asyncio
+from contextlib import asynccontextmanager
 import importlib.util
 import io
 import json
@@ -165,6 +166,29 @@ class TelegramDigestTests(unittest.TestCase):
         )
         self.assertEqual(result.openai_api_key, "op://Personal/item/openai_api_key")
 
+    def test_digest_specific_openai_timeout_overrides_shared_with_legacy_fallback(self) -> None:
+        for value, expected in (("30", 30), (30, 30), (None, 120), ("", 120), ("0", 1)):
+            with self.subTest(value=value), patch.object(
+                telegram_digest, "load_digest_prompts", return_value=tomllib.loads(TEST_DIGEST_PROMPTS)["digest_prompts"]
+            ):
+                config = {
+                    "processing": {"model": "test-model"},
+                    "digest": {} if value is None else {"openai_timeout_seconds": value},
+                    "digest_ai": {"openai_timeout_seconds": "120", "reasoning_effort": "low", "reasoning_summary": "none"},
+                }
+                self.assertEqual(telegram_digest.resolve_digest_config(config).openai_timeout_seconds, expected)
+                self.assertEqual(config["digest_ai"]["openai_timeout_seconds"], "120")
+
+    def test_digest_specific_openai_timeout_rejects_invalid_override(self) -> None:
+        config = {
+            "processing": {"model": "test-model"},
+            "digest": {"openai_timeout_seconds": "invalid"},
+            "digest_ai": {"openai_timeout_seconds": "120", "reasoning_effort": "low", "reasoning_summary": "none"},
+        }
+        with patch.object(telegram_digest, "load_digest_prompts", return_value=tomllib.loads(TEST_DIGEST_PROMPTS)["digest_prompts"]):
+            with self.assertRaisesRegex(SystemExit, "digest.openai_timeout_seconds"):
+                telegram_digest.resolve_digest_config(config)
+
     def test_resolve_digest_config_requires_reasoning_effort(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             prompt_file = self.write_prompt_bundle(Path(tmp_dir))
@@ -197,7 +221,7 @@ class TelegramDigestTests(unittest.TestCase):
         original_connect_db = telegram_digest.history_client.connect_db
         original_init_db = telegram_digest.history_client.init_db
         original_resolve_channels_argument = telegram_digest.history_client.resolve_channels_argument
-        original_open_telethon_client = telegram_digest.history_client.open_telethon_client
+        original_open_telethon_session = telegram_digest.history_client.open_telethon_session
         original_sync_one_channel = telegram_digest.history_client.sync_one_channel
         client_calls: list[str] = []
         seen_channels: list[tuple[str, int, bool, str | None]] = []
@@ -215,15 +239,16 @@ class TelegramDigestTests(unittest.TestCase):
             telegram_digest.history_client.init_db = lambda conn: None
             telegram_digest.history_client.resolve_channels_argument = lambda runtime, channel: ["@a", "@b"]
 
-            async def fake_open_telethon_client(runtime, auth_mode):
+            @asynccontextmanager
+            async def fake_open_telethon_session(runtime, auth_mode):
                 client_calls.append(auth_mode)
-                return shared_client
+                yield shared_client
 
             async def fake_sync_one_channel(conn, runtime_arg, args_arg, mode_arg, channel_arg, *, client=None, auth_mode_override=None):
                 seen_channels.append((channel_arg, args_arg.limit, client is shared_client, auth_mode_override))
                 return {"channel": channel_arg, "processed_messages": 1}
 
-            telegram_digest.history_client.open_telethon_client = fake_open_telethon_client
+            telegram_digest.history_client.open_telethon_session = fake_open_telethon_session
             telegram_digest.history_client.sync_one_channel = fake_sync_one_channel
 
             results = asyncio.run(
@@ -243,7 +268,7 @@ class TelegramDigestTests(unittest.TestCase):
             telegram_digest.history_client.connect_db = original_connect_db
             telegram_digest.history_client.init_db = original_init_db
             telegram_digest.history_client.resolve_channels_argument = original_resolve_channels_argument
-            telegram_digest.history_client.open_telethon_client = original_open_telethon_client
+            telegram_digest.history_client.open_telethon_session = original_open_telethon_session
             telegram_digest.history_client.sync_one_channel = original_sync_one_channel
 
         self.assertEqual(client_calls, ["user"])

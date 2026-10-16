@@ -89,3 +89,37 @@ def test_parallel_writers_use_distinct_temporary_files(monkeypatch, tmp_path):
     assert len(set(sources)) == 8
     assert json.loads(path.read_text())["value"] in range(8)
     assert list(tmp_path.iterdir()) == [path]
+
+
+def test_text_artifact_round_trip_is_private_and_keeps_exact_newlines(tmp_path):
+    function = getattr(json_io, "write_text_atomic", None)
+    assert callable(function), "Markdown and JSON must share the atomic UTF-8 replacement owner"
+    path = tmp_path / "nested/report.md"
+    content = "# Отчёт\n\nУсловия: 1250 EUR.\n"
+    function(path, content)
+    assert path.read_bytes() == content.encode("utf-8")
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    assert list(path.parent.iterdir()) == [path]
+
+
+def test_text_replace_failure_keeps_existing_artifact_and_cleans_temp(monkeypatch, tmp_path):
+    function = getattr(json_io, "write_text_atomic", None)
+    assert callable(function)
+    path = tmp_path / "report.md"
+    path.write_text("Прежний отчёт")
+    def fail(*args):
+        raise OSError("replacement fault")
+    monkeypatch.setattr(json_io.os, "replace", fail)
+    with pytest.raises(OSError, match="replacement fault"):
+        function(path, "Новый отчёт")
+    assert path.read_text() == "Прежний отчёт" and list(tmp_path.iterdir()) == [path]
+
+
+def test_json_adapter_delegates_serialized_utf8_to_the_same_writer(monkeypatch, tmp_path):
+    function = getattr(json_io, "write_text_atomic", None)
+    assert callable(function)
+    captured = []
+    monkeypatch.setattr(json_io, "write_text_atomic", lambda path, text: captured.append((path, text)))
+    path = tmp_path / "state.json"
+    json_io.write_json_atomic(path, {"z": "Á", "a": 1}, sort_keys=True)
+    assert captured == [(path, json.dumps({"z": "Á", "a": 1}, ensure_ascii=False, indent=2, sort_keys=True) + "\n")]

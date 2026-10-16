@@ -18,6 +18,15 @@ from .redaction import redact_sensitive_text
 
 
 OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses"
+OPENAI_JSON_ENDPOINTS = {"responses": OPENAI_RESPONSES_URL, "input_tokens": OPENAI_RESPONSES_URL + "/input_tokens"}
+
+
+class _NoRedirect(request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+_JSON_OPENER = request.build_opener(_NoRedirect())
 MAX_ERROR_BODY_BYTES = 8192
 MAX_ERROR_MESSAGE_CHARS = 500
 NON_RETRYABLE_429_CODES = frozenset(
@@ -71,6 +80,7 @@ NON_RETRYABLE_NETWORK_ERRNOS = frozenset(
 class OpenAIResponse:
     response: dict[str, Any]
     latency_ms: int
+    attempt_id: str | None = None
 
 
 class OpenAIRequestError(TelegramSharedError):
@@ -317,8 +327,32 @@ def post_responses(
     sleep_func: Callable[[float], None] = time.sleep,
     random_func: Callable[[], float] = random.random,
 ) -> OpenAIResponse:
+    return post_json(payload, api_key, endpoint="responses", timeout_seconds=timeout_seconds,
+                     retry_attempts=retry_attempts, retry_backoff_seconds=retry_backoff_seconds,
+                     urlopen_func=urlopen_func, sleep_func=sleep_func, random_func=random_func)
+
+
+def post_json(
+    payload: dict[str, Any],
+    api_key: str,
+    *,
+    endpoint: str,
+    timeout_seconds: int,
+    retry_attempts: int,
+    retry_backoff_seconds: float,
+    urlopen_func: Callable[..., Any] | None = None,
+    sleep_func: Callable[[float], None] = time.sleep,
+    random_func: Callable[[], float] = random.random,
+    before_attempt: Callable[[int], Any] | None = None,
+    after_attempt: Callable[[Any, dict | None, OpenAIRequestError | None, int], None] | None = None,
+    deadline: float | None = None,
+    monotonic_func: Callable[[], float] = time.monotonic,
+) -> OpenAIResponse:
+    if endpoint not in OPENAI_JSON_ENDPOINTS:
+        raise ValueError("Unsupported OpenAI endpoint")
+    send = urlopen_func if urlopen_func is not None else _JSON_OPENER.open
     req = request.Request(
-        OPENAI_RESPONSES_URL,
+        OPENAI_JSON_ENDPOINTS[endpoint],
         data=json.dumps(payload).encode("utf-8"),
         headers={
             "Authorization": f"Bearer {api_key}",
@@ -329,33 +363,45 @@ def post_responses(
     last_error: OpenAIRequestError | None = None
     retry_delays_seconds: list[float] = []
     for attempt in range(1, retry_attempts + 1):
+        remaining = timeout_seconds if deadline is None else min(timeout_seconds, deadline - monotonic_func())
+        if remaining <= 0:
+            raise OpenAIRequestError("OpenAI request deadline exceeded.", error_type="deadline_exceeded")
+        identity = before_attempt(attempt) if before_attempt else None
         started_at = time.perf_counter()
         try:
-            with urlopen_func(req, timeout=timeout_seconds) as resp:
+            remaining = timeout_seconds if deadline is None else min(timeout_seconds, deadline - monotonic_func())
+            if remaining <= 0:
+                raise OpenAIRequestError("OpenAI request deadline exceeded.", error_type="deadline_exceeded")
+            with send(req, timeout=remaining) as resp:
                 response = json.loads(resp.read().decode("utf-8"))
+        except OpenAIRequestError as exc:
+            request_error = exc
         except error.HTTPError as exc:
             request_error = read_http_error(exc)
         except (TimeoutError, error.URLError, OSError) as exc:
             request_error = read_network_error(exc)
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-            raise OpenAIRequestError(
+            request_error = OpenAIRequestError(
                 "OpenAI API returned an invalid JSON response.",
                 error_type="invalid_response",
-            ) from exc
+            )
         else:
             if not isinstance(response, dict):
-                raise OpenAIRequestError(
+                request_error = OpenAIRequestError(
                     "OpenAI API returned an invalid JSON response.",
                     error_type="invalid_response",
                 )
-            return OpenAIResponse(
-                response=response,
-                latency_ms=max(0, int((time.perf_counter() - started_at) * 1000)),
-            )
+            else:
+                latency = max(0, int((time.perf_counter() - started_at) * 1000))
+                if after_attempt:
+                    after_attempt(identity, response, None, latency)
+                return OpenAIResponse(response=response, latency_ms=latency, attempt_id=identity)
 
         request_error.attempts_made = attempt
         request_error.retry_attempts = retry_attempts
         request_error.retry_delays_seconds = tuple(retry_delays_seconds)
+        if after_attempt:
+            after_attempt(identity, None, request_error, max(0, int((time.perf_counter() - started_at) * 1000)))
         last_error = request_error
         if not request_error.retryable or attempt >= retry_attempts:
             request_error.retry_exhausted = request_error.retryable and attempt >= retry_attempts
@@ -366,6 +412,9 @@ def post_responses(
             backoff_seconds=retry_backoff_seconds,
             random_func=random_func,
         )
+        if deadline is not None and retry_delay >= deadline - monotonic_func():
+            raise OpenAIRequestError("OpenAI retry deadline exceeded.", error_type="deadline_exceeded",
+                                     attempts_made=attempt) from request_error
         retry_delays_seconds.append(retry_delay)
         sleep_func(retry_delay)
     if last_error is not None:

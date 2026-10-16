@@ -5,16 +5,16 @@ Workspace for local Codex-oriented projects, tools, plugins, skills, and shared 
 ## Projects
 
 - [common](./common/README.md)  
-  Repository-wide shared runtime helpers and config bundles used across multiple local tools and services, currently including the shared SQLite access layer and the shared hard-TTL runner for one-shot non-daemon jobs.
+  Shared atomic UTF-8/JSON writes, SQLite access and config, and hard-TTL process supervision for one-shot jobs.
 
 - [telegram_connector](./telegram_connector/README.md)  
-  Local Telegram toolkit with a bot bridge, channel history ingestion via Telethon, SQLite storage, OCR support, CSV export, and a launchd-backed daemon flow.
+  Telegram history, OCR, CSV export, scheduled digests and bounded `/topics`, `/search`, `/qa` analytics, with a separate bot listener and persistent job recovery.
 
 - [telegram_agent_bot](./telegram_agent_bot/README.md)  
   Standalone Telegram task agent with its own bridge, OpenAI-backed worker, local read-only tools, public web search/fetch, and separate daemon flow.
 
 - [telegram_shared](./telegram_shared/README.md)
-  Shared infrastructure primitives reused by the Telegram projects: config loading, secret resolution, bridge env helpers, Bot API helpers, formatting, redaction, and OpenAI usage/stats utilities.
+  Shared Telegram/OpenAI transport, bounded retries and attempt hooks, config/secrets, bridge env, formatting, redaction and usage telemetry.
 
 - [infoext-monitor](./infoext-monitor/README.md)
   Local macOS monitor for an InfoExt expediente status, using Playwright, local CAPTCHA OCR, atomic state and the existing `telegram_connector` delivery path.

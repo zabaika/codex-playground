@@ -39,6 +39,7 @@ text_chunk_size = "3900"
 # Values are clamped to 1..2000.
 agent_stats_row_limit = "200"
 # Wall-clock timeout in seconds for one bridge-launched worker subprocess, such as /digest, /update, /tail, /ocr, or /exportcsv.
+# Analytics workers reuse this ceiling; evaluation CLI `run` applies it to the whole invocation, including --case all.
 # Values are clamped to 60..14400.
 worker_process_timeout_seconds = "3600"
 # Number of Telegram sendMessage attempts for transient network failures in one outbound message send.
@@ -83,6 +84,10 @@ termination_grace_seconds = "10"
 # Wall-clock timeout in seconds for the whole digest prep-sync stage across all channels.
 # This is a soft in-process timeout for prep-sync diagnostics, not the outer hard process TTL above.
 sync_total_timeout_seconds = "1800"
+# Optional digest-only network timeout in seconds for each AI request attempt.
+# Absent or blank inherits digest_ai.openai_timeout_seconds (120 by default).
+# Values are clamped to 1 or more. Does not change analytics request timeouts.
+# openai_timeout_seconds = "30"
 # Optional separator appended to the end of each digest message. Leave empty to disable.
 separator_text = "──────────────────────────────\n──────────────────────────────"
 # Default analysis window start. Supports today, yesterday, week, month, and -Nd.
@@ -115,7 +120,8 @@ max_output_tokens = "1200"
 reasoning_effort = "none"
 # Reasoning summary returned by the OpenAI Responses API with each digest request. Use auto, concise, or detailed; none omits the API field and disables summary output.
 reasoning_summary = "auto"
-# Network timeout in seconds for one OpenAI digest request attempt.
+# Shared AI network timeout in seconds per request attempt; digest may override it in [digest].
+# Values are clamped to 1 or more.
 openai_timeout_seconds = "120"
 # Number of OpenAI digest retry attempts for transient network/OS, HTTP 408, retryable HTTP 429, HTTP 500/502/503/504, and edge/origin HTTP 520-525/530 failures.
 # Values are clamped to 1..5.
@@ -172,7 +178,8 @@ file = "digest_prompts.toml"
 
 [ocr]
 image_prompt = "Extract all readable text from the image."
-# Default number of pending image media assets processed by /ocr or ocr-pending when --limit is omitted.
+# Default number of pending image assets processed by /ocr or ocr-pending when --limit is omitted.
+# Also the shared per-job analytics OCR cap across explicitly requested channels and period, before a new manifest is frozen.
 pending_default_limit = "100"
 # Timeout in seconds for one Tesseract OCR subprocess. Values below 1 are clamped to 1.
 tesseract_timeout_seconds = "60"
@@ -183,3 +190,76 @@ bot_token = "keychain://telegram-connector/bot_token"
 api_hash = "keychain://telegram-connector/api_hash"
 user_password = "keychain://telegram-connector/user_password"
 openai_api_key = "keychain://telegram-connector/openai_api_key"
+
+# Analytics defaults below are also the compatibility defaults for older local
+# configs. New values are validated (not silently clamped). Integer caps are
+# positive except overlap_messages/max_repair_attempts, which permit 0.
+[analysis]
+max_channels = 32 # Explicit raw source entries per request, before peer resolution.
+max_messages = 200000 # Unique manifest messages/job, including context.
+max_input_tokens = 16000 # Complete model input/request, including schema/instructions.
+max_llm_calls = 256 # Physical inference attempts/job, including retries/repair.
+max_total_tokens = 2000000 # Cumulative input + output tokens/job; cached input counts.
+max_provider_requests = 1024 # Inference + token-count HTTP attempts/job.
+max_evidence_records = 20000 # Persisted intermediate records/job.
+max_intermediate_bytes = 67108864 # Logical serialized manifest/steps/evidence/lineage bytes/job.
+max_running_jobs = 1 # Concurrent analytic and FTS workers; one AI request/worker.
+max_queued_jobs = 8 # Queued analytics jobs; bounds durable admission backlog.
+retention_days = 7 # Inactive jobs/checkpoints; FTS readiness and full files have separate lifetimes.
+telegram_retry_attempts = 3 # Total attempts/logical history page, inside outer TTL.
+history_page_size = 100 # Messages/logical API page; independent of sync.batch_size DB flush.
+telegram_request_timeout_seconds = 60 # Seconds/page or peer lookup; excludes startup.
+overlap_messages = 2 # Previous-batch context; effective=min(value, messages_per_ai_pass-1).
+max_split_depth = 8 # Input/output saturation splits/logical input, within shared ledger.
+max_repair_attempts = 1 # Extra structure-repair calls/step; refusals are not repaired.
+merge_fan_in = 8 # Groups/reducer request; >=2, reduced further by the input token cap.
+max_merge_depth = 8 # Levels/merge tree; reducer must decrease its representation.
+relation_candidates_per_record = 20 # Persisted candidates/record before semantic verification.
+max_relation_pairs = 20000 # Semantic candidate pairs checked/job; exhaustion is visible.
+progress_min_interval_seconds = 15 # Seconds between coalesced Telegram progress edits.
+
+[analysis.search]
+mode = "fast" # fast=candidate analysis; full=all locally available messages.
+max_candidates = 2000 # Unique retrieval candidates/job before context expansion.
+max_query_terms = 24 # Expansion terms/query; original query is retained.
+context_messages = 20 # Context messages/candidate or branch, also bounded by max_messages.
+max_query_chars = 2000 # Characters/original query; checked before admission.
+max_term_chars = 128 # Characters/expanded term; bounds FTS-expression complexity.
+
+[analysis.output]
+default_detail = "normal" # short|normal|full for all three commands.
+max_items = 50 # Global elements/result; --limit must also fit the selected profile.
+sources_per_item = 3 # Default and maximum supporting refs/item; --sources=1..this cap.
+max_messages = 8 # Maximum Telegram parts/result; part size comes from bridge.text_chunk_size.
+results_dir = "scratch/telegram-connector-analytics/results" # Full reports, relative to repo root under scratch.
+
+# Each profile bounds the final API generation, not extraction coverage.
+# 1 <= default_limit <= max_items <= analysis.output.max_items;
+# sentences_per_item=[min,max] with 1<=min<=max is a prompt target, not truncation.
+[analysis.output.profiles.short]
+default_limit = 5 # Elements/result when --limit is omitted.
+max_items = 10 # Maximum elements/result in this profile.
+sentences_per_item = [1, 2] # Target sentences/element.
+max_chars = 4000 # Characters/result, independent of the token cap.
+max_output_tokens = 1000 # Reserved final output tokens/API request.
+
+[analysis.output.profiles.normal]
+default_limit = 15 # Elements/result when --limit is omitted.
+max_items = 30 # Maximum elements/result in this profile.
+sentences_per_item = [2, 4] # Target sentences/element.
+max_chars = 12000 # Characters/result; may require multiple Telegram parts.
+max_output_tokens = 3000 # Reserved final output tokens/API request.
+
+[analysis.output.profiles.full]
+default_limit = 30 # Elements/result when --limit is omitted.
+max_items = 50 # Maximum elements/result in this profile.
+sentences_per_item = [4, 8] # Target sentences/element.
+max_chars = 60000 # Characters/Markdown report; Telegram receives only its relative path.
+max_output_tokens = 12000 # Reserved final output tokens/API request.
+
+[analysis.cache]
+enabled = true # Cross-job leaf extraction/query-expansion reuse; checkpoints are always retained.
+max_bytes = 134217728 # Evictable serialized reuse entries; retained job/recovery dependencies and full reports are separate.
+
+[analysis_prompts]
+file = "analysis_prompts.toml" # Relative to the runtime config directory, as with digest_prompts.file.

@@ -17,3 +17,9 @@ class SecretResolutionError(TelegramSharedError):
 
 class TelegramApiError(TelegramSharedError):
     """Raised when the Telegram Bot API request fails or returns an error."""
+
+    def __init__(self, *args, request_outcome="unknown", error_code=None, retry_after=None):
+        super().__init__(*args)
+        self.request_outcome = request_outcome
+        self.error_code = error_code
+        self.retry_after = retry_after

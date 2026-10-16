@@ -35,6 +35,7 @@ from telegram_shared.openai_usage import log_openai_usage as shared_log_openai_u
 from telegram_shared.openai_api import OpenAIRequestError
 from telegram_shared.openai_api import post_responses
 from telegram_shared.bot_api import is_retryable_bot_api_error as shared_is_retryable_bot_api_error
+from telegram_shared.formatting import build_message_link
 
 
 APP_DIR = MODULE_DIR
@@ -290,7 +291,7 @@ def resolve_digest_config(config: dict[str, Any]) -> DigestConfig:
     ).strip()
     openai_reasoning_effort = str(shared_ai_section.get("reasoning_effort", "")).strip().lower()
     openai_reasoning_summary = str(shared_ai_section.get("reasoning_summary", "")).strip().lower()
-    raw_openai_timeout_seconds = str(
+    raw_openai_timeout_seconds = history_client.get_config_value(config, "digest", "openai_timeout_seconds") or str(
         shared_ai_section.get("openai_timeout_seconds", DEFAULT_OPENAI_DIGEST_TIMEOUT_SECONDS)
     ).strip()
     raw_openai_retry_attempts = str(
@@ -311,7 +312,7 @@ def resolve_digest_config(config: dict[str, Any]) -> DigestConfig:
     except ValueError as exc:
         raise SystemExit(
             "Invalid digest.min_messages_for_ai, digest.run_total_timeout_seconds, digest.termination_grace_seconds, "
-            "digest.sync_total_timeout_seconds, digest_ai.max_output_tokens, digest_ai.openai_timeout_seconds, "
+            "digest.sync_total_timeout_seconds, digest.openai_timeout_seconds, digest_ai.max_output_tokens, digest_ai.openai_timeout_seconds, "
             "digest_ai.openai_retry_attempts, or digest_ai.openai_retry_backoff_seconds in runtime config."
         ) from exc
     if not openai_reasoning_effort:
@@ -515,8 +516,7 @@ async def run_sync(
     plans = allocate_sync_limits(channels, total_limit)
     try:
         results = []
-        client = await history_client.open_telethon_client(runtime, auth_mode)
-        async with client:
+        async with history_client.open_telethon_session(runtime, auth_mode) as client:
             for plan in plans:
                 if plan.limit <= 0:
                     continue
@@ -682,19 +682,6 @@ def render_sender_label(message: dict[str, Any]) -> str:
     if username:
         return f"@{username.lstrip('@')}"
     return "<unknown sender>"
-
-
-def build_message_link(message: dict[str, Any]) -> str | None:
-    username = (message.get("username") or "").strip().lstrip("@")
-    message_id = message.get("message_id")
-    if not message_id:
-        return None
-    if username:
-        return f"https://t.me/{username}/{message_id}"
-    channel_id = message.get("channel_id")
-    if channel_id is None:
-        return None
-    return f"https://t.me/c/{channel_id}/{message_id}"
 
 
 def is_telegram_message_link(value: str) -> bool:

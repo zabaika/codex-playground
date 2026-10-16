@@ -10,7 +10,7 @@ import subprocess
 import sys
 import time
 from datetime import datetime, timezone
-from typing import Any, Sequence
+from typing import Any, Callable, Sequence
 
 
 COMMON_ROOT = Path(__file__).resolve().parent
@@ -138,6 +138,17 @@ def spawn_caffeinate(child_pid: int) -> subprocess.Popen[str] | None:
     )
 
 
+def stop_process_group(process_group_id: int, *, grace_seconds: float, poll_interval_seconds: float,
+                       term_signal: str, kill_signal: str) -> None:
+    send_signal_to_process_group(process_group_id, term_signal)
+    interval = max(0.05, min(poll_interval_seconds, 0.25))
+    if not wait_for_process_group_exit(process_group_id, timeout_seconds=grace_seconds, poll_interval_seconds=interval):
+        print(f"ttl_runner: process group {process_group_id} ignored {term_signal}, escalating to {kill_signal}",
+              file=sys.stderr, flush=True)
+        send_signal_to_process_group(process_group_id, kill_signal)
+        wait_for_process_group_exit(process_group_id, timeout_seconds=max(1.0, grace_seconds), poll_interval_seconds=interval)
+
+
 def cleanup_caffeinate(proc: subprocess.Popen[str] | None) -> None:
     if proc is None:
         return
@@ -164,6 +175,8 @@ def run_with_ttl(
     timeout_reason: str,
     use_caffeinate: bool,
     sleep_policy: str = "interrupt",
+    stop_requested: Callable[[], bool] | None = None,
+    env: dict[str, str] | None = None,
 ) -> int:
     if sleep_policy not in SLEEP_POLICIES:
         raise ValueError(f"Unknown sleep policy: {sleep_policy}")
@@ -173,7 +186,10 @@ def run_with_ttl(
     ttl_clock = common_process.awake_time if sleep_policy == "pause" else common_process.continuous_time
     started_ttl = started_awake if sleep_policy == "pause" else started_continuous
     caffeinate_info: dict[str, Any] = {"requested": use_caffeinate, "flags": ["-i", "-s", "-w"], "status": "disabled"}
-    child = subprocess.Popen(list(command), start_new_session=True)
+    spawn_options: dict[str, Any] = {"start_new_session": True}
+    if env is not None:
+        spawn_options["env"] = env
+    child = subprocess.Popen(list(command), **spawn_options)
     process_group_id = os.getpgid(child.pid)
     caffeinate_proc = None
     if use_caffeinate:
@@ -213,11 +229,15 @@ def run_with_ttl(
         publish_diagnostics()
         deadline = started_ttl + timeout_seconds
         interrupted_by_sleep = False
+        stopped = False
 
         while True:
             return_code = child.poll()
             if return_code is not None:
                 return return_code
+            if stop_requested is not None and stop_requested():
+                stopped = True
+                break
             interrupted_by_sleep = (
                 sleep_policy == "interrupt"
                 and common_process.sleep_elapsed(started_continuous, started_awake) >= config.sleep_interruption_threshold_seconds
@@ -230,46 +250,41 @@ def run_with_ttl(
                 publish_diagnostics()
             time.sleep(poll_interval_seconds)
 
-        reason = "host_sleep_interrupted" if interrupted_by_sleep else timeout_reason
+        reason = "cancel_requested" if stopped else ("host_sleep_interrupted" if interrupted_by_sleep else timeout_reason)
         print(
             f"ttl_runner: {reason} for pid={child.pid} pgid={process_group_id}",
             file=sys.stderr,
             flush=True,
         )
-        mark_timeout_audit(
-            audit_file,
-            timeout_seconds=timeout_seconds,
-            grace_seconds=grace_seconds,
-            reason=reason,
-            pid=child.pid,
-            process_group_id=process_group_id,
-        )
+        if stopped:
+            if audit_file is not None:
+                timestamp = audit_timestamp()
+                payload = load_audit_payload(audit_file)
+                payload.update(status="cancelled", reason=reason, updated_at=timestamp, finished_at=timestamp,
+                               stopped_pid=child.pid, stopped_process_group_id=process_group_id)
+                write_audit_payload(audit_file, payload)
+        else:
+            mark_timeout_audit(
+                audit_file,
+                timeout_seconds=timeout_seconds,
+                grace_seconds=grace_seconds,
+                reason=reason,
+                pid=child.pid,
+                process_group_id=process_group_id,
+            )
         if interrupted_by_sleep and audit_file is not None:
             payload = load_audit_payload(audit_file)
             payload.update(status="interrupted", reason=reason)
             write_audit_payload(audit_file, payload)
-        send_signal_to_process_group(process_group_id, term_signal)
-        if not wait_for_process_group_exit(
-            process_group_id,
-            timeout_seconds=grace_seconds,
-            poll_interval_seconds=max(0.05, min(poll_interval_seconds, 0.25)),
-        ):
-            print(
-                f"ttl_runner: process group {process_group_id} ignored {term_signal}, escalating to {kill_signal}",
-                file=sys.stderr,
-                flush=True,
-            )
-            send_signal_to_process_group(process_group_id, kill_signal)
-            wait_for_process_group_exit(
-                process_group_id,
-                timeout_seconds=max(1.0, grace_seconds),
-                poll_interval_seconds=max(0.05, min(poll_interval_seconds, 0.25)),
-            )
+        stop_process_group(process_group_id, grace_seconds=grace_seconds,
+                           poll_interval_seconds=poll_interval_seconds, term_signal=term_signal, kill_signal=kill_signal)
         try:
             child.wait(timeout=max(1.0, grace_seconds))
         except subprocess.TimeoutExpired:
             child.kill()
             child.wait()
+        if stopped:
+            return 128 + common_process.resolve_signal(term_signal)
         return config.sleep_interruption_exit_code if interrupted_by_sleep else timeout_exit_code
     finally:
         # Audit/clock failures must not leave workers or sleep inhibitors alive.
@@ -277,6 +292,10 @@ def run_with_ttl(
             if child.poll() is None:
                 send_signal_to_process_group(process_group_id, kill_signal)
                 child.wait(timeout=max(1.0, grace_seconds))
+            elif process_group_exists(process_group_id):
+                # Root exit alone does not prove its owned descendants stopped.
+                stop_process_group(process_group_id, grace_seconds=grace_seconds,
+                                   poll_interval_seconds=poll_interval_seconds, term_signal=term_signal, kill_signal=kill_signal)
         finally:
             finish_caffeinate()
 

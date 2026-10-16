@@ -10,7 +10,7 @@ Use it as an entry guide. For repository-wide engineering policy, safety rules, 
 - [README.md](./README.md): top-level project index
 - [RULEBOOK.md](./RULEBOOK.md): global engineering and safety rules
 - [common](./common): repository-wide shared runtime helpers and shared config bundles
-- [telegram_connector](./telegram_connector): Telegram ingestion, OCR, digest, and bot bridge project
+- [telegram_connector](./telegram_connector): Telegram history, OCR, export, digest, channel analytics and bot bridge
 - [telegram_agent_bot](./telegram_agent_bot): standalone Telegram task agent project
 - [telegram_shared](./telegram_shared/README.md): shared infrastructure primitives for Telegram projects
 - [infoext-monitor](./infoext-monitor): local InfoExt expediente monitor using Playwright, local CAPTCHA OCR, state tracking, and telegram_connector delivery

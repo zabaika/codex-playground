@@ -42,6 +42,13 @@ def load_history_client_module_with_env(**env: str) -> Any:
 
 
 class TelegramHistoryClientTests(unittest.TestCase):
+    def setUp(self) -> None:
+        sessions = tempfile.TemporaryDirectory()
+        previous = telegram_history_client.SESSION_DIR
+        self.addCleanup(sessions.cleanup)
+        self.addCleanup(setattr, telegram_history_client, "SESSION_DIR", previous)
+        telegram_history_client.SESSION_DIR = Path(sessions.name)
+
     def test_runtime_paths_stay_relative_to_app_dir_when_project_root_env_is_set(self) -> None:
         module = load_history_client_module_with_env(
             TELEGRAM_CONNECTOR_PROJECT_ROOT="/tmp/fake-project-root"

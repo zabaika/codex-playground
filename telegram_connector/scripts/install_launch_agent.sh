@@ -1,10 +1,24 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+STAGING_ROOT=""
+if [[ $# -gt 0 ]]; then
+  if [[ $# -ne 2 || "$1" != "--staging-root" || "$2" != /* || "$2" == "/" ]]; then
+    echo "Usage: $0 [--staging-root ABSOLUTE_DIRECTORY]" >&2
+    exit 2
+  fi
+  STAGING_ROOT="$2"
+fi
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SOURCE_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 SERVICE_ROOT="$HOME/Library/Application Support/telegram_connector_service"
 LAUNCH_AGENTS_DIR="$HOME/Library/LaunchAgents"
+if [[ -n "$STAGING_ROOT" ]]; then
+  SERVICE_ROOT="$STAGING_ROOT/telegram_connector_service"
+  LAUNCH_AGENTS_DIR="$STAGING_ROOT/LaunchAgents"
+fi
+printf -v SERVICE_ROOT_SHELL '%q' "$SERVICE_ROOT"
 BRIDGE_PLIST_PATH="$LAUNCH_AGENTS_DIR/com.zabaika.telegram-connector-bridge.plist"
 DIGEST_PLIST_PATH="$LAUNCH_AGENTS_DIR/com.zabaika.telegram-connector-digest.plist"
 PYTHON_BIN="${PYTHON_BIN:-}"
@@ -79,6 +93,9 @@ mkdir -p "$SERVICE_ROOT/config" "$SERVICE_ROOT/data" "$SERVICE_ROOT/scripts" "$L
 cp "$SOURCE_ROOT/telegram_bridge.py" "$SERVICE_ROOT/telegram_bridge.py"
 cp "$SOURCE_ROOT/telegram_history_client.py" "$SERVICE_ROOT/telegram_history_client.py"
 cp "$SOURCE_ROOT/telegram_digest.py" "$SERVICE_ROOT/telegram_digest.py"
+cp "$SOURCE_ROOT/telegram_analysis.py" "$SERVICE_ROOT/telegram_analysis.py"
+cp "$SOURCE_ROOT/analysis_store.py" "$SERVICE_ROOT/analysis_store.py"
+cp "$SOURCE_ROOT/analysis_evidence.py" "$SERVICE_ROOT/analysis_evidence.py"
 rm -rf "$SERVICE_ROOT/common"
 cp -R "$SOURCE_ROOT/../common" "$SERVICE_ROOT/common"
 rm -rf "$SERVICE_ROOT/telegram_shared"
@@ -86,6 +103,31 @@ cp -R "$SOURCE_ROOT/../telegram_shared" "$SERVICE_ROOT/telegram_shared"
 cp "$SOURCE_ROOT/config/runtime.local.toml" "$SERVICE_ROOT/config/runtime.local.toml"
 cp "$SOURCE_ROOT/config/runtime.example.toml" "$SERVICE_ROOT/config/runtime.example.toml"
 cp "$SOURCE_ROOT/config/digest_prompts.toml" "$SERVICE_ROOT/config/digest_prompts.toml"
+cp "$SOURCE_ROOT/config/analysis_prompts.toml" "$SERVICE_ROOT/config/analysis_prompts.toml"
+
+"$PYTHON_BIN" - "$SOURCE_ROOT" "$SERVICE_ROOT" <<'PY'
+import shutil
+import sys
+import tomllib
+from pathlib import Path
+
+source_root, service_root = map(Path, sys.argv[1:])
+with (source_root / "config/runtime.local.toml").open("rb") as fh:
+    config = tomllib.load(fh)
+for section, default in (("digest_prompts", "digest_prompts.toml"), ("analysis_prompts", "analysis_prompts.toml")):
+    path = Path(str(config.get(section, {}).get("file", default))).expanduser()
+    if path.is_absolute():
+        if not path.is_file():
+            raise SystemExit(f"Missing configured prompt bundle: {section}")
+        continue  # An absolute operator path remains an external reference.
+    source = (source_root / "config" / path).resolve()
+    target = (service_root / "config" / path).resolve()
+    if not target.is_relative_to(service_root.resolve()):
+        raise SystemExit(f"Configured relative bundle escapes service root: {section}")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if source != target:
+        shutil.copy2(source, target)
+PY
 
 if [[ -d "$SOURCE_ROOT/data/sessions" && ! -d "$SERVICE_ROOT/data/sessions" ]]; then
   cp -R "$SOURCE_ROOT/data/sessions" "$SERVICE_ROOT/data/sessions"
@@ -103,7 +145,7 @@ cat > "$SERVICE_ROOT/scripts/run_telegram_bridge.sh" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT="\$HOME/Library/Application Support/telegram_connector_service"
+ROOT=$SERVICE_ROOT_SHELL
 export PATH="/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 : "\${TELEGRAM_CONNECTOR_PROJECT_ROOT:?TELEGRAM_CONNECTOR_PROJECT_ROOT is required}"
 STARTUP_LOG="\$TELEGRAM_CONNECTOR_PROJECT_ROOT/data/launchd/bridge.startup.log"
@@ -126,7 +168,7 @@ cat > "$SERVICE_ROOT/scripts/run_telegram_digest.sh" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT="\$HOME/Library/Application Support/telegram_connector_service"
+ROOT=$SERVICE_ROOT_SHELL
 export PATH="/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 : "\${TELEGRAM_CONNECTOR_PROJECT_ROOT:?TELEGRAM_CONNECTOR_PROJECT_ROOT is required}"
 STARTUP_LOG="\$TELEGRAM_CONNECTOR_PROJECT_ROOT/data/launchd/digest.startup.log"
@@ -134,12 +176,12 @@ AUDIT_LOG="\$TELEGRAM_CONNECTOR_PROJECT_ROOT/data/launchd/digest.last_attempt.js
 
 cd "\$ROOT"
 read -r RUN_TOTAL_TIMEOUT_SECONDS TERMINATION_GRACE_SECONDS < <(
-  "$PYTHON_BIN" - <<'PY'
+  "$PYTHON_BIN" - "\$ROOT" <<'PY'
 import sys
 import tomllib
 from pathlib import Path
 
-service_root = Path.home() / "Library" / "Application Support" / "telegram_connector_service"
+service_root = Path(sys.argv[1])
 if str(service_root) not in sys.path:
     sys.path.insert(0, str(service_root))
 
@@ -259,11 +301,15 @@ cat > "$DIGEST_PLIST_PATH" <<EOF
 </plist>
 EOF
 
-launchctl bootout "$LAUNCHCTL_DOMAIN" "$BRIDGE_PLIST_PATH" >/dev/null 2>&1 || true
-launchctl bootout "$LAUNCHCTL_DOMAIN" "$DIGEST_PLIST_PATH" >/dev/null 2>&1 || true
-launchctl bootstrap "$LAUNCHCTL_DOMAIN" "$BRIDGE_PLIST_PATH"
-launchctl bootstrap "$LAUNCHCTL_DOMAIN" "$DIGEST_PLIST_PATH"
-launchctl kickstart -k "$LAUNCHCTL_DOMAIN/com.zabaika.telegram-connector-bridge"
+if [[ -z "$STAGING_ROOT" ]]; then
+  launchctl bootout "$LAUNCHCTL_DOMAIN" "$BRIDGE_PLIST_PATH" >/dev/null 2>&1 || true
+  launchctl bootout "$LAUNCHCTL_DOMAIN" "$DIGEST_PLIST_PATH" >/dev/null 2>&1 || true
+  launchctl bootstrap "$LAUNCHCTL_DOMAIN" "$BRIDGE_PLIST_PATH"
+  launchctl bootstrap "$LAUNCHCTL_DOMAIN" "$DIGEST_PLIST_PATH"
+  launchctl kickstart -k "$LAUNCHCTL_DOMAIN/com.zabaika.telegram-connector-bridge"
+else
+  echo "Staged runtime only; launchctl was not invoked."
+fi
 
 echo "Installed launch agent: $BRIDGE_PLIST_PATH"
 echo "Installed launch agent: $DIGEST_PLIST_PATH"

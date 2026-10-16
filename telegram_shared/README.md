@@ -9,17 +9,19 @@ This package is intentionally domain-light. It owns reusable runtime mechanics s
 - bridge environment and subprocess helpers
 - runtime config parsing helpers
 - Telegram text formatting
+- metadata-to-message-link formatting shared with digest; analytics owns stricter provenance checks
 - sensitive-text redaction
 - secret resolution wrappers
 - shared path resolution
 - AI usage summary formatting
 - OpenAI Responses API transport and retry classification
+- optional physical-attempt identity/usage correlation for application-owned budget ledgers
 
 Product behavior stays in the owning app. For example, retry limits are read from each app's runtime config, not from `telegram_shared`.
 
 ## AI Usage Metrics
 
-The shared usage summary exposes three prompt-cache signals:
+The shared usage summary exposes prompt-cache signals and response diagnostics:
 
 - `cached input tokens`: tokens read from an existing prompt cache
 - `cache write tokens`: tokens written while creating or refreshing a prompt cache entry when the API reports the metric
@@ -54,9 +56,32 @@ Current retryable Telegram Bot API failures are:
 
 Permanent Telegram API errors such as bad chat ids, revoked tokens, and other non-retryable API responses should be allowed to surface to the owning app.
 
+`TelegramApiError` also exposes `request_outcome`, `error_code`, and `retry_after`
+without changing legacy error text. Only explicit, consistent Bot API 4xx error
+responses establish refusal; transport and unverified responses remain unknown.
+Durable delivery callers use one `api_call` per recorded intent and own their retry
+policy rather than invoking the legacy retry wrapper.
+
 ## OpenAI Responses Retry Boundary
 
-`telegram_shared.openai_api.post_responses` owns bounded retries for the shared OpenAI Responses API transport. Each caller supplies its timeout, attempt count, and backoff from its own runtime config.
+`telegram_shared.openai_api.post_json` owns bounded JSON POST retries for two allowlisted
+endpoints: `responses` and `input_tokens`. The latter uses
+[`POST /v1/responses/input_tokens`](https://developers.openai.com/api/docs/guides/token-counting),
+not local token estimation. `post_responses` preserves the legacy interface and sender
+behavior. Each caller supplies its timeout, attempt count and backoff from runtime config.
+
+The default `post_json` sender rejects redirects. An explicit sender is an injection
+boundary, not permission to redirect authenticated requests. Optional `before_attempt`
+and `after_attempt` hooks bracket physical attempts; the admitted identity is returned
+as `OpenAIResponse.attempt_id`. Hook failures propagate. The optional monotonic deadline
+bounds request time and retry waits, while the application still owns the outer hard TTL.
+Applications own reservations, cumulative budgets, unknown outcomes and idempotency;
+counted callers use the hooks to admit and settle retries against that ledger.
+
+`openai_usage.log_openai_usage` can correlate a usage row with
+`(job_id, batch_id, attempt_id)` and retain measured failure latency without usage tokens.
+The owning application initializes the corresponding schema. Missing usage is not zero
+and does not release an uncertain reservation. Prompt-text persistence stays opt-in.
 
 Retryable OpenAI failures are network errors, including OS-level connection and temporary DNS failures; client errors `408` and eligible `429`; standard transient server errors `500`/`502`/`503`/`504`; and edge/origin errors `520` through `525` plus `530`. HTTP `3xx` responses are never retried: a redirect that reaches the classifier needs an explicitly validated target and is not a transient API failure. Every other HTTP `4xx` response is also not retried: it indicates a request, authentication, permission, quota, policy, or resource-state problem that another identical POST cannot resolve. A `429` with a permanent quota type or code is also not retried. Explicit local OS failures such as invalid descriptors and permission errors, HTTP `501`, and edge certificate error `526` are not retried. The helper honors `Retry-After`; otherwise it uses exponential backoff with jitter.
 
