@@ -277,6 +277,12 @@ Integration responsibilities:
 
 Do not flatten uncertainty away. A useful final report says what was checked, what was not checked, what failed, and what evidence supports the conclusions.
 
+### Information preservation and handoffs
+
+Derive preservation requirements and permitted losses from the task's project contract before choosing an intermediate representation. Inspect what actually crosses each relevant stage boundary, including selection, truncation and budget-driven reductions, rather than inferring preservation from stored inputs alone. Verify that required information and its provenance survive where the contract requires them; propagate coverage limits to the final result. Keep source data distinguishable from processing diagnostics or model inferences so an internal observation is not presented as a source-supported fact.
+
+Use the project's existing representations and semantic policies. A summary, structured record or other representation is acceptable when it satisfies the contract; this check does not mandate fields, a particular pipeline, grouping rules or domain-specific conclusions. Choose contrasting cases that reveal loss of required information, misattribution or overstated coverage, alongside an allowed reduction that should pass.
+
 ## State and resume behavior
 
 Workflow state should be durable:

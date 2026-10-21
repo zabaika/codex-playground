@@ -86,6 +86,12 @@ Commit abort intent before signalling invocations. Fence subsequent runtime muta
 
 Hooks may rerun after recovery. A first-write-wins memo can retain a committed decision, but cannot atomically couple an external approval or payment to the memo. Store scope/version/provenance and recheck current authority at execution using [approval records](security-observability.md#approval-records); a persisted boolean is insufficient.
 
+### Result dependencies and retention
+
+Give retained results and their required dependencies an explicit lifetime independent of task liveness. While reading, verification, redelivery, or restoration remains supported, preserve the required inputs or a supported reconstruction path, including for completed or failed tasks. Distinguish these obligations from reuse-cache retention; after dependency expiry, apply the project's restoration/recomputation policy or explicitly report that the operation is unavailable. Verify the reconstructed result against the applicable contract rather than assuming it reproduces an expired snapshot. Use existing storage and lifecycle owners; this contract does not require a separate dependency subsystem or indefinite retention.
+
+Assess source/result changes against the project's version, freshness and snapshot contract: a valid historical snapshot may remain usable. Invalidate dependent prepared messages, reports and other reusable views only where they become unsuitable for the intended operation. Check the applicable version at publication or restoration, including concurrent changes; inspecting the newly saved result alone does not verify the bytes actually delivered. Keep confirmed and uncertain external-effect receipts attached to their original version: recomputation cannot erase them, authorize a resend, or silently combine old confirmed parts with a new result. Reconcile uncertain effects under the existing replay policy before further delivery.
+
 ## Application documents and forks
 
 Keep typed application state distinct from conversational memory and model-visible configuration. Define four independent document contracts: scope/lifetime, schema version, historical retention, and fork inheritance. A session-scoped document may stay shared; conversation-scoped copies become independent child incarnations; task-scoped documents retire with terminal work and should not manufacture copied live tasks.
