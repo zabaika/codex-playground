@@ -629,6 +629,10 @@ Lifecycle operations:
   - restart may reload an already installed plist or process
   - restart must not be assumed to sync fresh code, fresh config, or regenerated launcher artifacts unless it explicitly does so
 - after code changes, reinstall or redeploy the service bundle before the narrower restart or bootstrap step
+- after changing shared runtime modules or their imports, identify every directly or transitively affected installed consumer, including services that dynamically import another project's source while using their own copied runtime
+- redeploy each affected copied runtime through its canonical installer; installers must include the complete transitive dependency set, not only the shared package imported directly by the application
+- before declaring the change deployed, compare installed modules with their canonical sources and run import and bounded smoke checks with each consumer's actual interpreter and working directory, including dynamically loaded integrations; check the loaded service and fresh startup diagnostics as well
+- record which consumers and runtime paths were verified and which external effects remain untested; use isolated fixtures for import/delivery checks unless a live external action is authorized
 
 Runner and launcher discipline:
 

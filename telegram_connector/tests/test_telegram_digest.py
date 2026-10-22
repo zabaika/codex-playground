@@ -34,6 +34,80 @@ final_digest_template = "Final={channel_name}; {cache_breakpoint_marker} Total={
 
 
 class TelegramDigestTests(unittest.TestCase):
+    def test_http_initialization_failures_replace_previous_audit(self) -> None:
+        for failure in ("proxy", "dependency"):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as tmp:
+                audit = Path(tmp) / "digest.last_attempt.json"
+                audit.write_text(json.dumps({"run_id": "old", "status": "sent"}))
+                args = telegram_digest.build_parser().parse_args(["run", "--channel", "@fixture"])
+                args.audit_run_id = "fixture-" + failure
+                proxies = {"https": "http://fixture:private@proxy.invalid"} if failure == "proxy" else {}
+                expected = ValueError if failure == "proxy" else ModuleNotFoundError
+                modules = {"urllib3": None} if failure == "dependency" else {}
+                with patch.object(telegram_digest, "DIGEST_LAST_ATTEMPT_LOG", audit), \
+                     patch("common.http.request.getproxies", return_value=proxies), \
+                     patch.dict(sys.modules, modules), \
+                     patch.object(telegram_digest.history_client, "resolve_runtime") as resolve:
+                    with self.assertRaises(expected):
+                        telegram_digest.cmd_run(args)
+                payload = json.loads(audit.read_text())
+                self.assertEqual(payload["run_id"], args.audit_run_id)
+                self.assertEqual(payload["status"], "failed")
+                self.assertEqual(payload["phase"], "starting")
+                self.assertIsNotNone(payload["finished_at"])
+                self.assertTrue(payload["error"])
+                self.assertNotIn("private", str(payload))
+                resolve.assert_not_called()
+
+    def test_http_session_is_closed_after_later_startup_failure(self) -> None:
+        from common.http import current_urlopen
+
+        sessions = []
+
+        def fail_runtime():
+            sender = current_urlopen()
+            self.assertIsNotNone(sender)
+            sessions.append(sender.__self__)
+            raise RuntimeError("fixture runtime failure")
+
+        with tempfile.TemporaryDirectory() as tmp, \
+             patch.object(telegram_digest, "DIGEST_LAST_ATTEMPT_LOG", Path(tmp) / "audit.json"), \
+             patch("common.http.request.getproxies", return_value={}), \
+             patch.object(telegram_digest.history_client, "resolve_runtime", side_effect=fail_runtime):
+            args = telegram_digest.build_parser().parse_args(["run"])
+            with self.assertRaisesRegex(RuntimeError, "fixture runtime failure"):
+                telegram_digest.cmd_run(args)
+            payload = json.loads((Path(tmp) / "audit.json").read_text())
+        self.assertEqual(payload["status"], "failed")
+        self.assertEqual(len(sessions), 1)
+        self.assertTrue(sessions[0]._closed)
+        self.assertIsNone(current_urlopen())
+
+    def test_digest_ai_and_delivery_use_run_scoped_http_sender(self) -> None:
+        calls = []
+
+        def send(req, *, timeout):
+            calls.append((req.full_url, timeout))
+            payload = (
+                {"output": [{"content": [{"type": "output_text", "text": "summary"}]}]}
+                if req.host == "api.openai.com"
+                else {"ok": True, "result": {"message_id": 1}}
+            )
+            return io.BytesIO(json.dumps(payload).encode())
+
+        with telegram_digest.pooled_http_session() as session:
+            with patch.object(session, "urlopen", side_effect=send):
+                result = telegram_digest.run_openai_digest(
+                    "fixture", "fixture-model", "system", "prompt",
+                    prompt_cache_key="fixture", cache_breakpoint_marker="",
+                    reasoning_effort="low", reasoning_summary="none",
+                    timeout_seconds=17,
+                )
+                telegram_digest.send_digest_message("fixture", 1, result.text)
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(calls[0], ("https://api.openai.com/v1/responses", 17))
+        self.assertEqual(calls[1][0], "https://api.telegram.org/botfixture/sendMessage")
+
     def write_prompt_bundle(self, directory: Path, content: str = TEST_DIGEST_PROMPTS) -> Path:
         prompt_file = directory / "digest_prompts.toml"
         prompt_file.write_text(content, encoding="utf-8")

@@ -73,6 +73,11 @@ PY
 
 PYTHON_BIN="$(resolve_python_bin)"
 
+if ! "$PYTHON_BIN" -c 'import urllib3' >/dev/null 2>&1; then
+  echo "Missing urllib3; install telegram_connector/requirements.txt with $PYTHON_BIN." >&2
+  exit 1
+fi
+
 read -r DIGEST_HOUR DIGEST_MINUTE < <(
   "$PYTHON_BIN" - <<PY
 import tomllib

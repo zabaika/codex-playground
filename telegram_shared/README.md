@@ -19,6 +19,11 @@ This package is intentionally domain-light. It owns reusable runtime mechanics s
 
 Product behavior stays in the owning app. For example, retry limits are read from each app's runtime config, not from `telegram_shared`.
 
+Bot API and OpenAI JSON helpers use an active
+[`common.http.pooled_http_session`](../common/README.md) when the app enables it.
+Explicit sender injection takes precedence; outside that context the existing
+urllib senders remain in use. The pool adds no retries.
+
 ## AI Usage Metrics
 
 The shared usage summary exposes prompt-cache signals and response diagnostics:
@@ -67,8 +72,8 @@ policy rather than invoking the legacy retry wrapper.
 `telegram_shared.openai_api.post_json` owns bounded JSON POST retries for two allowlisted
 endpoints: `responses` and `input_tokens`. The latter uses
 [`POST /v1/responses/input_tokens`](https://developers.openai.com/api/docs/guides/token-counting),
-not local token estimation. `post_responses` preserves the legacy interface and sender
-behavior. Each caller supplies its timeout, attempt count and backoff from runtime config.
+not local token estimation. `post_responses` uses the same default sender selection
+as `post_json`. Each caller supplies its timeout, attempt count and backoff from runtime config.
 
 The default `post_json` sender rejects redirects. An explicit sender is an injection
 boundary, not permission to redirect authenticated requests. Optional `before_attempt`

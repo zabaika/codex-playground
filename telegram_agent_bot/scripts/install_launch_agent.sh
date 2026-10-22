@@ -1,10 +1,23 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+STAGING_ROOT=""
+if [[ $# -gt 0 ]]; then
+  if [[ $# -ne 2 || "$1" != "--staging-root" || "$2" != /* || "$2" == "/" ]]; then
+    echo "Usage: $0 [--staging-root ABSOLUTE_DIRECTORY]" >&2
+    exit 2
+  fi
+  STAGING_ROOT="$2"
+fi
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SOURCE_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 SERVICE_ROOT="$HOME/Library/Application Support/telegram_agent_bot_service"
 LAUNCH_AGENTS_DIR="$HOME/Library/LaunchAgents"
+if [[ -n "$STAGING_ROOT" ]]; then
+  SERVICE_ROOT="$STAGING_ROOT/telegram_agent_bot_service"
+  LAUNCH_AGENTS_DIR="$STAGING_ROOT/LaunchAgents"
+fi
 PLIST_PATH="$LAUNCH_AGENTS_DIR/com.zabaika.telegram-agent-bot-bridge.plist"
 PROJECT_LOG_DIR="$SOURCE_ROOT/data/launchd"
 STARTUP_LOG="$PROJECT_LOG_DIR/bridge.startup.log"
@@ -19,6 +32,8 @@ cp "$SOURCE_ROOT/telegram_agent_bridge.py" "$SERVICE_ROOT/telegram_agent_bridge.
 cp "$SOURCE_ROOT/telegram_agent_worker.py" "$SERVICE_ROOT/telegram_agent_worker.py"
 rm -rf "$SERVICE_ROOT/telegram_shared"
 cp -R "$SOURCE_ROOT/../telegram_shared" "$SERVICE_ROOT/telegram_shared"
+rm -rf "$SERVICE_ROOT/common"
+cp -R "$SOURCE_ROOT/../common" "$SERVICE_ROOT/common"
 cp "$SOURCE_ROOT/config/runtime.local.toml" "$SERVICE_ROOT/config/runtime.local.toml"
 cp "$SOURCE_ROOT/config/runtime.example.toml" "$SERVICE_ROOT/config/runtime.example.toml"
 
@@ -26,7 +41,7 @@ cat > "$SERVICE_ROOT/scripts/run_telegram_agent_bridge.sh" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT="$HOME/Library/Application Support/telegram_agent_bot_service"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 export PATH="/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 : "${TELEGRAM_AGENT_BOT_PROJECT_ROOT:?TELEGRAM_AGENT_BOT_PROJECT_ROOT is required}"
 STARTUP_LOG="$TELEGRAM_AGENT_BOT_PROJECT_ROOT/data/launchd/bridge.startup.log"
@@ -85,9 +100,18 @@ cat > "$PLIST_PATH" <<EOF
 </plist>
 EOF
 
-launchctl bootout "$LAUNCHCTL_DOMAIN" "$PLIST_PATH" >/dev/null 2>&1 || true
-launchctl bootstrap "$LAUNCHCTL_DOMAIN" "$PLIST_PATH"
-launchctl kickstart -k "$LAUNCHCTL_DOMAIN/com.zabaika.telegram-agent-bot-bridge"
+(
+  cd "$SERVICE_ROOT"
+  /usr/local/bin/python3 -c 'import telegram_agent_bridge, telegram_agent_worker'
+)
+
+if [[ -z "$STAGING_ROOT" ]]; then
+  launchctl bootout "$LAUNCHCTL_DOMAIN" "$PLIST_PATH" >/dev/null 2>&1 || true
+  launchctl bootstrap "$LAUNCHCTL_DOMAIN" "$PLIST_PATH"
+  launchctl kickstart -k "$LAUNCHCTL_DOMAIN/com.zabaika.telegram-agent-bot-bridge"
+else
+  echo "Staged runtime only; launchctl was not invoked."
+fi
 
 echo "Installed launch agent: $PLIST_PATH"
 echo "Service root: $SERVICE_ROOT"

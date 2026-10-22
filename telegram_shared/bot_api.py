@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Callable
 from urllib import error, request
 
+from common.http import current_urlopen
 from .errors import TelegramApiError
 
 
@@ -37,7 +38,7 @@ def api_call(
     payload: dict[str, Any] | None = None,
     *,
     timeout_seconds: int = DEFAULT_API_TIMEOUT_SECONDS,
-    urlopen_func: Callable[..., Any] = request.urlopen,
+    urlopen_func: Callable[..., Any] | None = None,
 ) -> Any:
     url = f"https://api.telegram.org/bot{token}/{method}"
     data = None
@@ -47,7 +48,8 @@ def api_call(
         headers["Content-Type"] = "application/json"
     req = request.Request(url, data=data, headers=headers, method="POST" if data else "GET")
     try:
-        with urlopen_func(req, timeout=timeout_seconds) as resp:
+        send = urlopen_func or current_urlopen() or request.urlopen
+        with send(req, timeout=timeout_seconds) as resp:
             response = json.loads(resp.read().decode("utf-8"))
     except TimeoutError as exc:
         raise TelegramApiError(f"Telegram API request timed out while calling {method}.") from exc

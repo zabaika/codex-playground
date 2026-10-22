@@ -13,6 +13,7 @@ from email.utils import parsedate_to_datetime
 from typing import Any, Callable
 from urllib import error, request
 
+from common.http import current_urlopen
 from .errors import TelegramSharedError
 from .redaction import redact_sensitive_text
 
@@ -323,7 +324,7 @@ def post_responses(
     timeout_seconds: int,
     retry_attempts: int,
     retry_backoff_seconds: float,
-    urlopen_func: Callable[..., Any] = request.urlopen,
+    urlopen_func: Callable[..., Any] | None = None,
     sleep_func: Callable[[float], None] = time.sleep,
     random_func: Callable[[], float] = random.random,
 ) -> OpenAIResponse:
@@ -350,7 +351,7 @@ def post_json(
 ) -> OpenAIResponse:
     if endpoint not in OPENAI_JSON_ENDPOINTS:
         raise ValueError("Unsupported OpenAI endpoint")
-    send = urlopen_func if urlopen_func is not None else _JSON_OPENER.open
+    send = urlopen_func or current_urlopen() or _JSON_OPENER.open
     req = request.Request(
         OPENAI_JSON_ENDPOINTS[endpoint],
         data=json.dumps(payload).encode("utf-8"),

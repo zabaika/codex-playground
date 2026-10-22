@@ -12,6 +12,19 @@ Use `common/` for code and config that are:
 
 ## Current Contents
 
+- [http.py](./http.py)
+  Opt-in, run-scoped HTTP connection pools using `urllib3`. The context closes
+  every pool on exit, preserves per-request timeouts, verifies TLS, and follows
+  no redirects or automatic retries. Only direct connections are supported:
+  configured HTTP, HTTPS, ALL or SOCKS proxies cause a clear startup error
+  without exposing their addresses or credentials. A `no_proxy` list alone
+  does not block direct connections. OS exception types and errno are retained
+  so callers can distinguish permanent failures from real timeouts.
+  Received HTTP error status and headers remain authoritative when reading
+  the diagnostic body fails; an unavailable body does not become a network error.
+  Callers retain their retry and uncertain-send policies. Only consumers that
+  enable `pooled_http_session` need the `urllib3` dependency.
+
 - [json_io.py](./json_io.py)
   Shared atomic UTF-8 file replacement with a JSON adapter, private temporary files, and file/directory fsync.
 

@@ -14,7 +14,6 @@ from pathlib import Path
 import time
 from types import SimpleNamespace
 from typing import Any, Callable
-from urllib import request
 
 MODULE_DIR = Path(__file__).resolve().parent
 REPO_ROOT = MODULE_DIR.parent
@@ -22,6 +21,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from common import process as common_process
+from common.http import pooled_http_session
 from common.json_io import write_json_atomic
 import telegram_bridge as bridge
 import telegram_history_client as history_client
@@ -1169,7 +1169,7 @@ def run_openai_digest(
     timeout_seconds: int = DEFAULT_OPENAI_DIGEST_TIMEOUT_SECONDS,
     retry_attempts: int = DEFAULT_OPENAI_DIGEST_RETRY_ATTEMPTS,
     retry_backoff_seconds: float = DEFAULT_OPENAI_DIGEST_RETRY_BACKOFF_SECONDS,
-    urlopen_func: Callable[..., Any] = request.urlopen,
+    urlopen_func: Callable[..., Any] | None = None,
     sleep_func: Callable[[float], None] = time.sleep,
     random_func: Callable[[], float] = random.random,
 ) -> OpenAIResult:
@@ -1829,7 +1829,9 @@ def cmd_run(args: argparse.Namespace) -> int:
     log_conn = None
     token = None
     chat_id = None
+    http_sessions = contextlib.ExitStack()
     try:
+        http_sessions.enter_context(pooled_http_session())
         import asyncio
 
         runtime = history_client.resolve_runtime()
@@ -2129,6 +2131,7 @@ def cmd_run(args: argparse.Namespace) -> int:
             "errors": errors,
             "analysis_errors": analysis_errors,
         }
+        http_sessions.close()
         print(json.dumps(payload, ensure_ascii=False, indent=2))
         persist_attempt(
             current_channel=None,
@@ -2151,10 +2154,13 @@ def cmd_run(args: argparse.Namespace) -> int:
         )
         raise
     finally:
-        if conn is not None:
-            conn.close()
-        if log_conn is not None:
-            log_conn.close()
+        try:
+            if conn is not None:
+                conn.close()
+            if log_conn is not None:
+                log_conn.close()
+        finally:
+            http_sessions.close()
 
 
 def build_parser() -> argparse.ArgumentParser:

@@ -77,6 +77,11 @@ bash telegram_agent_bot/scripts/restart_launch_agent.sh
 
 Use the installer after code changes, `telegram_shared` changes, runtime config changes, or prompt changes. Use restart only when installed code and config are already current.
 
+The installer copies both `telegram_shared/` and its `common/` dependencies and
+checks bridge/worker imports before reloading launchd. Use
+`--staging-root /absolute/path/to/staging` to verify an isolated runtime copy
+without loading or restarting services.
+
 The installer preserves existing launchd logs. Clear them only when explicitly required:
 
 ```bash
