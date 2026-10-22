@@ -19,6 +19,7 @@ The goal is to standardize:
 Keep documentation split by responsibility:
 
 - `RULEBOOK.md`: cross-project engineering policy, security rules, daemon/runtime conventions, shared architecture guidance
+- [CODE_CONVENTIONS.md](./CODE_CONVENTIONS.md): Python coding conventions, source guidance and size-review signals
 - `<project>/AGENTS.md`: project-specific coding-agent contract, boundaries, and local checklists
 - `<project>/README.md`: operator-facing setup, config, commands, runtime behavior, and troubleshooting
 
@@ -58,6 +59,7 @@ Keep documentation split by responsibility:
 
 - at the start of each new skill workflow run, load the full applicable rule context before acting; a new skill workflow run starts when a user request invokes a skill for a new substantive task, source, artifact, workflow, or external target
 - for that run, read `RULEBOOK.md`, the invoked skill's `SKILL.md`, every directly referenced rule, config, convention, template, or route file required by the selected workflow path, and any delegated skill rules when the selected skill explicitly delegates part of the workflow to another skill
+- links explicitly marked as bibliographic or provenance references are not required rule-context inputs; do not open or fetch them merely because they occur in a local instruction file; follow the local owner's source-refresh policy, while preserving separately required source reads for the user's actual task
 - do not treat truncated tool output as a completed rule-context read; if output is truncated, continue reading the missing ranges until the relevant file is read to EOF before proceeding
 - after the rule context is fully loaded, reuse it for follow-up turns inside the same workflow run instead of reloading everything for review, rename, rewrite, quality-check, approved-write, or final-verification requests
 - if chat context was compacted or summarized during an active skill workflow run, treat the summary as usable for rule-context continuity only when it explicitly states that the full required rule context was loaded successfully for this run and lists the relevant skill/rule files; otherwise reload the missing or uncertain rule context before continuing
@@ -229,6 +231,20 @@ Use the architecture rules in this order:
 4. define how thin surfaces behave, including degraded mode
 5. define approval, audit, idempotency, and automation constraints
 6. only then harden database runtime behavior
+
+### Modularity and Refactoring Decisions
+
+- for new or changed code, apply the relevant [CODE_CONVENTIONS.md](./CODE_CONVENTIONS.md) guidance and project-specific contracts; keep coding details and numeric review signals in that document rather than duplicating them here
+- before extending a file that reaches a convention's review signal, or adding an independent responsibility at any size, assess whether the new logic belongs with its current owner
+- when that review is triggered, briefly propose the useful options: keep the code together with a reason, simplify it within the file, or extract a cohesive module; state the expected maintenance benefit and any added coupling or compatibility cost
+- refactor only when it improves understanding, modification or verification; file length alone does not justify extraction, new layers, interfaces or wrappers; preserve cohesive transaction and state ownership and avoid introducing cyclic dependencies or duplicated policy
+- apply these recommendations with judgment, not mechanically; whenever there is doubt about applicability, benefit, compatibility, the intended boundary or authorization, ask the user before making the disputed decision or change; continue only work that does not depend on that answer
+- an explicitly agreed decision to retain a cohesive large module is valid; record its reason in the existing plan or review record and revisit it when responsibilities or relevant risks change, rather than demanding the same justification for each minor edit
+- keep structural refactoring separate from behavior changes and broad formatting; reorganize tests only when it has its own substantial maintenance or verification benefit, while allowing necessary import and dependency-patching updates
+- verify relevant behavior before and after a refactor and account for supported imports, CLI entrypoints, installers and copied runtimes; use the existing verification and deployment rules rather than treating a file move as proof of compatibility
+
+These judgment and exception provisions concern maintainability recommendations;
+they do not waive mandatory security, authorization or verification requirements.
 
 ### Core Runtime Structure
 

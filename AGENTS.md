@@ -4,6 +4,7 @@ This file is a repo-specific quickstart for coding agents working in `codex-play
 
 Use it as an entry guide. For repository-wide engineering policy, safety rules, and storage conventions, see:
 - [RULEBOOK.md](./RULEBOOK.md)
+- For code changes, apply [CODE_CONVENTIONS.md](./CODE_CONVENTIONS.md) together with the relevant project guidance.
 
 ## Repo Layout
 
