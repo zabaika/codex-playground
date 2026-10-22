@@ -9,8 +9,12 @@ from pathlib import Path
 import pytest
 
 from telegram_connector import telegram_analysis as analysis
+from telegram_connector import analysis_pipeline
+from telegram_connector import analysis_evidence
+from telegram_shared import openai_api
 from telegram_connector.tests.test_analysis_lifecycle import config
-from telegram_connector.tests.test_analysis_evidence import document, model_response
+from telegram_connector.tests.test_analysis_evidence import document, model_response, evidence_batch, extract
+from telegram_connector.tests.test_analysis_manifest import manifest_job
 from telegram_connector.tests.test_analysis_transport import Response
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -70,13 +74,13 @@ def test_s36_eval_contract_rejected_extraction_is_captured_without_changing_vali
         if kwargs["document"]["records"]:
             raise ValueError("evidence_supporting_span")
         return []
-    monkeypatch.setattr(analysis, "validate_evidence_records", validate)
+    monkeypatch.setattr(analysis_evidence, "validate_evidence_records", validate)
     path = tmp_path / "case.validation.json"
     with evaluator.capture_extraction_rejections(path):
         with pytest.raises(ValueError, match="^evidence_supporting_span$"):
-            analysis.validate_evidence_records(None, "job", "batch", document=rejected)
-        assert analysis.validate_evidence_records(None, "job", "other", document={"records": []}) == []
-    assert analysis.validate_evidence_records is validate
+            analysis_evidence.validate_evidence_records(None, "job", "batch", document=rejected)
+        assert analysis_evidence.validate_evidence_records(None, "job", "other", document={"records": []}) == []
+    assert analysis_evidence.validate_evidence_records is validate
     assert json.loads(path.read_text()) == [{"job_id": "job", "batch_id": "batch",
         "error": "evidence_supporting_span", "document": rejected}]
 
@@ -86,11 +90,11 @@ def test_s36_eval_contract_captures_stage_outputs_without_transport_credentials(
     def request(store, job_id, batch_id, **kwargs):
         assert kwargs["api_key"] == "fixture-key"
         return result
-    monkeypatch.setattr(analysis, "request_counted_analysis_payload", request)
+    monkeypatch.setattr(analysis_pipeline, "request_counted_analysis_payload", request)
     path = tmp_path / "case.stages.json"
     with evaluator.capture_model_responses(path):
-        assert analysis.request_counted_analysis_payload(None, "job", "batch", api_key="fixture-key") is result
-    assert analysis.request_counted_analysis_payload is request
+        assert analysis_pipeline.request_counted_analysis_payload(None, "job", "batch", api_key="fixture-key") is result
+    assert analysis_pipeline.request_counted_analysis_payload is request
     captured = json.loads(path.read_text())
     assert captured == [{"job_id": "job", "batch_id": "batch", "attempt_id": "attempt", "response": result["response"]}]
     assert "fixture-key" not in path.read_text()
@@ -100,6 +104,39 @@ def bundle():
     result = {"summary": "", "items": [{"title": "Условия", "text": "План взимать плату отменили до запуска.", "conditions": [], "exceptions": [], "contradictions": [],
         "sources": [{"channel_id": 11, "message_id": 3}]}], "limitations": []}
     return {"case_id": "one", "result": result, "result_sha256": hashlib.sha256(analysis.canonical_json(result).encode()).hexdigest()}
+
+
+@pytest.mark.parametrize("invalid", [False, True])
+def test_capture_wraps_actual_extraction_and_restores_hooks(evaluator, evidence_batch, tmp_path, monkeypatch, invalid):
+    store, job, batch = evidence_batch
+    data = document(batch)
+    if invalid:
+        data["records"][0]["source_refs"][0]["quote"] = "Несуществующая цитата"
+    calls = []
+    def send(request, timeout):
+        calls.append(request.full_url)
+        return Response({"input_tokens": 100} if request.full_url.endswith("input_tokens") else model_response(data))
+    monkeypatch.setattr(openai_api._JSON_OPENER, "open", lambda *a, **k: pytest.fail("Unexpected network request"))
+    original_request = analysis_pipeline.request_counted_analysis_payload
+    original_validate = analysis_evidence.validate_evidence_records
+    stages, rejections = tmp_path / "stages.json", tmp_path / "rejections.json"
+    with evaluator.capture_model_responses(stages), evaluator.capture_extraction_rejections(rejections):
+        result = extract(store, job, batch, send)
+    assert analysis_pipeline.request_counted_analysis_payload is original_request
+    assert analysis_evidence.validate_evidence_records is original_validate
+    captured = json.loads(stages.read_text())
+    assert len(captured) == len([url for url in calls if url.endswith("responses")])
+    assert all(entry["job_id"] == job["job_id"] and entry["batch_id"] == batch["batch_id"] for entry in captured)
+    attempts = {attempt["attempt_id"] for attempt in store.get_batch(batch["batch_id"])["attempts"]}
+    assert all(entry["attempt_id"] in attempts for entry in captured)
+    if invalid:
+        assert result["outcome"] == "invalid_schema"
+        assert len(json.loads(rejections.read_text())) == len(captured)
+        assert all(entry["error"] == "evidence_supporting_span" and entry["document"] == data
+                   for entry in json.loads(rejections.read_text()))
+    else:
+        assert result["outcome"] == "succeeded" and not rejections.exists()
+    assert "fixture-key" not in stages.read_text()
 
 
 def review(run):

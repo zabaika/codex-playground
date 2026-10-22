@@ -74,6 +74,9 @@ Code-review agent:
 Migration agent:
 
 - inventory affected files before editing;
+- establish the supported invocation/import matrix from current behavior; preserve those modes without imposing new ones as migration checks;
+- trace callable and mutable dependency owners through real runtime, test and evaluator paths; apply the repository's language conventions and verify capture, rejection and hook restoration at the exercised boundary;
+- include installers, copied-runtime dependencies and code-hash/provenance consumers in the migration inventory;
 - apply a mechanical transformation where possible;
 - list skipped, ambiguous, or manually reviewed cases;
 - validate representative and global checks.
@@ -365,9 +368,17 @@ Path escape through command syntax:
 
 Broken test after patch:
 
+- applies the repository's failure-triage and process-control rules before repairs or repeated checks;
 - performs bounded repair only when the failure is clear and in scope;
 - stops after the repair budget with evidence if unresolved;
 - does not hide failed or skipped validation.
+
+Migration and validation boundary cases:
+
+- **Drifting fixture clock:** a retained job uses a fixed admission date while the exercised control path uses today's date. Diagnose the fixture mismatch under repository test policy; a neighboring case with genuinely expired production data must still reject resume.
+- **Supported invocation matrix:** a script-only entrypoint fails an added package-import probe. Preserve its established contract; a neighboring failure of an already supported import mode remains a migration regression to repair.
+- **Moved dependency hook:** a direct test of an old re-export succeeds while the actual extraction or evaluation path bypasses its patch. Exercise the owning runtime path and verify capture/rejection and restoration after both success and exception; preserve supported public calls through the old entrypoint.
+- **Check still running:** a costly validation handle remains live after a quiet interval or stop request. Observe or stop that handle under repository process policy; a neighboring terminal failure may be rerun once its cause or required environment permission is addressed.
 
 Over-broad refactor:
 

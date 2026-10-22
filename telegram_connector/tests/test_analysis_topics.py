@@ -7,6 +7,8 @@ from pathlib import Path
 import pytest
 
 from telegram_connector import telegram_analysis as analysis
+from telegram_connector import analysis_pipeline
+from telegram_connector import analysis_evidence
 from telegram_connector.tests.test_analysis_manifest import manifest_job, seed, build, messages
 from telegram_connector.tests.test_analysis_evidence import document, model_response
 from telegram_connector.tests.test_analysis_transport import Response
@@ -52,7 +54,7 @@ def topic_records(manifest_job, request):
             exceptions=["студенты"] if "студенты" in text else [], event_at=None,
             assertion_kind="opinion" if topic == "мнение" else "reported")
         batch = store.plan_batch(job["job_id"], generation=job["generation"], step_key=f"fixture/{index}", kind="extract", payload={})
-        values = analysis.validate_evidence_records(store, job["job_id"], batch["batch_id"], generation=job["generation"],
+        values = analysis_evidence.validate_evidence_records(store, job["job_id"], batch["batch_id"], generation=job["generation"],
             document=data, fragments=[fragment])
         store.complete_batch(job["job_id"], batch["batch_id"], generation=job["generation"], records=values, inputs=[ref])
         records.extend(values)
@@ -97,7 +99,7 @@ def prepare_events(topic_records):
 
 def test_s25_topics_events_synthesis_receives_ranked_membership_not_flat_entity_pool(topic_records):
     store, job, original = prepare_events(topic_records)
-    evidence = analysis._synthesis_evidence(store, job)
+    evidence = analysis_pipeline._synthesis_evidence(store, job)
     assert [group["title"] for group in evidence["groups"]] == ["безопасность", "комиссия", "офис"]
     by_id = {r["record_id"]: r["payload"] for r in original}
     for group in evidence["groups"]:

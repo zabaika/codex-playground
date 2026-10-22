@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from telegram_connector import telegram_analysis as analysis
+from telegram_connector import analysis_pipeline
 from telegram_connector.tests.test_analysis_manifest import manifest_job, change_setting, seed, messages
 from telegram_connector.tests.test_analysis_evidence import model_response, document
 from telegram_connector.tests.test_analysis_transport import Response
@@ -679,7 +680,7 @@ def test_s29_full_search_answer_full_budget_stop_is_not_empty_complete(search_an
 
 def test_s29_full_search_answer_unsupported_free_summary_is_not_an_answer(search_job):
     store, job = search_job
-    value = analysis._synthesis_result(job, {"records": [], "relations": [], "reasons": [], "partial": False,
+    value = analysis_pipeline._synthesis_result(job, {"records": [], "relations": [], "reasons": [], "partial": False,
         "coverage": {"selection_mode": "all_messages", "selected_messages": 0}},
         {"summary": "Все банки гарантированно принимают без документов.", "items": [], "limitations": [],
          "insufficient_information": False, "saturated": False})
@@ -691,7 +692,7 @@ def test_s29_full_search_answer_requires_brief_when_supported_details_exist(sear
     evidence = {"records": [{"record_id": "supported", "payload": {"claim": "1250 EUR", "conditions": [], "exceptions": []}}],
         "relations": [], "reasons": [], "partial": False, "coverage": {"selection_mode": "all_messages"}}
     with pytest.raises(ValueError, match="search_answer_missing_summary"):
-        analysis._synthesis_result(job, evidence, {"summary": "", "items": [{"title": "Условия", "text": "1250 EUR",
+        analysis_pipeline._synthesis_result(job, evidence, {"summary": "", "items": [{"title": "Условия", "text": "1250 EUR",
             "conditions": [], "exceptions": [], "contradictions": [], "evidence_ids": ["supported"]}],
             "limitations": [], "insufficient_information": False, "saturated": False})
 

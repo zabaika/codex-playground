@@ -1035,6 +1035,11 @@ def test_s06_controls_and_resume_live_worker_lock_prevents_requeue(listener, con
 
 @pytest.mark.parametrize("command", ["status", "cancel", "resume"])
 def test_s06_controls_and_resume_listener_uses_priority_lane(listener, config, access, command, monkeypatch):
+    # Retention must use the same fixed time as this test's admitted job.
+    control_job = analysis.control_analysis_job
+    def control_at_fixture_time(*args, **kwargs):
+        return control_job(*args, **{**kwargs, "now": NOW})
+    monkeypatch.setattr(analysis, "control_analysis_job", control_at_fixture_time)
     conn = common_sqlite.connect_sqlite(config["paths"]["history_db"])
     try:
         job = stopped_job(AnalysisStore(conn), config, access) if command == "resume" else admit(AnalysisStore(conn), config, access, update())[0]

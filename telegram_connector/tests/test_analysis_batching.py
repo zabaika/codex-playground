@@ -4,6 +4,7 @@ import json
 import pytest
 
 from telegram_connector import telegram_analysis as analysis
+from telegram_connector import analysis_pipeline
 from telegram_connector.tests.test_analysis_budget import plan, setting
 from telegram_connector.tests.test_analysis_transport import Response, transport_job
 from telegram_connector.tests.test_analysis_manifest import manifest_job, seed, build, change_setting
@@ -283,7 +284,7 @@ def test_s15_bounded_payloads_first_yield_does_not_materialize_remaining_history
                    "input": {"channel_id": 22, "message_id": number, "date_utc": "2026-10-12T00:00:00+00:00",
                              "fragment_start": 0, "fragment_end": 0, "content_digest": "a" * 64}}
 
-    monkeypatch.setattr(analysis, "iter_analysis_manifest_messages", source)
+    monkeypatch.setattr(analysis_pipeline, "iter_analysis_manifest_messages", source)
     stream = batches(store, job)
     first = next(stream)
     assert len(first["messages"]) == 2

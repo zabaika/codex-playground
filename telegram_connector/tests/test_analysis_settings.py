@@ -103,6 +103,15 @@ def test_s02_settings_and_prompts_legacy_config_snapshot(legacy_config):
     assert legacy_config == original
 
 
+def test_invalid_policy_precedes_legacy_reads(legacy_config, monkeypatch):
+    module = analysis_module()
+    legacy_config["analysis"] = {"max_messages": 0}
+    monkeypatch.setattr(module, "_reused_settings", lambda *_: pytest.fail("Invalid policy must fail before legacy reads"))
+    monkeypatch.setattr(bridge, "resolve_secret_value", lambda *a, **k: pytest.fail("Settings must not resolve secrets"))
+    with pytest.raises(ValueError, match="analysis.max_messages"):
+        module.resolve_analysis_settings(legacy_config, config_dir=CONFIG_DIR)
+
+
 def test_s02_settings_and_prompts_snapshot_drives_request(legacy_config):
     from datetime import datetime, timezone
 

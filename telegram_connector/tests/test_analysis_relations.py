@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from telegram_connector import telegram_analysis as analysis
+from telegram_connector import analysis_evidence
 from telegram_connector import telegram_history_client as history
 from telegram_connector.tests.test_analysis_manifest import manifest_job, DATE
 from telegram_connector.tests.test_analysis_manifest import seed, build, messages, change_setting
@@ -28,7 +29,7 @@ def records_fixture(store, job, values):
         batch = store.plan_batch(job["job_id"], generation=job["generation"], step_key=f"fixture-extract/{index}", kind="extract", payload={})
         data = document({"messages": [fragment]})
         data["records"][0].update({key: copy.deepcopy(item) for key, item in value.items() if key not in {"text", "reply_to"}})
-        records = analysis.validate_evidence_records(store, job["job_id"], batch["batch_id"], generation=job["generation"], document=data, fragments=[fragment])
+        records = analysis_evidence.validate_evidence_records(store, job["job_id"], batch["batch_id"], generation=job["generation"], document=data, fragments=[fragment])
         store.complete_batch(job["job_id"], batch["batch_id"], generation=job["generation"], records=records, inputs=[fragment["input"]])
         result.append(records[0])
     return result
@@ -149,7 +150,7 @@ def test_s18_record_relations_cross_peer_header_does_not_invent_same_channel_rep
     history.upsert_message(store.conn, SimpleNamespace(id=22), message, None, None, None, None)
     raw = json.loads(store.conn.execute("SELECT raw_json FROM messages WHERE channel_id=22 AND message_id=9").fetchone()[0])
     assert raw["reply_to"].get("reply_to_peer_id") == {"channel_id": 11}
-    payload, _ = analysis._analysis_message_snapshot(store, 22, 9, 67108864)
+    payload, _ = analysis_evidence._analysis_message_snapshot(store, 22, 9, 67108864)
     assert payload["reply_to_message_id"] is None
 
 
@@ -273,7 +274,7 @@ def test_s18_record_relations_reply_header_survives_producer_database_manifest(m
     saved = json.loads(store.conn.execute("SELECT raw_json FROM messages WHERE channel_id=22 AND message_id=9").fetchone()[0])
     if reply_id is not None:
         assert saved.get("reply_to", {}).get("reply_to_msg_id") == reply_id
-    payload, digest = analysis._analysis_message_snapshot(store, 22, 9, 67108864)
+    payload, digest = analysis_evidence._analysis_message_snapshot(store, 22, 9, 67108864)
     assert payload["reply_to_message_id"] == reply_id and len(digest) == 64
 
 

@@ -6,6 +6,8 @@ from types import SimpleNamespace
 import pytest
 
 from telegram_connector import telegram_analysis as analysis
+from telegram_connector import analysis_pipeline
+from telegram_connector import analysis_settings
 from telegram_connector.tests.test_analysis_manifest import manifest_job, seed
 from telegram_connector.tests.test_analysis_transport import Response, transport_job
 from telegram_connector.tests.test_analysis_batching import prepare, payload, CAPABILITY
@@ -174,16 +176,16 @@ def test_review_enabled_ocr_precedes_manifest_with_shared_scoped_limit(manifest_
     monkeypatch.setattr(history, "run_tesseract", recognize)
     class Selected(Exception):
         pass
-    build = analysis.build_all_messages_manifest
+    build = analysis_pipeline.build_all_messages_manifest
     def select(*args, **kwargs):
         manifest = build(*args, generation=kwargs["generation"])
-        rows = list(analysis.iter_analysis_manifest_messages(store, job["job_id"], generation=job["generation"]))
+        rows = list(analysis_pipeline.iter_analysis_manifest_messages(store, job["job_id"], generation=job["generation"]))
         assert ("OCR: 9999 EUR" in str(rows)) is enabled
         assert calls == (["22-1.png", "22-2.png", "11-1.png"][:limit] if enabled else [])
         assert ("ocr_partial" in manifest["reasons"]) is (enabled and limit == 1)
         raise Selected
-    monkeypatch.setattr(analysis, "build_all_messages_manifest", select)
-    monkeypatch.setattr(analysis, "build_search_manifest", select)
+    monkeypatch.setattr(analysis_pipeline, "build_all_messages_manifest", select)
+    monkeypatch.setattr(analysis_pipeline, "build_search_manifest", select)
     with pytest.raises(Selected):
         execute(store, job, runtime=runtime, capabilities={"model": "fixture"}, api_key="fixture", access_provider=engine_access)
     assert store.conn.execute("SELECT COUNT(*) FROM media_assets WHERE ocr_status='pending'").fetchone()[0] == 4 - (limit if enabled else 0)
@@ -274,7 +276,7 @@ def test_s24_engine_wiring_inner_cli_dispatches_real_saved_result_without_ai(man
     monkeypatch.setattr(analysis.bridge, "load_runtime_config", lambda: {"bridge": {
         "allowed_chat_ids": "100", "allowed_user_ids": "7", "allowed_usernames": ""}})
     monkeypatch.setattr(analysis.bridge, "require_token", lambda: "fixture-token")
-    monkeypatch.setattr(analysis, "resolve_analysis_model_capabilities", lambda *a: pytest.fail("Saved result needs no model"))
+    monkeypatch.setattr(analysis_settings, "resolve_analysis_model_capabilities", lambda *a: pytest.fail("Saved result needs no model"))
     monkeypatch.setattr(analysis.history_client, "resolve_runtime", lambda: pytest.fail("Saved result needs no session"))
     sent = []
     monkeypatch.setattr(analysis.bridge, "send_analysis_text_once", lambda token, chat, text, mode, **kw:

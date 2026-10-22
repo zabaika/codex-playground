@@ -9,6 +9,7 @@ import pytest
 
 from common import sqlite as common_sqlite
 from telegram_connector import telegram_analysis as analysis
+from telegram_connector import analysis_evidence
 from telegram_connector import telegram_history_client as history
 from telegram_connector.analysis_store import AnalysisStore, StaleGenerationError, canonical_json
 
@@ -385,7 +386,7 @@ def test_s13_budget_ledger_fallback_sources_are_actual_processed_manifest_refs(b
     store.conn.execute("""INSERT INTO messages (channel_id,message_id,date_utc,text,raw_json,content_hash,imported_at)
         VALUES (11,1,?,'Источник','{}','legacy','now')""", (NOW.isoformat(),))
     batch = plan(store, job, kind="extract", key="extract/cached-empty")
-    _, digest = analysis._analysis_message_snapshot(store, 11, 1, 100000)
+    _, digest = analysis_evidence._analysis_message_snapshot(store, 11, 1, 100000)
     store.conn.execute("""INSERT INTO analysis_inputs
         (batch_id,channel_id,message_id,fragment_start,fragment_end,role,date_utc,content_digest)
         VALUES (?,11,1,0,0,'selected',?,?)""", (batch["batch_id"], NOW.isoformat(), digest))

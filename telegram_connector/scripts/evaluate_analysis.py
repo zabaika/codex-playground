@@ -18,6 +18,8 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from telegram_connector import telegram_analysis as analysis
+from telegram_connector import analysis_pipeline
+from telegram_connector import analysis_evidence
 from telegram_connector import telegram_history_client as history
 from telegram_connector.analysis_store import AnalysisStore
 from common import json_io, sqlite as common_sqlite, ttl_runner
@@ -245,7 +247,7 @@ def review_template(case, run):
 @contextmanager
 def capture_model_responses(path):
     """Keep synthetic model outputs, including self-reported limitations, without requests/secrets."""
-    original = analysis.request_counted_analysis_payload
+    original = analysis_pipeline.request_counted_analysis_payload
     responses = []
     def request(store, job_id, batch_id, **kwargs):
         result = original(store, job_id, batch_id, **kwargs)
@@ -253,17 +255,17 @@ def capture_model_responses(path):
             "attempt_id": result["attempt_id"], "response": copy.deepcopy(result["response"])})
         json_io.write_json_atomic(path, responses)
         return result
-    analysis.request_counted_analysis_payload = request
+    analysis_pipeline.request_counted_analysis_payload = request
     try:
         yield
     finally:
-        analysis.request_counted_analysis_payload = original
+        analysis_pipeline.request_counted_analysis_payload = original
 
 
 @contextmanager
 def capture_extraction_rejections(path):
     """Retain rejected synthetic evidence for diagnosis, preserving engine validation."""
-    original = analysis.validate_evidence_records
+    original = analysis_evidence.validate_evidence_records
     rejected = []
     def validate(store, job_id, batch_id, **kwargs):
         try:
@@ -273,11 +275,11 @@ def capture_extraction_rejections(path):
                 "error": str(exc), "document": copy.deepcopy(kwargs["document"])})
             json_io.write_json_atomic(path, rejected)
             raise
-    analysis.validate_evidence_records = validate
+    analysis_evidence.validate_evidence_records = validate
     try:
         yield
     finally:
-        analysis.validate_evidence_records = original
+        analysis_evidence.validate_evidence_records = original
 
 
 def execute_case(gold, config, scope, case_id, *, output_root, config_dir=None, live=False, api_key=None, urlopen_func=None):

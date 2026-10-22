@@ -12,6 +12,10 @@ Local Telegram toolkit for channel history ingestion, OCR, CSV export, scheduled
 - [../telegram_shared/README.md](../telegram_shared/README.md): shared Telegram helper boundaries and retry semantics
 - `--help` on the Python entrypoints: exact CLI syntax
 
+For analytics maintenance, use the [module ownership map](./AGENTS.md#architecture).
+`telegram_analysis.py` remains the public worker CLI and composition root;
+settings, evidence validation, rendering and pipeline stages have dedicated owners.
+
 ## What It Does
 
 - reads channel history through a Telegram user session with Telethon

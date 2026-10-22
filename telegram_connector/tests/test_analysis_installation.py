@@ -1,5 +1,6 @@
 """Exercise the canonical installer without touching user services or HOME."""
 
+import ast
 import json
 import io
 import os
@@ -13,7 +14,11 @@ import tarfile
 import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
-MODULES = ("telegram_bridge.py", "telegram_history_client.py", "telegram_digest.py", "telegram_analysis.py", "analysis_store.py", "analysis_evidence.py")
+MODULES = (
+    "telegram_bridge.py", "telegram_history_client.py", "telegram_digest.py",
+    "telegram_analysis.py", "analysis_store.py", "analysis_evidence.py",
+    "analysis_settings.py", "analysis_rendering.py", "analysis_pipeline.py",
+)
 
 
 @pytest.fixture
@@ -90,11 +95,53 @@ history.init_db(conn)
 print(json.dumps({'prompts': settings['analysis_prompts']['hash'], 'fts': conn.execute("SELECT count(*) FROM sqlite_master WHERE name='messages_fts'").fetchone()[0]}))
 conn.close()
 """
-    observed = subprocess.run([sys.executable, "-c", probe, str(service)], cwd=service, env=env,
+    observed = subprocess.run([sys.executable, "-I", "-c", probe, str(service)], cwd=service, env=env,
         text=True, capture_output=True, timeout=30)
     assert observed.returncode == 0, observed.stderr
     assert json.loads(observed.stdout)["fts"] == 1
     assert len(json.loads(observed.stdout)["prompts"]) == 64
+    # Each module is the first import in a fresh interpreter. Check both
+    # supported import layouts without borrowing modules from the checkout.
+    cold_probe = """
+import importlib, sys
+from pathlib import Path
+root, module, package = Path(sys.argv[1]), sys.argv[2], sys.argv[3] == 'package'
+sys.path.insert(0, str(root.parent if package else root))
+prefix = 'telegram_connector.' if package else ''
+loaded = importlib.import_module(prefix + module)
+assert Path(loaded.__file__).resolve() == (root / (module + '.py')).resolve()
+for name, value in list(sys.modules.items()):
+    if name.removeprefix(prefix) in sys.argv[4:]:
+        assert Path(value.__file__).resolve() == (root / (name.removeprefix(prefix) + '.py')).resolve()
+    shared = name.split('.')[0]
+    if shared in {'common', 'telegram_shared'} and getattr(value, '__file__', None):
+        assert Path(value.__file__).resolve().is_relative_to(root.resolve() / shared)
+"""
+    for mode in ("script", "package"):
+        root = service
+        if mode == "package":
+            # The service bundle is intentionally flat. A fixture package
+            # alias exercises package imports against these same staged bytes.
+            root = staging / "telegram_connector"
+            root.symlink_to(service, target_is_directory=True)
+            for shared in ("common", "telegram_shared"):
+                (staging / shared).symlink_to(service / shared, target_is_directory=True)
+        for name in MODULES:
+            # Digest's existing entrypoint uses script-only sibling imports.
+            if mode == "package" and name == "telegram_digest.py":
+                continue
+            module = Path(name).stem
+            cold = subprocess.run([sys.executable, "-I", "-c", cold_probe,
+                str(root), module, mode, *(Path(value).stem for value in MODULES)],
+                cwd=staging, env=env, text=True, capture_output=True, timeout=30)
+            assert cold.returncode == 0, cold.stderr
+    for mode in ("script", "package"):
+        arguments = [str(service / "telegram_analysis.py")] if mode == "script" else ["-m", "telegram_connector.telegram_analysis"]
+        help_result = subprocess.run([sys.executable, *arguments, "--help"],
+            cwd=staging, env={**env, "PYTHONPATH": str(staging)},
+            text=True, capture_output=True, timeout=30)
+        assert help_result.returncode == 0, help_result.stderr
+        assert "--job-id" in help_result.stdout and "--worker-inner" not in help_result.stdout
     (service / "data/telegram_history.sqlite3").write_text("keep installed database")
     (service / "data/sessions/fixture.session").write_text("keep installed session")
     repeated = install(installation)
@@ -102,6 +149,30 @@ conn.close()
     assert (service / "data/telegram_history.sqlite3").read_text() == "keep installed database"
     assert (service / "data/sessions/fixture.session").read_text() == "keep installed session"
     assert not marker.exists()
+
+
+def test_analytics_modules_preserve_ownership_boundaries():
+    allowed = {
+        "analysis_settings": set(),
+        "analysis_evidence": {"analysis_settings", "analysis_store"},
+        "analysis_rendering": set(),
+        "analysis_pipeline": {"analysis_settings", "analysis_evidence", "analysis_store", "telegram_history_client"},
+    }
+    connector = {Path(name).stem for name in MODULES}
+    for module, dependencies in allowed.items():
+        tree = ast.parse((ROOT / "telegram_connector" / (module + ".py")).read_text())
+        imported = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                imported.update(alias.name for alias in node.names)
+            elif isinstance(node, ast.ImportFrom):
+                imported.update([node.module] if node.module else [alias.name for alias in node.names])
+                assert all(alias.name != "*" for alias in node.names)
+        assert imported & connector <= dependencies
+        if module == "analysis_settings":
+            assert imported <= {"copy", "hashlib", "pathlib", "re", "string", "tomllib", "typing"}
+        if module == "analysis_rendering":
+            assert imported <= {"html", "pathlib", "re", "sys", "telegram_shared.bot_api"}
 
 
 @pytest.mark.parametrize("filename", ["analysis_prompts.toml", "digest_prompts.toml"])

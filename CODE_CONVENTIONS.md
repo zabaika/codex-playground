@@ -35,6 +35,11 @@ guidance do not automatically apply to them.
 - Keep imports explicit and grouped into standard library, third-party and local
   imports. Prefer module-level imports; preserve justified lazy/conditional imports
   required by optional dependencies or supported entrypoints. Avoid wildcard imports.
+- When moving a Python function, account for globals resolving in its defining
+  module. A re-export preserves calls, but assigning to that alias does not patch
+  the implementation's dependencies. Where substitution is supported, runtime
+  lookups, tests and instrumentation must target the same dependency owner;
+  verify the actual call path. This does not require module imports everywhere.
 - Follow the project's configured line length. Without an explicit project
   setting, use PEP 8's 79-character code and 72-character comment/docstring guidance.
   Treat these as readability guidance, not an instruction to rewrite surrounding code.

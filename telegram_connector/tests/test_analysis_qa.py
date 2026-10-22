@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from telegram_connector import telegram_analysis as analysis
+from telegram_connector import analysis_pipeline
 from telegram_connector.tests.test_analysis_manifest import manifest_job, seed, build, change_setting
 from telegram_connector.tests.test_analysis_batching import batches
 from telegram_connector.tests.test_analysis_evidence import document, extract, model_response
@@ -139,7 +140,7 @@ def test_s31_qa_extraction_final_item_requires_answer_evidence(qa_job, record_ty
     store, job = qa_job
     records = records_fixture(store, job, [{"record_type": record_type, "claim": "Вопрос без содержательного ответа"}])
     with pytest.raises(ValueError, match="qa_answer_missing_support"):
-        analysis._synthesis_result(job, evidence(records), final_document([records[0]["record_id"]]))
+        analysis_pipeline._synthesis_result(job, evidence(records), final_document([records[0]["record_id"]]))
 
 
 @pytest.mark.parametrize("message", [2, 3])
@@ -147,7 +148,7 @@ def test_s31_qa_extraction_personal_solution_supports_generalized_question(qa_re
     store, job, records, calls = qa_records
     answer = next(record for record in records if record["record_type"] == "answer"
         and record["payload"]["source_refs"][0]["message_id"] == message)
-    value = analysis._synthesis_result(job, evidence(records), final_document([answer["record_id"]], text=answer["payload"]["claim"]))
+    value = analysis_pipeline._synthesis_result(job, evidence(records), final_document([answer["record_id"]], text=answer["payload"]["claim"]))
     assert value["items"][0]["evidence_ids"] == [answer["record_id"]] and not value["partial"]
     assert value["items"][0]["text"] == answer["payload"]["claim"]
     assert answer["payload"]["assertion_kind"] == "experience"
@@ -156,7 +157,7 @@ def test_s31_qa_extraction_personal_solution_supports_generalized_question(qa_re
 def test_s31_qa_extraction_empty_items_do_not_become_fabricated_summary(qa_job):
     store, job = qa_job
     data = {**final_document([]), "items": [], "summary": "Неподдержанный ответ по памяти модели"}
-    result = analysis._synthesis_result(job, evidence([]), data)
+    result = analysis_pipeline._synthesis_result(job, evidence([]), data)
     assert result["items"] == [] and result["summary"] == "" and result["insufficient_information"]
 
 
@@ -224,7 +225,7 @@ def test_s32_cross_batch_qa_unverified_question_answer_pair_is_rejected(qa_job, 
     if relation:
         supplied["relations"] = [{"left_id": ids[0], "right_id": ids[1], "relation": relation}]
     with pytest.raises(ValueError, match="qa_question_without_answer_link"):
-        analysis._synthesis_result(job, supplied, final_document(ids))
+        analysis_pipeline._synthesis_result(job, supplied, final_document(ids))
 
 
 def test_s32_cross_batch_qa_answer_to_another_question_does_not_validate_pair(qa_job):
@@ -237,7 +238,7 @@ def test_s32_cross_batch_qa_answer_to_another_question_does_not_validate_pair(qa
     supplied = evidence(records)
     supplied["relations"] = [{"left_id": ids[1], "right_id": ids[2], "relation": "answers"}]
     with pytest.raises(ValueError, match="qa_question_without_answer_link"):
-        analysis._synthesis_result(job, supplied, final_document([ids[0], ids[2]]))
+        analysis_pipeline._synthesis_result(job, supplied, final_document([ids[0], ids[2]]))
 
 
 @pytest.mark.parametrize("with_answer,error", [(False, "qa_answer_missing_support"), (True, "qa_question_without_answer_link")])
@@ -273,7 +274,7 @@ def test_s32_cross_batch_qa_contrary_results_keep_conditions_and_both_sources(qa
             for left, right in pairs], "saturated": False}))
     link(store, job, send)
     supplied["relations"] = list(store.iter_link_decisions(job["job_id"]))
-    result = analysis._synthesis_result(job, supplied, final_document(ids[:2], text="Суммы в личных кейсах различаются."))
+    result = analysis_pipeline._synthesis_result(job, supplied, final_document(ids[:2], text="Суммы в личных кейсах различаются."))
     item = result["items"][0]
     assert set(item["evidence_ids"]) == set(ids)
     assert set(item["conditions"]) == {"подача в отделении", "без зарплатных поступлений"}
@@ -306,7 +307,7 @@ def test_s32_cross_batch_qa_answer_after_cutoff_never_enters_analysis(qa_job):
     saved = list(store.iter_leaf_evidence(job["job_id"], page_size=2))
     assert len(saved) == 1 and saved[0]["record_type"] == "question"
     assert all(outside not in analysis.canonical_json(call) for call in calls)
-    supplied = analysis._synthesis_evidence(store, store.get_job(job["job_id"]))
+    supplied = analysis_pipeline._synthesis_evidence(store, store.get_job(job["job_id"]))
     assert supplied["coverage"]["selected_messages"] == supplied["coverage"]["processed_messages"] == 1
     assert all(ref["message_id"] == 1 for record in supplied["records"] for ref in record["payload"]["source_refs"])
 

@@ -4,6 +4,9 @@ import xml.etree.ElementTree as ET
 from telegram_shared.errors import TelegramApiError
 
 from telegram_connector import telegram_analysis as analysis
+from telegram_connector import analysis_pipeline
+from telegram_connector import analysis_rendering
+from telegram_connector import analysis_evidence
 from telegram_connector.tests.test_analysis_manifest import manifest_job, seed, build, messages
 from telegram_connector.tests.test_analysis_evidence import document
 
@@ -40,7 +43,7 @@ def sourced_result(store, job, *, record_type="claim"):
         batch = store.plan_batch(job["job_id"], generation=job["generation"], step_key=f"fixture-extract/{fragment['input']['channel_id']}", kind="extract", payload={})
         data = document({"messages": [fragment]})
         data["records"][0].update(record_type=record_type, claim=fragment["message"]["text"], conditions=[], exceptions=[])
-        values = analysis.validate_evidence_records(store, job["job_id"], batch["batch_id"], generation=job["generation"], document=data, fragments=[fragment])
+        values = analysis_evidence.validate_evidence_records(store, job["job_id"], batch["batch_id"], generation=job["generation"], document=data, fragments=[fragment])
         store.complete_batch(job["job_id"], batch["batch_id"], generation=job["generation"], records=values, inputs=[fragment["input"]])
         ids.append(values[0]["record_id"])
     return {"command": "topics", "detail": "normal", "query": None, "summary": "Условия из истории.",
@@ -244,7 +247,7 @@ def test_s21_sources_and_rendering_candidate_search_is_not_reported_as_full(mani
 @pytest.mark.parametrize("mode,excluded", [("all_messages", 0), ("candidates", None)])
 def test_s38_coverage_distinguishes_unprocessed_selection_from_excluded_history(mode, excluded):
     # Observed live case: 205 selected, 186 processed, zero excluded by selection.
-    text = "\n".join(analysis._analysis_coverage_lines({"selection_mode": mode,
+    text = "\n".join(analysis_rendering._analysis_coverage_lines({"selection_mode": mode,
         "selected_messages": 205, "processed_messages": 186, "known_skipped": excluded}))
     assert "не обработано из выбранных: 19" in text
     assert f'Не включено в выборку: {excluded if excluded is not None else "неизвестно"}' in text
@@ -257,7 +260,7 @@ def test_s38_unprocessed_count_is_visible_in_telegram_and_full_markdown(manifest
     result.update(partial=True, reasons=["extraction_incomplete"])
     result["coverage"]["processed_messages"] = 1
     telegram = "\n".join(presentation(store, job, result)["chunks"])
-    markdown = analysis._full_analysis_markdown(job, verified(store, job, result))
+    markdown = analysis_rendering._full_analysis_markdown(job, verified(store, job, result))
     assert all("не обработано из выбранных: 1" in text for text in (telegram, markdown))
 
 
@@ -290,7 +293,7 @@ def test_s21_sources_and_rendering_uses_source_url_literally_present_in_quote(ma
     batch = store.plan_batch(job["job_id"], generation=job["generation"], step_key="fixture-url", kind="extract", payload={})
     data = document({"messages": [fragment]})
     data["records"][0]["source_refs"][0].update(fragment_end=len(fragment["message"]["text"]), quote=fragment["message"]["text"])
-    records = analysis.validate_evidence_records(store, job["job_id"], batch["batch_id"], generation=job["generation"], document=data, fragments=[fragment])
+    records = analysis_evidence.validate_evidence_records(store, job["job_id"], batch["batch_id"], generation=job["generation"], document=data, fragments=[fragment])
     store.complete_batch(job["job_id"], batch["batch_id"], generation=job["generation"], records=records, inputs=[fragment["input"]])
     result = {"summary": "Условия https://example.org/rules", "items": [{"title": "Условия", "text": "Уточнение.", "conditions": [],
         "exceptions": [], "contradictions": [], "evidence_ids": [records[0]["record_id"]]}], "limitations": [], "partial": False,
@@ -516,7 +519,7 @@ def test_s22_delivery_receipts_refusal_stops_but_explicit_resume_reuses_saved_re
     resumed = store.claim_job(job["job_id"], max_running_jobs=1, now=NOW)
     def no_inference(*args, **kwargs):
         pytest.fail("Delivery resume must not rerun extraction")
-    monkeypatch.setattr(analysis, "extract_analysis_batch", no_inference)
+    monkeypatch.setattr(analysis_pipeline, "extract_analysis_batch", no_inference)
     def complete(*args, **kwargs):
         calls.append(args[2])
         return {"message_id": 801, "chat": {"id": 100}}
@@ -771,7 +774,7 @@ def test_s38_insufficient_notice_preserves_supported_items_and_limits_completene
     job = copy.deepcopy(job)
     job["command"] = command
     def render(value):
-        return "\n".join(analysis._analysis_html_chunks(job, value)) if format == "html" else analysis._full_analysis_markdown(job, value)
+        return "\n".join(analysis_rendering._analysis_html_chunks(job, value)) if format == "html" else analysis_rendering._full_analysis_markdown(job, value)
     text = render(view)
     assert "1250 EUR" in text
     assert "Недостаточно сведений для ответа." not in text

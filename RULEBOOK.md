@@ -732,6 +732,9 @@ Rules:
 - every new config nuance should have a config test
 - every security hardening rule should have at least one regression test
 - when a project defines a canonical project-local virtualenv for tests, install dependencies and run the suite through that environment instead of the system Python
+- use a controlled clock when testing time-dependent business decisions such as retention, expiry and calendar boundaries; keep fixture timestamps and the clock used by the exercised path consistent, and cover the relevant boundary cases without weakening the production time policy
+- before repairing a failed check, distinguish a change-induced regression, a pre-existing product or fixture defect, and an environment restriction; use a discriminating probe or baseline reproduction where needed, keep fixture-only corrections explicit, and preserve the original assertion's behavioral requirement
+- before repeating a costly check, inspect its previous process/session handle; if cancellation is needed, use the supported stop mechanism and confirm terminal status before relaunching; a stop request, silence or an observation timeout does not prove exit; identify intentional isolated parallel runs explicitly
 - within a TDD cycle, run tests of the changed behavior; before closing a step, also check direct consumers of the changed contract; completing a small step alone does not require a full regression run
 - run the full applicable code regression suite at designated integration checkpoints, before committing code and before code release, and after a coherent change with broad or uncertain impact, such as shared runtime, schema compatibility, authorization, process lifecycle, dependencies, or test configuration; distinguish this gate from model evaluations and resource measurements; explicit mandatory project checks take precedence
 

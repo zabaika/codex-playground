@@ -4,6 +4,7 @@ import json
 import pytest
 
 from telegram_connector import telegram_analysis as analysis
+from telegram_connector import analysis_pipeline
 from telegram_connector.tests.test_analysis_manifest import manifest_job
 from telegram_connector.tests.test_analysis_relations import records_fixture
 from telegram_connector.tests.test_analysis_manifest import change_setting, build, resume, NOW
@@ -65,7 +66,7 @@ def test_s36_synthesis_detail_arrays_have_one_application_owner(manifest_job, fi
         "limitations": [], "insufficient_information": False, "saturated": False}
     document["items"][0][field] = ["Парафраз исходного ограничения"]
     with pytest.raises(ValueError, match="evidence_array_size"):
-        analysis._synthesis_result(job, evidence, document)
+        analysis_pipeline._synthesis_result(job, evidence, document)
 
 
 def test_s36_synthesis_preserves_native_details_and_only_deduplicates_format_variants(manifest_job):
@@ -155,12 +156,12 @@ def test_s38_synthesis_rejection_diagnostic_never_logs_exception_content(manifes
     records_fixture(store, job, [{"claim": "Приватное исходное сообщение"}])
     merge(store, job, merge_sender())
     change_setting(store, job, "analysis", "max_repair_attempts", 0)
-    original = analysis._synthesis_result
+    original = analysis_pipeline._synthesis_result
     def reject(current, evidence, document, **kwargs):
         if document["items"]:
             raise ValueError("sensitive-exception-text")
         return original(current, evidence, document, **kwargs)
-    monkeypatch.setattr(analysis, "_synthesis_result", reject)
+    monkeypatch.setattr(analysis_pipeline, "_synthesis_result", reject)
     result = synthesize(store, job, synthesis_sender())
     assert result["partial"] and result["items"] == []
     diagnostic = capsys.readouterr().err
@@ -175,7 +176,7 @@ def test_s20_detail_synthesis_source_edit_outside_detail_pack_interrupts_after_i
     merge(store, job, merge_sender())
     if oversized:
         change_setting(store, job, "analysis", "max_intermediate_bytes", 100000)
-    evidence = analysis._synthesis_evidence(store, store.get_job(job["job_id"]))
+    evidence = analysis_pipeline._synthesis_evidence(store, store.get_job(job["job_id"]))
     guard = len(analysis.canonical_json(evidence["groups"])) + len(analysis.canonical_json(evidence["records"][0]))
     change_setting(store, job, "digest_ai", "message_block_max_chars", guard)
     delegate = synthesis_sender()

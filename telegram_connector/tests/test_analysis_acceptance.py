@@ -9,6 +9,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from telegram_connector import telegram_analysis as analysis, telegram_bridge as bridge
+from telegram_connector import analysis_pipeline
 from telegram_connector.analysis_store import AnalysisStore, BudgetExceededError
 from telegram_connector.tests.test_analysis_manifest import manifest_job, seed, build, change_setting
 from telegram_connector.tests.test_analysis_batching import batches
@@ -261,7 +262,7 @@ def test_s34_fault_boundaries_source_edit_after_inference_interrupts_without_del
 def test_s34_fault_boundaries_forged_model_evidence_cannot_become_a_source(command_journey, config, monkeypatch):
     state = command_journey
     config["analysis"]["max_repair_attempts"] = 0
-    original = analysis.request_counted_analysis_payload
+    original = analysis_pipeline.request_counted_analysis_payload
     changed = []
     def corrupt(store, job_id, batch_id, **kwargs):
         result = original(store, job_id, batch_id, **kwargs)
@@ -273,7 +274,7 @@ def test_s34_fault_boundaries_forged_model_evidence_cannot_become_a_source(comma
             content["text"] = json.dumps(document)
             changed.append(True)
         return result
-    monkeypatch.setattr(analysis, "request_counted_analysis_payload", corrupt)
+    monkeypatch.setattr(analysis_pipeline, "request_counted_analysis_payload", corrupt)
     job = state["run"]()
     assert changed and job["status"] == "partial" and job["result"]["items"] == []
     assert "invalid_schema" in job["result"]["reasons"]

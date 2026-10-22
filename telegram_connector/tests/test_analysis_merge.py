@@ -4,6 +4,7 @@ import json
 import pytest
 
 from telegram_connector import telegram_analysis as analysis
+from telegram_connector import analysis_pipeline
 from telegram_connector.tests.test_analysis_manifest import manifest_job, change_setting, build, resume, seed
 from telegram_connector.tests.test_analysis_relations import records_fixture
 from telegram_connector.tests.test_analysis_evidence import model_response
@@ -293,7 +294,7 @@ def test_s19_hierarchical_merge_cycle_is_rejected_even_with_valid_local_node_dig
     saved = store.get_batch(root["batch_id"])["payload"]
     node = saved["output"]["groups"][0]
     node["input_ids"] = [node["node_id"]]
-    root = analysis._merge_reference("merge", root["batch_id"], root["node_id"], node)
+    root = analysis_pipeline._merge_reference("merge", root["batch_id"], root["node_id"], node)
     saved["plan"]["inputs"] = [root]
     store.conn.execute("UPDATE analysis_batches SET payload_json=? WHERE batch_id=?", (analysis.canonical_json(saved), root["batch_id"]))
     with pytest.raises(ValueError, match="merge_lineage_cycle"):
@@ -304,7 +305,7 @@ def test_s19_hierarchical_merge_cycle_is_rejected_even_with_valid_local_node_dig
 def test_s19_hierarchical_merge_rejects_inconsistent_dispositions_and_model_ids(manifest_job, change):
     store, job = manifest_job
     original = records_fixture(store, job, [{"claim": "Первый факт"}, {"claim": "Второй факт"}])
-    refs = [analysis._merge_reference("evidence", store.leaf_evidence(job["job_id"], value["record_id"])["batch_id"], value["record_id"], value["payload"]) for value in original]
+    refs = [analysis_pipeline._merge_reference("evidence", store.leaf_evidence(job["job_id"], value["record_id"])["batch_id"], value["record_id"], value["payload"]) for value in original]
     data = {"groups": [{"title": "Тема", "summary": "Факты", "input_ids": [ref["node_id"] for ref in refs]}],
         "dispositions": [{"input_id": ref["node_id"], "disposition": "merged", "reason": "Включено"} for ref in refs], "saturated": False}
     if change == "missing_disposition": data["dispositions"].pop()
@@ -312,7 +313,7 @@ def test_s19_hierarchical_merge_rejects_inconsistent_dispositions_and_model_ids(
     if change == "unused_support": data["dispositions"][0]["disposition"] = "irrelevant"
     if change == "model_id": data["groups"][0]["node_id"] = "forged"
     with pytest.raises(ValueError):
-        analysis._validate_merge_document(data, refs, max_bytes=67108864)
+        analysis_pipeline._validate_merge_document(data, refs, max_bytes=67108864)
 
 
 @pytest.mark.parametrize("disposition,partial", [("irrelevant", False), ("excluded", True)])

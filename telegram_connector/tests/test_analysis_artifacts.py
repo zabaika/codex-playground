@@ -6,6 +6,7 @@ import stat
 import pytest
 
 from telegram_connector import telegram_analysis as analysis
+from telegram_connector import analysis_pipeline
 from telegram_connector.tests.test_analysis_manifest import manifest_job
 from telegram_connector.tests.test_analysis_delivery import sourced_result, frozen_output_setting
 
@@ -201,7 +202,7 @@ def test_s23_full_markdown_missing_file_is_explicit_and_can_be_restored_without_
         verify_report(store.get_job(job["job_id"]))
     with pytest.raises(FileNotFoundError):
         write_report(store, job)
-    monkeypatch.setattr(analysis, "synthesize_analysis_result", lambda *a, **k: pytest.fail("Restore must use saved data"))
+    monkeypatch.setattr(analysis_pipeline, "synthesize_analysis_result", lambda *a, **k: pytest.fail("Restore must use saved data"))
     assert write_report(store, job, restore_missing=True) == relative
     assert store.get_job(job["job_id"])["full_hash"] == digest and target.is_file()
 

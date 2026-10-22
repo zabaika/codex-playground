@@ -19,8 +19,14 @@ It must stay operationally separate from `telegram_agent_bot`.
   - `telegram_bridge.py`: Bot API bridge and command surface
   - `telegram_history_client.py`: Telethon ingestion, OCR, export, and SQLite system of record
   - `telegram_digest.py`: digest orchestration and Telegram delivery
-  - `telegram_analysis.py`: the shared `/topics`, `/search`, `/qa` workflow and supervised worker
-  - `analysis_store.py` and `analysis_evidence.py`: analytics persistence, budgets, provenance and evidence contracts
+  - `telegram_analysis.py`: analytics admission/control, legacy settings adapter, supervised worker, OCR, artifact and delivery orchestration; stable public CLI and compatibility exports
+  - `analysis_settings.py`: analytics policy, prompts, profiles and reviewed model metadata; receives legacy settings from the entrypoint
+  - `analysis_evidence.py`: evidence schemas, source snapshots, text/OCR offsets, citation/QA/URL validation
+  - `analysis_rendering.py`: pure HTML/Markdown formatting of prepared data
+  - `analysis_pipeline.py`: selection/manifest, physical provider requests, extraction/cache, relations, merge and synthesis
+  - `analysis_store.py`: SQL, transactions, durable budgets and provenance ledger
+- Internal analytics calls and dependency patches use the owning module, including evaluator capture hooks. Compatibility exports are for existing callers, not mutable lookup ownership.
+- Extracted analytics modules must not import the entrypoint or bridge. Settings and rendering remain independent of pipeline and persistence. Keep related pipeline algorithms together to avoid scattering state and limit handling; revisit this agreed boundary when responsibilities change.
 - Keep `telegram_shared` limited to infrastructure primitives.
 - Do not move digest, history, OCR, analytics, export, or Telethon business logic into `telegram_shared`.
 
