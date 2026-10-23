@@ -83,6 +83,14 @@ For tools that render records, change business state, or maintain user memory, i
 
 Use [tools and permissions](tools-and-permissions.md) and [context and memory](context-memory-compaction.md) for these contracts; keep their detailed eval cases here.
 
+For plan review, exercise these evidence and dependency boundaries:
+
+- **Unverified mirror:** a hand-built graph is acyclic, but the current saved plan has an added dependency. Detect the mismatch or report that only the graph was checked; do not accept the plan on that evidence.
+- **Verified representation:** a check reads the saved artifact directly, or a separate representation is reconciled against the identified artifact revision. Accept the demonstrated property while retaining semantic and runtime evidence limits; do not require a new serialization format.
+- **Chosen order:** independent work is scheduled later to keep a migration manageable. Preserve that order if useful, but do not invent an output dependency or require parallelism.
+- **Technical prerequisite:** a consumer needs a type, schema or interface produced by an earlier step. Name that output and retain the dependency; calling it scheduling preference cannot make an unavailable prerequisite usable.
+- **Mandatory gate:** an integration check, approval or exclusive-resource handoff must precede a later action despite independent code. Preserve the gate separately from code dependencies and scheduling preferences.
+
 ## Named public suites
 
 Use public benchmark names as calibration examples, not as the only valid evals.

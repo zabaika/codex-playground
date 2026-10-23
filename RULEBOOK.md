@@ -171,6 +171,7 @@ Keep documentation split by responsibility:
 - prefer strong, local success criteria over broad phrases like `make it work`, because weak criteria force repeated clarification and invite silent drift
 - before asserting a pipeline-wide property, inspect the relevant path from producer through transformations to consumers; a property of one component does not establish the same property for the whole workflow
 - limit each claim to the scope actually verified; distinguish self-review, automated checks, independent review, code inspection, and demonstrated runtime behavior, naming the applicable method and remaining limits in substantial verification reports
+- mechanical artifact validation must consume the current saved artifact; if it uses a separately maintained model, inventory or graph, first verify that representation against the artifact and identify the revision checked; report only the properties actually established by that check
 - narrow discovery results to relevant files, symbols, and ranges before detailed reads; size tool output so the required content remains inspectable
 - treat truncated output as incomplete evidence; narrow the request or read the missing ranges before relying on omitted content; follow Skill Rule Context Loading when a complete rule-file read is required
 
