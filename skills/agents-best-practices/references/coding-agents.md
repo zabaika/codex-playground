@@ -75,9 +75,9 @@ Migration agent:
 
 - inventory affected files before editing;
 - establish the supported invocation/import matrix from current behavior; preserve those modes without imposing new ones as migration checks;
-- trace callable and mutable dependency owners through real runtime, test and evaluator paths; apply the repository's language conventions and verify capture, rejection and hook restoration at the exercised boundary;
+- trace callable and mutable dependency owners through real runtime, test and evaluator paths; follow each substitution from its patch target through any saved original/delegate to the actual call and restoration, including aliases captured before or after patching; apply repository isolation policy before running migrated tests, and verify capture, rejection and hook restoration after success and exception at the exercised boundary;
 - include installers, copied-runtime dependencies and code-hash/provenance consumers in the migration inventory;
-- apply a mechanical transformation where possible;
+- apply a mechanical transformation where possible; when rewriting Python references, resolve lexical bindings rather than matching names alone, preserving locals, parameters and closure bindings while checking the evaluation scope of defaults, annotations and decorators;
 - list skipped, ambiguous, or manually reviewed cases;
 - validate representative and global checks.
 
@@ -378,6 +378,10 @@ Migration and validation boundary cases:
 - **Drifting fixture clock:** a retained job uses a fixed admission date while the exercised control path uses today's date. Diagnose the fixture mismatch under repository test policy; a neighboring case with genuinely expired production data must still reject resume.
 - **Supported invocation matrix:** a script-only entrypoint fails an added package-import probe. Preserve its established contract; a neighboring failure of an already supported import mode remains a migration regression to repair.
 - **Moved dependency hook:** a direct test of an old re-export succeeds while the actual extraction or evaluation path bypasses its patch. Exercise the owning runtime path and verify capture/rejection and restoration after both success and exception; preserve supported public calls through the old entrypoint.
+- **Saved delegate after a move:** a wrapper patches the new owner but saves its delegate through an old facade alias, reaching the real adapter. Detect the bypass before external access; the neighboring case must delegate to the fixture actually installed at the owner and restore the prior state after success and exception.
+- **Stale mock with operator defaults:** a missed patch selects an operator database, secret backend or outbound destination. Under repository isolation policy, reject access before opening or invoking it; the neighboring case with an explicitly selected temporary database, loopback fixture or approved integration target must remain usable.
+- **Same spelling, different binding:** a moved global helper shares a name with a parser local, parameter or closure variable. Rewrite only references bound to the moved helper; verify defaults, annotations and decorators in their evaluation scope rather than inheriting the function body's local bindings.
+- **Extraction dependency closure:** a proposed lower module needs an SDK helper still owned by its entrypoint. Detect the resulting back-edge during the step walkthrough and resolve the helper's owner before declaring the extraction executable; a neighboring extraction whose dependencies already exist needs no extra prerequisite or shared service.
 - **Check still running:** a costly validation handle remains live after a quiet interval or stop request. Observe or stop that handle under repository process policy; a neighboring terminal failure may be rerun once its cause or required environment permission is addressed.
 
 Over-broad refactor:

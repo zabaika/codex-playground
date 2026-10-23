@@ -39,7 +39,11 @@ guidance do not automatically apply to them.
   module. A re-export preserves calls, but assigning to that alias does not patch
   the implementation's dependencies. Where substitution is supported, runtime
   lookups, tests and instrumentation must target the same dependency owner;
-  verify the actual call path. This does not require module imports everywhere.
+  verify the actual call path. Captured callable references, including saved
+  originals/delegates, do not follow later reassignment of the owner's attribute.
+  Where a wrapper must preserve a supported substitution, obtain its delegate
+  from the same active dependency lookup. This does not require module imports
+  everywhere.
 - Follow the project's configured line length. Without an explicit project
   setting, use PEP 8's 79-character code and 72-character comment/docstring guidance.
   Treat these as readability guidance, not an instruction to rewrite surrounding code.

@@ -510,6 +510,14 @@ Reuse evidence only while its recorded scope, revision and relevant inputs, code
 
 Keep paid model trials and other costly/external checks within their existing authorization and budget. If a required check cannot run, leave its acceptance condition unverified and report the gap; do not substitute fixtures, old outputs or a different type of check. Validate this selection policy on contrasting changes: presentation-only documentation versus behavioral instructions, model/prompt changes versus code changes, and resource-impacting changes versus unchanged resource conditions; include a project-mandated full check that overrides otherwise narrower selection.
 
+### Independent skill evaluation
+
+For an independent check of a skill, use a fresh execution context without the skill's development discussion or evaluator-only findings and expected answers. Supply the original task, skill and necessary source artifacts; retain task history when handling that history is itself under test.
+
+Keep executor inputs separate from evaluator materials. Define case-specific criteria before execution, and keep answer-bearing rubrics and known defects with the evaluator. Assess observable decisions, actions and artifacts against those criteria while accepting valid alternative solutions.
+
+Report independence of execution and grading separately. The executor may use the same model; grading by the author of the changes is not independent grading. Distinguish both from self-application and mechanical validation. This method does not require an independent run for every skill invocation or small update, and does not authorize delegation or external actions beyond existing permissions.
+
 ## Domain overlays
 
 Domain-specific evals should extend these principles with local fixtures, tools, policies, and acceptance criteria.

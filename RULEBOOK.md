@@ -733,6 +733,7 @@ Rules:
 - every new config nuance should have a config test
 - every security hardening rule should have at least one regression test
 - when a project defines a canonical project-local virtualenv for tests, install dependencies and run the suite through that environment instead of the system Python
+- before running tests that change dependency owners or mocks, establish isolation independently of those substitutions: a stale or missing mock must fail before accessing operator data, real secret backends or unintended external systems; explicitly select permitted resources for integration tests and retain their intended coverage
 - use a controlled clock when testing time-dependent business decisions such as retention, expiry and calendar boundaries; keep fixture timestamps and the clock used by the exercised path consistent, and cover the relevant boundary cases without weakening the production time policy
 - before repairing a failed check, distinguish a change-induced regression, a pre-existing product or fixture defect, and an environment restriction; use a discriminating probe or baseline reproduction where needed, keep fixture-only corrections explicit, and preserve the original assertion's behavioral requirement
 - before repeating a costly check, inspect its previous process/session handle; if cancellation is needed, use the supported stop mechanism and confirm terminal status before relaunching; a stop request, silence or an observation timeout does not prove exit; identify intentional isolated parallel runs explicitly

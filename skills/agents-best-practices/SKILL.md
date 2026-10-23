@@ -2,7 +2,7 @@
 name: agents-best-practices
 description: "Design, audit, troubleshoot, or refine requirements for an agent harness or bounded LLM workflow. Default to diagnosis and a plan; implement after explicit plan approval. Use for concrete architecture and reliability work, including voice and scheduled agents; not routine code edits or general Q&A."
 metadata:
-  version: "1.16.0-codex.15"
+  version: "1.16.0-codex.17"
   scope: "agent-harness-design-and-review"
 ---
 
