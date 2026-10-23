@@ -122,7 +122,7 @@ def test_s11_fts_writes_delete_and_reinsert_do_not_leave_old_rowid_or_terms(db):
 
 
 def test_s11_fts_writes_unavailable_capability_keeps_ordinary_schema_and_writes(monkeypatch):
-    monkeypatch.setattr(history, "fts5_available", lambda conn: False, raising=False)
+    monkeypatch.setattr(history.history_store, "fts5_available", lambda conn: False, raising=False)
     conn = common_sqlite.connect_sqlite(":memory:")
     try:
         history.init_db(conn)
@@ -198,7 +198,7 @@ def test_s11_fts_writes_media_deletion_removes_its_ocr_from_index(db):
 
 
 def test_s11_fts_writes_initialization_is_idempotent_and_does_not_scan_old_history(monkeypatch):
-    monkeypatch.setattr(history, "fts5_available", lambda conn: False)
+    monkeypatch.setattr(history.history_store, "fts5_available", lambda conn: False)
     conn = common_sqlite.connect_sqlite(":memory:")
     try:
         history.init_db(conn)
@@ -236,7 +236,7 @@ def test_s11_fts_writes_addressing_uses_source_primary_key_and_fts_rowid(db):
 
 
 def test_s11_fts_writes_ordinary_ocr_and_delete_still_work_without_fts_capability(monkeypatch):
-    monkeypatch.setattr(history, "fts5_available", lambda conn: False)
+    monkeypatch.setattr(history.history_store, "fts5_available", lambda conn: False)
     conn = common_sqlite.connect_sqlite(":memory:")
     try:
         history.init_db(conn)
@@ -303,7 +303,7 @@ def test_s11_fts_writes_shared_manifest_and_digest_read_without_fts(command, mon
     monkeypatch.syspath_prepend(str(history.APP_DIR))
     from telegram_connector import telegram_digest as digest
 
-    monkeypatch.setattr(history, "fts5_available", lambda conn: False)
+    monkeypatch.setattr(history.history_store, "fts5_available", lambda conn: False)
     conn = common_sqlite.connect_sqlite(":memory:")
     try:
         history.init_db(conn)
@@ -347,7 +347,7 @@ def test_s11_fts_writes_existing_index_with_missing_backend_does_not_block_ordin
         conn.execute("PRAGMA writable_schema=OFF")
     finally:
         conn.close()
-    monkeypatch.setattr(history, "fts5_available", lambda conn: False)
+    monkeypatch.setattr(history.history_store, "fts5_available", lambda conn: False)
     reopened = common_sqlite.connect_sqlite(path)
     try:
         with pytest.raises(sqlite3.OperationalError, match="no such module"):
@@ -502,7 +502,7 @@ def test_s12_fts_backfill_unsupported_writer_invalidates_retained_readiness(db, 
     running = store.claim_job(queued["job_id"], max_running_jobs=1, now=NOW)
     complete_index(db, running)
     with monkeypatch.context() as patch:
-        patch.setattr(history, "fts5_available", lambda conn: False)
+        patch.setattr(history.history_store, "fts5_available", lambda conn: False)
         write(db, "Исправленное условие")
     with pytest.raises(ValueError, match="fts_rebuild_required"):
         require_ready(db)
@@ -562,7 +562,7 @@ def test_s12_fts_backfill_source_read_and_replace_are_atomic_against_another_wri
             original(active, peer, message_id)
 
         with monkeypatch.context() as patch:
-            patch.setattr(history, "_refresh_message_fts_no_tx", refresh)
+            patch.setattr(history.history_store, "_refresh_message_fts_no_tx", refresh)
             complete_index(conn, running)
         assert observed
         write(other, "Конкурентное правило")
@@ -603,8 +603,8 @@ def test_s12_fts_backfill_cli_queues_without_resolving_telegram_or_model_secrets
     config = tomllib.loads((folder / "runtime.example.toml").read_text())
     config["paths"]["history_db"] = str(tmp_path / "cli.sqlite3")
     config["processing"]["model"] = ""
-    monkeypatch.setattr(history, "load_runtime_config", lambda: config)
-    monkeypatch.setattr(history, "resolve_runtime", lambda: pytest.fail("Local indexing must not resolve Telegram runtime"))
+    monkeypatch.setattr(history.history_settings, "load_runtime_config", lambda: config)
+    monkeypatch.setattr(history.history_settings, "resolve_runtime", lambda: pytest.fail("Local indexing must not resolve Telegram runtime"))
     parser = history.build_parser()
     assert "index-history" in parser._subparsers._group_actions[0].choices, "Index rebuild needs its planned CLI route"
     args = parser.parse_args(["index-history", "--rebuild"])
@@ -760,7 +760,7 @@ def test_g3_history_manifest_and_fts_after_restart_limit_ocr_and_delete(db, tmp_
         raise RuntimeError("fixture stopped after first flush")
 
     with monkeypatch.context() as patch:
-        patch.setattr(history, "drain_analysis_history_page", crash)
+        patch.setattr(history.analysis_history, "drain_analysis_history_page", crash)
         with pytest.raises(RuntimeError, match="first flush"):
             asyncio.run(history.ensure_analysis_history(store, running["job_id"], runtime,
                 generation=running["generation"], client=client))
@@ -804,7 +804,7 @@ def test_s12_fts_backfill_legacy_table_migration_invalidates_readiness_and_prese
 
 
 def test_s12_fts_backfill_unavailable_backend_does_not_enqueue_internal_work(db, monkeypatch):
-    monkeypatch.setattr(history, "fts5_available", lambda conn: False)
+    monkeypatch.setattr(history.history_store, "fts5_available", lambda conn: False)
     with pytest.raises(ValueError, match="fts_unavailable"):
         queue_index(db)
     assert db.execute("SELECT COUNT(*) FROM analysis_jobs WHERE kind='fts_backfill'").fetchone()[0] == 0
@@ -822,7 +822,7 @@ def test_s12_fts_backfill_cli_respects_shared_queue_cap_and_reports_queue_full(t
             VALUES ('occupied','analysis','topics','{}','hash',?,?,?,?)""", (NOW.isoformat(),) * 4)
     finally:
         conn.close()
-    monkeypatch.setattr(history, "load_runtime_config", lambda: config)
+    monkeypatch.setattr(history.history_settings, "load_runtime_config", lambda: config)
     args = history.build_parser().parse_args(["index-history"])
     assert args.func(args) == 1
     assert json.loads(capsys.readouterr().err)["error"] == "queue_full"

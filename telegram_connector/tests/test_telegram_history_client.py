@@ -5,6 +5,7 @@ import json
 import os
 import sqlite3
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest.mock import AsyncMock, patch
@@ -31,7 +32,15 @@ def load_history_client_module_with_env(**env: str) -> Any:
     try:
         for key, value in env.items():
             os.environ[key] = value
-        spec.loader.exec_module(module)
+        settings_spec = importlib.util.spec_from_file_location(
+            "history_settings", Path(telegram_history_client.history_settings.__file__),
+        )
+        settings = importlib.util.module_from_spec(settings_spec)
+        # Recreate the config owner as in a fresh process, without retaining
+        # the ordinary test instance's temporary paths or leaking the override.
+        with patch.dict(sys.modules, {"history_settings": settings}):
+            settings_spec.loader.exec_module(settings)
+            spec.loader.exec_module(module)
     finally:
         for key, value in original_env.items():
             if value is None:
@@ -44,10 +53,10 @@ def load_history_client_module_with_env(**env: str) -> Any:
 class TelegramHistoryClientTests(unittest.TestCase):
     def setUp(self) -> None:
         sessions = tempfile.TemporaryDirectory()
-        previous = telegram_history_client.SESSION_DIR
+        previous = telegram_history_client.history_settings.SESSION_DIR
         self.addCleanup(sessions.cleanup)
-        self.addCleanup(setattr, telegram_history_client, "SESSION_DIR", previous)
-        telegram_history_client.SESSION_DIR = Path(sessions.name)
+        self.addCleanup(setattr, telegram_history_client.history_settings, "SESSION_DIR", previous)
+        telegram_history_client.history_settings.SESSION_DIR = Path(sessions.name)
 
     def test_runtime_paths_stay_relative_to_app_dir_when_project_root_env_is_set(self) -> None:
         module = load_history_client_module_with_env(
@@ -196,7 +205,7 @@ class TelegramHistoryClientTests(unittest.TestCase):
         self.assertIsNone(media["ocr_error"])
 
     def test_resolve_runtime_uses_local_defaults(self) -> None:
-        original_file = telegram_history_client.RUNTIME_LOCAL_FILE
+        original_file = telegram_history_client.history_settings.RUNTIME_LOCAL_FILE
         with tempfile.TemporaryDirectory() as tmp_dir:
             runtime_file = Path(tmp_dir) / "runtime.local.toml"
             runtime_file.write_text(
@@ -245,11 +254,11 @@ user_password = "pw_x"
 """.strip(),
                 encoding="utf-8",
             )
-            telegram_history_client.RUNTIME_LOCAL_FILE = runtime_file
+            telegram_history_client.history_settings.RUNTIME_LOCAL_FILE = runtime_file
             try:
                 runtime = telegram_history_client.resolve_runtime()
             finally:
-                telegram_history_client.RUNTIME_LOCAL_FILE = original_file
+                telegram_history_client.history_settings.RUNTIME_LOCAL_FILE = original_file
 
         self.assertEqual(runtime.user_session_name, "session_user_x")
         self.assertEqual(runtime.bot_session_name, "session_bot_x")
@@ -764,7 +773,7 @@ user_password = "pw_x"
                 self.assertEqual(auth_mode, "user")
                 return fake_client
 
-            telegram_history_client.open_telethon_client = fake_open
+            telegram_history_client.history_session.open_telethon_client = fake_open
             with tempfile.TemporaryDirectory() as tmp_dir:
                 result = asyncio.run(
                     telegram_history_client.fetch_and_export_message(
@@ -778,7 +787,7 @@ user_password = "pw_x"
                 self.assertTrue(output_path.exists())
                 text = output_path.read_text(encoding="utf-8")
         finally:
-            telegram_history_client.open_telethon_client = original_open
+            telegram_history_client.history_session.open_telethon_client = original_open
 
         self.assertEqual(fake_client.channel, "@bezaspera")
         self.assertEqual(fake_client.ids, 2833)
@@ -804,9 +813,9 @@ user_password = "pw_x"
             date = datetime(2026, 5, 14, 14, 27, 1, tzinfo=timezone.utc)
             entities = []
 
-        original_dir = telegram_history_client.SINGLE_MESSAGE_EXPORT_DIR
+        original_dir = telegram_history_client.history_settings.SINGLE_MESSAGE_EXPORT_DIR
         with tempfile.TemporaryDirectory() as tmp_dir:
-            telegram_history_client.SINGLE_MESSAGE_EXPORT_DIR = Path(tmp_dir) / "scratch" / "article-to-obsidian-kb" / "telegram"
+            telegram_history_client.history_settings.SINGLE_MESSAGE_EXPORT_DIR = Path(tmp_dir) / "scratch" / "article-to-obsidian-kb" / "telegram"
             try:
                 output_path = telegram_history_client.export_single_message_source(
                     Entity(),
@@ -815,7 +824,7 @@ user_password = "pw_x"
                     None,
                 )
             finally:
-                telegram_history_client.SINGLE_MESSAGE_EXPORT_DIR = original_dir
+                telegram_history_client.history_settings.SINGLE_MESSAGE_EXPORT_DIR = original_dir
 
         self.assertEqual(
             output_path.parent,
@@ -829,14 +838,14 @@ user_password = "pw_x"
         )
 
     def test_parse_filter_datetime_supports_relative_aliases_and_minus_nd(self) -> None:
-        original_datetime = telegram_history_client.datetime
+        original_datetime = telegram_history_client.history_settings.datetime
 
         class FrozenDateTime(datetime):
             @classmethod
             def now(cls, tz=None):
                 return cls(2026, 3, 18, 12, 0, tzinfo=timezone.utc)
 
-        telegram_history_client.datetime = FrozenDateTime
+        telegram_history_client.history_settings.datetime = FrozenDateTime
         try:
             self.assertEqual(telegram_history_client.parse_since_datetime("today"), "2026-03-18T00:00:00+00:00")
             self.assertEqual(telegram_history_client.parse_since_datetime("yesterday"), "2026-03-17T00:00:00+00:00")
@@ -845,7 +854,7 @@ user_password = "pw_x"
             self.assertEqual(telegram_history_client.parse_since_datetime("-3d"), "2026-03-15T00:00:00+00:00")
             self.assertEqual(telegram_history_client.parse_until_datetime("-3d"), "2026-03-15T23:59:59+00:00")
         finally:
-            telegram_history_client.datetime = original_datetime
+            telegram_history_client.history_settings.datetime = original_datetime
 
     def test_sync_messages_reports_shared_limit_exhaustion(self) -> None:
         runtime = telegram_history_client.RuntimeConfig(
@@ -883,8 +892,8 @@ user_password = "pw_x"
         original_init_db = telegram_history_client.init_db
         original_sync_one_channel = telegram_history_client.sync_one_channel
         try:
-            telegram_history_client.connect_db = lambda runtime: sqlite3.connect(":memory:")
-            telegram_history_client.init_db = lambda conn: None
+            telegram_history_client.history_store.connect_db = lambda runtime: sqlite3.connect(":memory:")
+            telegram_history_client.history_store.init_db = lambda conn: None
 
             async def fake_sync_one_channel(conn, runtime_arg, args_arg, mode_arg, channel_arg):
                 return {"channel": channel_arg, "processed_messages": 1}
@@ -894,8 +903,8 @@ user_password = "pw_x"
             with redirect_stdout(buffer):
                 exit_code = asyncio.run(telegram_history_client.sync_messages(runtime, args, "update"))
         finally:
-            telegram_history_client.connect_db = original_connect_db
-            telegram_history_client.init_db = original_init_db
+            telegram_history_client.history_store.connect_db = original_connect_db
+            telegram_history_client.history_store.init_db = original_init_db
             telegram_history_client.sync_one_channel = original_sync_one_channel
 
         self.assertEqual(exit_code, 0)
@@ -1142,12 +1151,12 @@ user_password = "pw_x"
             async def fake_current_read(client, entity):
                 return 5
 
-            telegram_history_client.open_telethon_client = fake_open
-            telegram_history_client.current_read_inbox_max_id = fake_current_read
+            telegram_history_client.history_session.open_telethon_client = fake_open
+            telegram_history_client.history_session.current_read_inbox_max_id = fake_current_read
             result = asyncio.run(telegram_history_client.sync_one_channel(conn, runtime, args, "update", "@vcnews"))
         finally:
-            telegram_history_client.open_telethon_client = original_open
-            telegram_history_client.current_read_inbox_max_id = original_current_read
+            telegram_history_client.history_session.open_telethon_client = original_open
+            telegram_history_client.history_session.current_read_inbox_max_id = original_current_read
 
         self.assertEqual(result["processed_messages"], 0)
         self.assertFalse(result["marked_read"])
@@ -1233,12 +1242,12 @@ user_password = "pw_x"
             async def fake_current_read(client, entity):
                 return 10
 
-            telegram_history_client.open_telethon_client = fake_open
-            telegram_history_client.current_read_inbox_max_id = fake_current_read
+            telegram_history_client.history_session.open_telethon_client = fake_open
+            telegram_history_client.history_session.current_read_inbox_max_id = fake_current_read
             result = asyncio.run(telegram_history_client.sync_one_channel(conn, runtime, args, "tail", "@vcnews"))
         finally:
-            telegram_history_client.open_telethon_client = original_open
-            telegram_history_client.current_read_inbox_max_id = original_current_read
+            telegram_history_client.history_session.open_telethon_client = original_open
+            telegram_history_client.history_session.current_read_inbox_max_id = original_current_read
 
         self.assertEqual(result["processed_messages"], 2)
         self.assertEqual(result["current_read_max_id"], 10)
@@ -1335,12 +1344,12 @@ user_password = "pw_x"
             async def fake_current_read(client, entity):
                 return 8
 
-            telegram_history_client.open_telethon_client = fake_open
-            telegram_history_client.current_read_inbox_max_id = fake_current_read
+            telegram_history_client.history_session.open_telethon_client = fake_open
+            telegram_history_client.history_session.current_read_inbox_max_id = fake_current_read
             result = asyncio.run(telegram_history_client.sync_one_channel(conn, runtime, args, "update", "@vcnews"))
         finally:
-            telegram_history_client.open_telethon_client = original_open
-            telegram_history_client.current_read_inbox_max_id = original_current_read
+            telegram_history_client.history_session.open_telethon_client = original_open
+            telegram_history_client.history_session.current_read_inbox_max_id = original_current_read
 
         self.assertEqual(result["processed_messages"], 2)
         self.assertTrue(result["marked_read"])
@@ -1437,12 +1446,12 @@ user_password = "pw_x"
             async def fake_current_read(client, entity):
                 return 10
 
-            telegram_history_client.open_telethon_client = fake_open
-            telegram_history_client.current_read_inbox_max_id = fake_current_read
+            telegram_history_client.history_session.open_telethon_client = fake_open
+            telegram_history_client.history_session.current_read_inbox_max_id = fake_current_read
             result = asyncio.run(telegram_history_client.sync_one_channel(conn, runtime, args, "backfill", "@vcnews"))
         finally:
-            telegram_history_client.open_telethon_client = original_open
-            telegram_history_client.current_read_inbox_max_id = original_current_read
+            telegram_history_client.history_session.open_telethon_client = original_open
+            telegram_history_client.history_session.current_read_inbox_max_id = original_current_read
 
         self.assertEqual(result["processed_messages"], 2)
         self.assertTrue(result["marked_read"])
@@ -1534,10 +1543,10 @@ user_password = "pw_x"
             async def fake_open(runtime, auth_mode):
                 return FakeClient()
 
-            telegram_history_client.open_telethon_client = fake_open
+            telegram_history_client.history_session.open_telethon_client = fake_open
             result = asyncio.run(telegram_history_client.sync_one_channel(conn, runtime, args, "tail", "@vcnews"))
         finally:
-            telegram_history_client.open_telethon_client = original_open
+            telegram_history_client.history_session.open_telethon_client = original_open
 
         self.assertEqual(result["processed_messages"], 2)
         self.assertEqual(result["since"], "2026-03-15")
@@ -1588,11 +1597,11 @@ user_password = "pw_x"
                     limit=cap, auth_mode="user", download_media=False,
                     ocr=False, mark_read=False, since="2026-03-15", until="2026-03-16",
                 )
-                with patch.object(telegram_history_client, "upsert_channel"), \
-                     patch.object(telegram_history_client, "update_sync_state"), \
-                     patch.object(telegram_history_client, "flush_staged_message_writes"), \
-                     patch.object(telegram_history_client, "message_exists", return_value=False), \
-                     patch.object(telegram_history_client, "resolve_sender_metadata",
+                with patch.object(telegram_history_client.history_store, "upsert_channel"), \
+                     patch.object(telegram_history_client.history_store, "update_sync_state"), \
+                     patch.object(telegram_history_client.history_store, "flush_staged_message_writes"), \
+                     patch.object(telegram_history_client.history_store, "message_exists", return_value=False), \
+                     patch.object(telegram_history_client.history_session, "resolve_sender_metadata",
                                   AsyncMock(return_value=(None, None))):
                     result = asyncio.run(telegram_history_client.sync_one_channel(
                         object(), types.SimpleNamespace(sync_batch_size=1), args,
@@ -1691,14 +1700,14 @@ user_password = "pw_x"
             async def fake_open(runtime, auth_mode):
                 return fake_client
 
-            telegram_history_client.open_telethon_client = fake_open
-            telegram_history_client.build_entity_lookup_reference = lambda channel: peer_ref
+            telegram_history_client.history_session.open_telethon_client = fake_open
+            telegram_history_client.history_session.build_entity_lookup_reference = lambda channel: peer_ref
             result = asyncio.run(
                 telegram_history_client.sync_one_channel(conn, runtime, args, "backfill", "-1001449711572")
             )
         finally:
-            telegram_history_client.open_telethon_client = original_open
-            telegram_history_client.build_entity_lookup_reference = original_build_entity_lookup_reference
+            telegram_history_client.history_session.open_telethon_client = original_open
+            telegram_history_client.history_session.build_entity_lookup_reference = original_build_entity_lookup_reference
 
         self.assertTrue(fake_client.dialogs_called)
         self.assertEqual(fake_client.entity_args, [peer_ref, peer_ref])
@@ -1770,8 +1779,8 @@ user_password = "pw_x"
         original_init_db = telegram_history_client.init_db
         original_sync_one_channel = telegram_history_client.sync_one_channel
         try:
-            telegram_history_client.connect_db = lambda runtime: sqlite3.connect(":memory:")
-            telegram_history_client.init_db = lambda conn: None
+            telegram_history_client.history_store.connect_db = lambda runtime: sqlite3.connect(":memory:")
+            telegram_history_client.history_store.init_db = lambda conn: None
 
             async def fake_sync_one_channel(conn, runtime_arg, args_arg, mode_arg, channel_arg):
                 seen.append((channel_arg, args_arg.limit))
@@ -1780,8 +1789,8 @@ user_password = "pw_x"
             telegram_history_client.sync_one_channel = fake_sync_one_channel
             exit_code = asyncio.run(telegram_history_client.sync_messages(runtime, args, "backfill"))
         finally:
-            telegram_history_client.connect_db = original_connect_db
-            telegram_history_client.init_db = original_init_db
+            telegram_history_client.history_store.connect_db = original_connect_db
+            telegram_history_client.history_store.init_db = original_init_db
             telegram_history_client.sync_one_channel = original_sync_one_channel
 
         self.assertEqual(exit_code, 0)
@@ -1831,7 +1840,7 @@ user_password = "pw_x"
         self.assertEqual([(row["channel_id"], row["message_id"]) for row in rows], [(1, 1), (1, 2)])
 
     def test_resolve_runtime_reads_keychain_references(self) -> None:
-        original_file = telegram_history_client.RUNTIME_LOCAL_FILE
+        original_file = telegram_history_client.history_settings.RUNTIME_LOCAL_FILE
         original_run = telegram_history_client.subprocess.run
         telegram_history_client._SECRET_CACHE.clear()
         values = {
@@ -1889,12 +1898,12 @@ user_password = "keychain://telegram-connector/user_password"
 """.strip(),
                 encoding="utf-8",
             )
-            telegram_history_client.RUNTIME_LOCAL_FILE = runtime_file
+            telegram_history_client.history_settings.RUNTIME_LOCAL_FILE = runtime_file
             telegram_history_client.subprocess.run = fake_run
             try:
                 runtime = telegram_history_client.resolve_runtime()
             finally:
-                telegram_history_client.RUNTIME_LOCAL_FILE = original_file
+                telegram_history_client.history_settings.RUNTIME_LOCAL_FILE = original_file
                 telegram_history_client.subprocess.run = original_run
 
         self.assertEqual(runtime.api_id, "12345")

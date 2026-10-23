@@ -12,7 +12,9 @@ Local Telegram toolkit for channel history ingestion, OCR, CSV export, scheduled
 - [../telegram_shared/README.md](../telegram_shared/README.md): shared Telegram helper boundaries and retry semantics
 - `--help` on the Python entrypoints: exact CLI syntax
 
-For analytics maintenance, use the [module ownership map](./AGENTS.md#architecture).
+For history, digest and analytics maintenance, use the [module ownership map](./AGENTS.md#architecture).
+History and digest entrypoints preserve the CLI and public calls while configuration,
+storage, session adapters, rendering and pipelines have dedicated local owners.
 `telegram_analysis.py` remains the public worker CLI and composition root;
 settings, evidence validation, rendering and pipeline stages have dedicated owners.
 

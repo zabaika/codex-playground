@@ -16,6 +16,14 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 MODULES = (
     "telegram_bridge.py", "telegram_history_client.py", "telegram_digest.py",
+    "history_settings.py",
+    "history_messages.py",
+    "history_store.py",
+    "history_session.py",
+    "analysis_history.py",
+    "digest_settings.py",
+    "digest_rendering.py",
+    "digest_pipeline.py",
     "telegram_analysis.py", "analysis_store.py", "analysis_evidence.py",
     "analysis_settings.py", "analysis_rendering.py", "analysis_pipeline.py",
 )
@@ -153,6 +161,14 @@ for name, value in list(sys.modules.items()):
 
 def test_analytics_modules_preserve_ownership_boundaries():
     allowed = {
+        "history_settings": set(),
+        "history_messages": set(),
+        "history_store": {"history_settings", "history_messages"},
+        "history_session": {"history_settings", "history_messages"},
+        "analysis_history": {"history_settings", "history_messages", "history_store", "history_session", "analysis_store"},
+        "digest_settings": {"history_settings"},
+        "digest_rendering": set(),
+        "digest_pipeline": {"digest_settings", "digest_rendering", "history_messages", "history_store"},
         "analysis_settings": set(),
         "analysis_evidence": {"analysis_settings", "analysis_store"},
         "analysis_rendering": set(),
@@ -207,7 +223,7 @@ from pathlib import Path
 sys.path.insert(0, sys.argv[1])
 import telegram_history_client as history
 from common import sqlite
-history.fts5_available = lambda conn: False
+history.history_store.fts5_available = lambda conn: False
 conn = sqlite.connect_sqlite(Path(sys.argv[1]) / 'without-fts.sqlite3')
 history.init_db(conn)
 assert conn.execute('SELECT count(*) FROM messages').fetchone()[0] == 0

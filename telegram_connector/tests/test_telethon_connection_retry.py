@@ -44,7 +44,7 @@ def install_clients(monkeypatch, outcomes, *, cleanup_error=None):
                 raise cleanup_error
             self.closed = True
 
-    monkeypatch.setattr(history, "require_telethon", lambda: Client)
+    monkeypatch.setattr(history.history_session, "require_telethon", lambda: Client)
     return clients
 
 
@@ -120,8 +120,8 @@ def test_connection_budgets_are_configurable(monkeypatch):
         connection_timeout_seconds=17, connection_attempts=2,
         connection_retry_backoff_seconds=0, connection_cleanup_timeout_seconds=4,
     )
-    monkeypatch.setattr(history, "load_runtime_config", lambda: config)
-    monkeypatch.setattr(history, "resolve_secret_value", lambda value, label: "fake")
+    monkeypatch.setattr(history.history_settings, "load_runtime_config", lambda: config)
+    monkeypatch.setattr(history.history_settings, "resolve_secret_value", lambda value, label: "fake")
     loaded = history.resolve_runtime()
     assert (loaded.connection_timeout_seconds, loaded.connection_attempts,
             loaded.connection_retry_backoff_seconds, loaded.connection_cleanup_timeout_seconds) == (17, 2, 0, 4)

@@ -187,7 +187,7 @@ def test_s08_page_sync_contract_sdk_retry_owner_is_explicit(runtime, monkeypatch
         async def get_me(self):
             return SimpleNamespace(id=7)
 
-    monkeypatch.setattr(history, "require_telethon", lambda: Client)
+    monkeypatch.setattr(history.history_session, "require_telethon", lambda: Client)
     client = asyncio.run(history.open_telethon_client(runtime, "user", managed_requests=managed))
     if managed:
         assert client.options == {"request_retries": 0, "connection_retries": 0, "retry_delay": 0,
@@ -226,7 +226,7 @@ def test_s08_page_sync_contract_managed_startup_retry_keeps_fresh_client_cleanup
         async def get_me(self):
             return SimpleNamespace(id=7)
 
-    monkeypatch.setattr(history, "require_telethon", lambda: Client)
+    monkeypatch.setattr(history.history_session, "require_telethon", lambda: Client)
     client = asyncio.run(history.open_telethon_client(runtime, "user", managed_requests=True))
     assert len(clients) == 2 and clients[0].closed and client is clients[1]
     assert clients[0].options == clients[1].options
@@ -265,7 +265,7 @@ def context_client(monkeypatch, *, cleanup=None):
         calls.append((auth, kwargs, client))
         return client
 
-    monkeypatch.setattr(history, "open_telethon_client", open_client)
+    monkeypatch.setattr(history.history_session, "open_telethon_client", open_client)
     return calls
 
 
@@ -322,7 +322,7 @@ def test_s08_page_sync_contract_uncertain_cleanup_keeps_session_blocked(runtime,
         held.append(fd)
         return fd
 
-    monkeypatch.setattr(history, "_acquire_session_lock", capture)
+    monkeypatch.setattr(history.history_session, "_acquire_session_lock", capture)
 
     async def run():
         with pytest.raises(history.AsyncCleanupError):
@@ -347,7 +347,7 @@ def test_s08_page_sync_contract_uncertain_cleanup_keeps_session_blocked(runtime,
 
 def test_s08_page_sync_contract_clean_startup_error_releases_session(runtime, monkeypatch):
     calls = context_client(monkeypatch)
-    opened = history.open_telethon_client
+    opened = history.history_session.open_telethon_client
     attempts = []
 
     async def flaky(*a, **kw):
@@ -356,7 +356,7 @@ def test_s08_page_sync_contract_clean_startup_error_releases_session(runtime, mo
             raise ValueError("fixture startup error")
         return await opened(*a, **kw)
 
-    monkeypatch.setattr(history, "open_telethon_client", flaky)
+    monkeypatch.setattr(history.history_session, "open_telethon_client", flaky)
 
     async def run():
         with pytest.raises(ValueError, match="fixture startup"):
@@ -371,7 +371,7 @@ def test_s08_page_sync_contract_clean_startup_error_releases_session(runtime, mo
 
 @pytest.mark.parametrize("entry", ["sync", "export", "digest"])
 def test_s08_page_sync_contract_legacy_consumers_use_canonical_session_owner(store, runtime, monkeypatch, tmp_path, entry):
-    owner = history
+    owner = history.history_session
     if entry == "digest":
         monkeypatch.syspath_prepend(str(history.APP_DIR))
         from telegram_connector import telegram_digest as digest
@@ -446,8 +446,8 @@ def test_s08_page_sync_contract_startup_cleanup_error_keeps_lease_until_fatal_ex
         starts.append(1)
         raise history.TelegramConnectionError(history.AsyncCleanupError("fixture uncertain startup"), 1, 3)
 
-    monkeypatch.setattr(history, "_acquire_session_lock", capture)
-    monkeypatch.setattr(history, "open_telethon_client", startup)
+    monkeypatch.setattr(history.history_session, "_acquire_session_lock", capture)
+    monkeypatch.setattr(history.history_session, "open_telethon_client", startup)
 
     async def run():
         with pytest.raises(history.TelegramConnectionError):
@@ -522,7 +522,7 @@ def test_s08_page_sync_contract_prepared_write_roundtrips_existing_writer(store,
     prepare = getattr(history, "prepare_history_write", None)
     apply = getattr(history, "_upsert_prepared_message_no_tx", None)
     assert callable(prepare) and callable(apply), "Durable pending pages need the existing writer's normalized JSON form"
-    monkeypatch.setattr(history, "now_utc", lambda: NOW.isoformat())
+    monkeypatch.setattr(history.history_store, "now_utc", lambda: NOW.isoformat())
     item = write(100)
     if kind == "empty":
         item.message.message = ""
@@ -719,7 +719,7 @@ def test_s08_page_sync_contract_loader_paginates_with_independent_db_flush(store
         sizes.append(store.conn.execute("SELECT COUNT(*) FROM messages").fetchone()[0] - before)
         return result
 
-    monkeypatch.setattr(history, "drain_analysis_history_page", observe)
+    monkeypatch.setattr(history.analysis_history, "drain_analysis_history_page", observe)
     result = load_source(store, job, runtime, client)
     assert result["state"] == "complete" and result["cursor"] == 96
     assert sizes == [2, 2, 1, 0]
@@ -739,11 +739,11 @@ def test_s08_page_sync_contract_loader_resume_drains_saved_remainder_before_fetc
         original(*a, **kw)
         raise RuntimeError("fixture crash after committed first flush")
 
-    monkeypatch.setattr(history, "drain_analysis_history_page", crash)
+    monkeypatch.setattr(history.analysis_history, "drain_analysis_history_page", crash)
     with pytest.raises(RuntimeError, match="fixture crash"):
         load_source(store, job, runtime, client)
     assert source(store, job)["cursor"] == 99 and len(client.calls) == 1
-    monkeypatch.setattr(history, "drain_analysis_history_page", original)
+    monkeypatch.setattr(history.analysis_history, "drain_analysis_history_page", original)
     store.finish_job(job["job_id"], generation=job["generation"], status="interrupted", now=NOW)
     store.resume_job(job["job_id"], generation=job["generation"], phase="sync", max_queued_jobs=8, now=NOW)
     resumed = store.claim_job(job["job_id"], max_running_jobs=1, now=NOW)
@@ -765,11 +765,11 @@ def test_s08_page_sync_contract_loader_update_preserves_stop_id_after_resume(sto
         original(*a, **kw)
         raise RuntimeError("fixture crash")
 
-    monkeypatch.setattr(history, "drain_analysis_history_page", crash)
+    monkeypatch.setattr(history.analysis_history, "drain_analysis_history_page", crash)
     with pytest.raises(RuntimeError, match="fixture crash"):
         load_source(store, job, runtime, client, mode="update")
     assert source(store, job)["stop_id"] == 80 and history.latest_stored_message_id(store.conn, 11) == 100
-    monkeypatch.setattr(history, "drain_analysis_history_page", original)
+    monkeypatch.setattr(history.analysis_history, "drain_analysis_history_page", original)
     result = load_source(store, job, runtime, client, mode="update")
     assert result["stop_id"] == 80 and result["state"] == "complete"
     assert store.conn.execute("SELECT MIN(message_id),MAX(message_id),COUNT(*) FROM messages").fetchone()[:] == (80, 100, 21)
@@ -861,7 +861,7 @@ def test_s08_page_sync_contract_loader_uses_managed_session_by_default(store, jo
         calls.append((auth, options))
         yield PageClient(store, [])
 
-    monkeypatch.setattr(history, "open_telethon_session", leased)
+    monkeypatch.setattr(history.history_session, "open_telethon_session", leased)
     assert load_source(store, job, runtime, None)["state"] == "complete"
     assert calls == [(expected, {"managed_requests": True})]
 
@@ -887,7 +887,7 @@ def test_s08_page_sync_contract_managed_user_requires_existing_authorization_wit
         async def disconnect(self):
             self.closed = True
 
-    monkeypatch.setattr(history, "require_telethon", lambda: Client)
+    monkeypatch.setattr(history.history_session, "require_telethon", lambda: Client)
     if authorized:
         assert asyncio.run(history.open_telethon_client(runtime, "user", managed_requests=True)) is clients[0]
         assert clients[0].connected and not clients[0].closed
@@ -911,7 +911,7 @@ def test_s08_page_sync_contract_managed_context_does_not_restart_authenticated_c
     async def opened(*a, **kw):
         return Client()
 
-    monkeypatch.setattr(history, "open_telethon_client", opened)
+    monkeypatch.setattr(history.history_session, "open_telethon_client", opened)
 
     async def run():
         async with session(runtime, managed=True):
@@ -1014,7 +1014,7 @@ def test_s08_page_sync_contract_sender_and_media_are_prepared_outside_write_tran
         return SimpleNamespace(username="fixture-user", first_name="Fixture")
 
     message.get_sender = sender
-    monkeypatch.setattr(history, "message_media_kind", lambda value: "photo" if getattr(value, "media", None) else None)
+    monkeypatch.setattr(history.history_messages, "message_media_kind", lambda value: "photo" if getattr(value, "media", None) else None)
 
     class MediaClient(PageClient):
         downloads = 0
@@ -1329,7 +1329,7 @@ def test_s09_history_policy_resume_pending_page_keeps_accounting_and_then_advanc
         return value
 
     with monkeypatch.context() as patch:
-        patch.setattr(history, "drain_analysis_history_page", crash_after_flush)
+        patch.setattr(history.analysis_history, "drain_analysis_history_page", crash_after_flush)
         with pytest.raises(RuntimeError, match="fixture process crash"):
             ensure_history(store, job, runtime, PageClient(store, values))
     before = store.get_job(job["job_id"])
@@ -1358,7 +1358,7 @@ def test_s09_history_policy_new_job_inherits_received_remainder_without_network_
         raise RuntimeError("fixture process crash")
 
     with monkeypatch.context() as patch:
-        patch.setattr(history, "drain_analysis_history_page", crash)
+        patch.setattr(history.analysis_history, "drain_analysis_history_page", crash)
         with pytest.raises(RuntimeError):
             ensure_history(store, first, runtime, PageClient(store, values))
     store.finish_job(first["job_id"], generation=first["generation"], status="interrupted", now=NOW)
@@ -1459,7 +1459,7 @@ def test_s09_history_policy_bounded_session_start_failure_allows_next_role(store
             raise history.TelegramConnectionError(ConnectionError("fixture unavailable"), 3, 3)
         yield client
 
-    monkeypatch.setattr(history, "open_telethon_session", session)
+    monkeypatch.setattr(history.history_session, "open_telethon_session", session)
     function = getattr(history, "ensure_analysis_history")
     result = asyncio.run(function(store, job["job_id"], runtime, generation=job["generation"]))
     assert opened == ["bot", "user"]
@@ -1486,7 +1486,7 @@ def test_s09_history_policy_expired_run_enumerates_unstarted_sources_without_ope
         opened.append(True)
         yield PageClient(store, [])
 
-    monkeypatch.setattr(history, "open_telethon_session", session)
+    monkeypatch.setattr(history.history_session, "open_telethon_session", session)
     result = asyncio.run(history.ensure_analysis_history(store, job["job_id"], runtime, generation=job["generation"],
                                                          deadline=common_process.continuous_time() - 1))
     assert not opened
@@ -1508,7 +1508,7 @@ def test_s09_history_policy_global_session_failure_does_not_start_another_client
         raise history.TelegramConnectionError(AsyncCleanupError("fixture uncertain disconnect"), 1, 3)
         yield  # pragma: no cover - async context-manager protocol only.
 
-    monkeypatch.setattr(history, "open_telethon_session", session)
+    monkeypatch.setattr(history.history_session, "open_telethon_session", session)
     expected = PermissionError if reason == "credentials" else history.TelegramConnectionError
     with pytest.raises(expected):
         asyncio.run(history.ensure_analysis_history(store, job["job_id"], runtime, generation=job["generation"]))
@@ -1523,5 +1523,5 @@ def test_s09_history_policy_retained_checkpoint_scan_does_not_hold_sqlite_write_
         assert not store.conn.in_transaction, "Retained-job scans must not block other SQLite writers"
         return original(*args)
 
-    monkeypatch.setattr(history, "_previous_analysis_history", inspect_previous)
+    monkeypatch.setattr(history.analysis_history, "_previous_analysis_history", inspect_previous)
     ensure_history(store, job, runtime, PageClient(store, []))

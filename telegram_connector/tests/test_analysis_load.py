@@ -222,7 +222,9 @@ def measure(count, report, *, cache_probe=False):
     result.update(peak_rss_bytes=peak_rss(), elapsed_seconds=time.monotonic() - started)
     result["code_hashes"] = {name: hashlib.sha256((history.APP_DIR / name).read_bytes()).hexdigest()
         for name in ("telegram_analysis.py", "analysis_store.py", "telegram_history_client.py", "analysis_evidence.py",
-                     "analysis_settings.py", "analysis_rendering.py", "analysis_pipeline.py")}
+                     "analysis_settings.py", "analysis_rendering.py", "analysis_pipeline.py",
+                     "history_settings.py", "history_messages.py", "history_store.py", "history_session.py",
+                     "analysis_history.py")}
     json_io.write_json_atomic(report, result)
     print(json.dumps({"report": str(report), "peak_rss_bytes": result["peak_rss_bytes"], "elapsed_seconds": result["elapsed_seconds"]}), flush=True)
     return result

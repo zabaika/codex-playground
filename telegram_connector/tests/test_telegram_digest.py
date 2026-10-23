@@ -9,6 +9,8 @@ import sys
 import tempfile
 import tomllib
 import unittest
+from dataclasses import replace
+from types import SimpleNamespace
 from unittest.mock import patch
 from datetime import datetime, timezone
 from email.message import Message
@@ -34,6 +36,190 @@ final_digest_template = "Final={channel_name}; {cache_breakpoint_marker} Total={
 
 
 class TelegramDigestTests(unittest.TestCase):
+    def test_run_integrates_stored_rows_pipeline_progressive_html_and_partial_audit(self) -> None:
+        history = telegram_digest.history_client
+        config = tomllib.loads((MODULE_PATH.parent / "config/runtime.example.toml").read_text())
+        config["digest_ai"]["messages_per_ai_pass"] = "2"
+        config["digest_limits"]["day"]["sync_limit"] = "20"
+        config["processing"]["ocr"] = "false"
+        config["digest"]["mark_read"] = "false"
+        channels = ["@empty", "@one", "@many"]
+        events, requests, delivered, connections = [], [], [], []
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            runtime = history.RuntimeConfig(
+                db_path=root / "history.sqlite3", media_root=root / "media",
+                user_session_name="fixture-user", bot_session_name="fixture-bot",
+                api_id="fixture", api_hash="fixture", phone="fixture", bot_token="fixture",
+                user_password="", tesseract_binary="fixture", vision_prompt="",
+                sync_batch_size=2, default_auth_mode="user", public_auth_mode="bot",
+                private_auth_mode="user", default_channels=channels,
+            )
+
+            async def sync(runtime_arg, **options):
+                self.assertIs(runtime_arg, runtime)
+                self.assertEqual(options["total_limit"], 20)
+                events.append("sync")
+                conn = history.common_sqlite.connect_sqlite(runtime.db_path)
+                try:
+                    history.init_db(conn)
+                    results = []
+                    for peer, channel, count in ((1, "@empty", 0), (2, "@one", 1), (3, "@many", 3)):
+                        class Channel(SimpleNamespace):
+                            pass
+                        entity = Channel(id=peer, username=channel[1:], title=channel[1:].title())
+                        history.upsert_channel(conn, entity)
+                        for number in range(1, count + 1):
+                            message = SimpleNamespace(
+                                id=number, message=f"fixture-body-{channel}-{number}", media=None,
+                                date=datetime(2026, 10, 20, 12, number, tzinfo=timezone.utc),
+                            )
+                            history.upsert_message(conn, entity, message, None, None, None, None)
+                        results.append({"channel": channel, "processed_messages": count,
+                                        "sync_limit_reached": False})
+                    return results
+                finally:
+                    conn.close()
+
+            def connect(runtime_arg):
+                conn = history.common_sqlite.connect_sqlite(runtime_arg.db_path)
+                connections.append(conn)
+                return conn
+
+            def provider(payload, key, **options):
+                self.assertEqual(key, "fixture-key")
+                self.assertTrue(all(not conn.in_transaction for conn in connections))
+                requests.append(payload)
+                events.append("request")
+                return SimpleNamespace(response={
+                    "id": "fixture-response", "status": "completed",
+                    "output_text": "Главные темы дня: Тема\n1. Тема: факт https://t.me/one/1",
+                    "usage": {"input_tokens": 10, "output_tokens": 4, "total_tokens": 14},
+                }, latency_ms=7)
+
+            def send(token, chat, text):
+                self.assertEqual((token, chat), ("fixture-token", "fixture-chat"))
+                delivered.append(text)
+                events.append("send")
+                if "Many" in text:
+                    raise SystemExit("Telegram API request timed out while calling sendMessage.")
+
+            config["telegram"]["default_chat_id"] = "fixture-chat"
+            args = telegram_digest.build_parser().parse_args([
+                "run", "--since", "2026-10-20", "--until", "2026-10-20",
+            ])
+            audit = root / "attempt.json"
+            with patch.dict(os.environ, {"OPENAI_API_KEY": "fixture-key"}), \
+                 patch("common.http.request.getproxies", return_value={}), \
+                 patch.object(history, "resolve_runtime", return_value=runtime), \
+                 patch.object(history, "load_runtime_config", return_value=config), \
+                 patch.object(history, "connect_db", side_effect=connect), \
+                 patch.object(telegram_digest, "run_sync", side_effect=sync), \
+                 patch.object(telegram_digest.bridge, "require_token", return_value="fixture-token"), \
+                 patch.object(telegram_digest, "send_digest_message", side_effect=send), \
+                 patch.object(telegram_digest, "DIGEST_LAST_ATTEMPT_LOG", audit), \
+                 patch.object(telegram_digest.digest_pipeline, "post_responses", side_effect=provider), \
+                 patch.object(telegram_digest.digest_settings, "require_openai_api_key",
+                              wraps=telegram_digest.digest_settings.require_openai_api_key) as key, \
+                 patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                self.assertEqual(telegram_digest.cmd_run(args), 0)
+                result = json.loads(stdout.getvalue())
+            self.assertEqual(key.call_count, 1)
+            self.assertEqual(events, ["sync", "send", "request", "send",
+                                      "request", "request", "request", "send", "send"])
+            self.assertEqual(len(requests), 4)
+            self.assertIn("fixture-body-@one-1", requests[0]["input"])
+            self.assertIn("fixture-body-@many-3", requests[2]["input"])
+            self.assertIn("<b>", delivered[1])
+            self.assertEqual(result["status"], "partial")
+            self.assertEqual(result["sent_channel_messages"], 2)
+            self.assertEqual(json.loads(audit.read_text())["phase"], "completed")
+            conn = history.common_sqlite.connect_sqlite(runtime.db_path)
+            try:
+                rows = [tuple(row) for row in conn.execute(
+                    "SELECT stage,channel,request_index,message_count,status FROM ai_usage_log ORDER BY id"
+                )]
+                self.assertEqual(rows, [("single", "@one", 1, 1, "ok"),
+                    ("batch", "@many", 1, 2, "ok"), ("batch", "@many", 2, 2, "ok"),
+                    ("final", "@many", 3, 3, "ok")])
+            finally:
+                conn.close()
+            for connection in connections:
+                with self.assertRaises(sqlite3.ProgrammingError):
+                    connection.execute("SELECT 1")
+
+    def test_public_request_uses_pipeline_hook_and_restores_after_capture_or_rejection(self) -> None:
+        driver = telegram_digest.digest_pipeline
+        original = driver.post_responses
+        for reject in (False, True):
+            with self.subTest(reject=reject):
+                captured = []
+
+                def capture(payload, api_key, **kwargs):
+                    captured.append(payload)
+                    if reject:
+                        raise RuntimeError("fixture rejected request")
+                    return SimpleNamespace(response={"id": "fixture", "output_text": "Summary"}, latency_ms=7)
+
+                def unexpected_network(*args, **kwargs):
+                    raise AssertionError("Request bypassed the owning capture hook")
+
+                with patch.object(driver, "post_responses", side_effect=capture):
+                    arguments = dict(
+                        prompt_cache_key="fixture-cache", cache_breakpoint_marker="boundary",
+                        reasoning_effort="none", reasoning_summary="none", urlopen_func=unexpected_network,
+                    )
+                    if reject:
+                        with self.assertRaisesRegex(RuntimeError, "fixture rejected request"):
+                            telegram_digest.run_openai_digest("fixture-key", "gpt-5.4", "rules", "prompt", **arguments)
+                    else:
+                        result = telegram_digest.run_openai_digest(
+                            "fixture-key", "gpt-5.4", "rules", "prompt", **arguments,
+                        )
+                        self.assertEqual(result.text, "Summary")
+                    self.assertEqual(len(captured), 1)
+                    self.assertEqual(captured[0]["input"], "prompt")
+                self.assertIs(driver.post_responses, original)
+
+    def test_provider_failure_keeps_stage_accounting_for_single_batch_and_final(self) -> None:
+        config_path = MODULE_PATH.parent / "config/runtime.example.toml"
+        config = telegram_digest.resolve_digest_config(tomllib.loads(config_path.read_text()))
+        config = replace(config, messages_per_ai_pass=2, message_block_max_chars=100000,
+                         message_text_max_chars=450, message_ocr_max_chars=300)
+        for stage, count, failure_index in (("single", 1, 1), ("batch", 3, 1), ("final", 3, 3)):
+            with self.subTest(stage=stage):
+                conn = telegram_digest.history_client.common_sqlite.connect_sqlite(":memory:")
+                self.addCleanup(conn.close)
+                telegram_digest.history_client.init_db(conn)
+                calls = []
+
+                def provider(payload, api_key, **kwargs):
+                    calls.append(payload)
+                    if len(calls) == failure_index:
+                        raise RuntimeError("fixture provider failure")
+                    return SimpleNamespace(response={
+                        "id": "fixture-response", "status": "completed", "output_text": "Summary",
+                        "usage": {"input_tokens": 10, "output_tokens": 4, "total_tokens": 14},
+                    }, latency_ms=7)
+
+                messages = [{"message_id": i + 1, "text": "Stored fact", "ocr_text": "",
+                             "date_utc": "2026-10-20T00:00:00+00:00"} for i in range(count)]
+                with patch.object(telegram_digest.digest_pipeline, "post_responses", side_effect=provider):
+                    with self.assertRaisesRegex(RuntimeError, "fixture provider failure"):
+                        telegram_digest.summarize_channel_batches(
+                            conn, api_key="fixture-key", config=config, channel="@fixture",
+                            channel_name="Fixture", since="2026-10-20", until="2026-10-20",
+                            total_message_count=count, messages=iter(messages),
+                        )
+                rows = conn.execute(
+                    "SELECT stage,status,request_index,message_count FROM ai_usage_log ORDER BY id"
+                ).fetchall()
+                self.assertEqual(len(calls), failure_index)
+                self.assertEqual(len(rows), failure_index)
+                self.assertEqual(tuple(rows[-1]), (stage, "error", failure_index,
+                    count if stage != "batch" else 2))
+                self.assertTrue(all(row["status"] == "ok" for row in rows[:-1]))
+
     def test_http_initialization_failures_replace_previous_audit(self) -> None:
         for failure in ("proxy", "dependency"):
             with self.subTest(failure=failure), tempfile.TemporaryDirectory() as tmp:
@@ -243,7 +429,7 @@ class TelegramDigestTests(unittest.TestCase):
     def test_digest_specific_openai_timeout_overrides_shared_with_legacy_fallback(self) -> None:
         for value, expected in (("30", 30), (30, 30), (None, 120), ("", 120), ("0", 1)):
             with self.subTest(value=value), patch.object(
-                telegram_digest, "load_digest_prompts", return_value=tomllib.loads(TEST_DIGEST_PROMPTS)["digest_prompts"]
+                telegram_digest.digest_settings, "load_digest_prompts", return_value=tomllib.loads(TEST_DIGEST_PROMPTS)["digest_prompts"]
             ):
                 config = {
                     "processing": {"model": "test-model"},
@@ -259,7 +445,7 @@ class TelegramDigestTests(unittest.TestCase):
             "digest": {"openai_timeout_seconds": "invalid"},
             "digest_ai": {"openai_timeout_seconds": "120", "reasoning_effort": "low", "reasoning_summary": "none"},
         }
-        with patch.object(telegram_digest, "load_digest_prompts", return_value=tomllib.loads(TEST_DIGEST_PROMPTS)["digest_prompts"]):
+        with patch.object(telegram_digest.digest_settings, "load_digest_prompts", return_value=tomllib.loads(TEST_DIGEST_PROMPTS)["digest_prompts"]):
             with self.assertRaisesRegex(SystemExit, "digest.openai_timeout_seconds"):
                 telegram_digest.resolve_digest_config(config)
 
@@ -390,12 +576,12 @@ class TelegramDigestTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             config_dir = Path(tmp_dir)
             self.write_prompt_bundle(config_dir)
-            original_runtime_local_file = telegram_digest.history_client.RUNTIME_LOCAL_FILE
+            original_runtime_local_file = telegram_digest.digest_settings.history_settings.RUNTIME_LOCAL_FILE
             try:
-                telegram_digest.history_client.RUNTIME_LOCAL_FILE = config_dir / "runtime.local.toml"
+                telegram_digest.digest_settings.history_settings.RUNTIME_LOCAL_FILE = config_dir / "runtime.local.toml"
                 prompts = telegram_digest.load_digest_prompts({"digest_prompts": {"file": "digest_prompts.toml"}})
             finally:
-                telegram_digest.history_client.RUNTIME_LOCAL_FILE = original_runtime_local_file
+                telegram_digest.digest_settings.history_settings.RUNTIME_LOCAL_FILE = original_runtime_local_file
 
         self.assertEqual(prompts["system_instructions"], "system prompt")
         self.assertEqual(prompts["shared_prompt_prefix"], "Shared {channel_name} {since} {until}")
@@ -1769,7 +1955,7 @@ batch_digest_template = "Batch={batch_index}; {cache_breakpoint_marker}"
                     ),
                 )
 
-            telegram_digest.run_openai_digest = fake_run_openai_digest
+            telegram_digest.digest_pipeline.run_openai_digest = fake_run_openai_digest
             count, summary, char_limit_reached, output_token_limit_reached = telegram_digest.summarize_channel_batches(
                 conn,
                 api_key="k",
@@ -1793,7 +1979,7 @@ batch_digest_template = "Batch={batch_index}; {cache_breakpoint_marker}"
                 messages=iter(messages),
             )
         finally:
-            telegram_digest.run_openai_digest = original_run_openai_digest
+            telegram_digest.digest_pipeline.run_openai_digest = original_run_openai_digest
 
         self.assertEqual(count, 2)
         self.assertEqual(summary, "Main topics of the day: one direct digest.")
@@ -1867,7 +2053,7 @@ batch_digest_template = "Batch={batch_index}; {cache_breakpoint_marker}"
         )
         original_run_openai_digest = telegram_digest.run_openai_digest
         try:
-            telegram_digest.run_openai_digest = lambda *args, **kwargs: telegram_digest.OpenAIResult(
+            telegram_digest.digest_pipeline.run_openai_digest = lambda *args, **kwargs: telegram_digest.OpenAIResult(
                 response_id="resp_1",
                 text="Главные темы дня: тема.",
                 usage=telegram_digest.OpenAIUsage(
@@ -1891,7 +2077,7 @@ batch_digest_template = "Batch={batch_index}; {cache_breakpoint_marker}"
                 messages=iter(messages),
             )
         finally:
-            telegram_digest.run_openai_digest = original_run_openai_digest
+            telegram_digest.digest_pipeline.run_openai_digest = original_run_openai_digest
 
         self.assertEqual(count, 2)
         self.assertEqual(summary, "Главные темы дня: тема.")
@@ -1984,7 +2170,7 @@ batch_digest_template = "Batch={batch_index}; {cache_breakpoint_marker}"
                 """
             )
             telegram_digest.history_client.resolve_channels_argument = lambda runtime, channel: ["@a", "@b"]
-            telegram_digest.require_openai_api_key = lambda config: "k"
+            telegram_digest.digest_settings.require_openai_api_key = lambda config: "k"
 
             async def fake_run_sync(runtime, **kwargs):
                 return [{"channel": "@a", "sync_limit_reached": True}, {"channel": "@b"}]
@@ -2004,7 +2190,7 @@ batch_digest_template = "Batch={batch_index}; {cache_breakpoint_marker}"
                     hit_char_limit=False,
                 )
 
-            telegram_digest.render_message_block = fake_render_message_block
+            telegram_digest.digest_pipeline.render_message_block = fake_render_message_block
 
             def fake_summarize_channel_batches(conn, **kwargs):
                 if kwargs["channel"] == "@b":
@@ -2017,7 +2203,7 @@ batch_digest_template = "Batch={batch_index}; {cache_breakpoint_marker}"
                     )
                 return (1, "summary ok", False, True)
 
-            telegram_digest.summarize_channel_batches = fake_summarize_channel_batches
+            telegram_digest.digest_pipeline.summarize_channel_batches = fake_summarize_channel_batches
             telegram_digest.bridge.require_token = lambda: "token"
             sent: list[str] = []
             telegram_digest.bridge.send_text_chunks = lambda token, chat_id, message, chunk_size=None, parse_mode=None: sent.append(message)
@@ -2030,12 +2216,12 @@ batch_digest_template = "Batch={batch_index}; {cache_breakpoint_marker}"
             telegram_digest.history_client.connect_db = original_connect_db
             telegram_digest.history_client.init_db = original_init_db
             telegram_digest.history_client.resolve_channels_argument = original_resolve_channels_argument
-            telegram_digest.require_openai_api_key = original_require_openai_api_key
+            telegram_digest.digest_settings.require_openai_api_key = original_require_openai_api_key
             telegram_digest.run_sync = original_run_sync
             telegram_digest.iter_channel_messages = original_iter_channel_messages
             telegram_digest.count_channel_messages = original_count_channel_messages
-            telegram_digest.render_message_block = original_render_message_block
-            telegram_digest.summarize_channel_batches = original_summarize_channel_batches
+            telegram_digest.digest_pipeline.render_message_block = original_render_message_block
+            telegram_digest.digest_pipeline.summarize_channel_batches = original_summarize_channel_batches
             telegram_digest.bridge.require_token = original_require_token
             telegram_digest.bridge.send_text_chunks = original_send_text_chunks
             telegram_digest.PROJECT_ROOT = original_project_root
@@ -2158,7 +2344,7 @@ batch_digest_template = "Batch={batch_index}; {cache_breakpoint_marker}"
                 """
             )
             telegram_digest.history_client.resolve_channels_argument = lambda runtime, channel: ["@a", "@b", "@c"]
-            telegram_digest.require_openai_api_key = lambda config: "k"
+            telegram_digest.digest_settings.require_openai_api_key = lambda config: "k"
 
             async def fake_run_sync(runtime, **kwargs):
                 return [{"channel": "@a"}, {"channel": "@b"}, {"channel": "@c"}]
@@ -2181,7 +2367,7 @@ batch_digest_template = "Batch={batch_index}; {cache_breakpoint_marker}"
                 ]
             )
             telegram_digest.count_channel_messages = lambda conn, channel, since, until: 1
-            telegram_digest.summarize_channel_batches = lambda conn, **kwargs: (
+            telegram_digest.digest_pipeline.summarize_channel_batches = lambda conn, **kwargs: (
                 1,
                 f"summary {kwargs['channel']}",
                 False,
@@ -2208,11 +2394,11 @@ batch_digest_template = "Batch={batch_index}; {cache_breakpoint_marker}"
             telegram_digest.history_client.connect_db = original_connect_db
             telegram_digest.history_client.init_db = original_init_db
             telegram_digest.history_client.resolve_channels_argument = original_resolve_channels_argument
-            telegram_digest.require_openai_api_key = original_require_openai_api_key
+            telegram_digest.digest_settings.require_openai_api_key = original_require_openai_api_key
             telegram_digest.run_sync = original_run_sync
             telegram_digest.iter_channel_messages = original_iter_channel_messages
             telegram_digest.count_channel_messages = original_count_channel_messages
-            telegram_digest.summarize_channel_batches = original_summarize_channel_batches
+            telegram_digest.digest_pipeline.summarize_channel_batches = original_summarize_channel_batches
             telegram_digest.bridge.require_token = original_require_token
             telegram_digest.bridge.send_text_chunks = original_send_text_chunks
             telegram_digest.PROJECT_ROOT = original_project_root
@@ -2429,7 +2615,7 @@ batch_digest_template = "Batch={batch_index}; {cache_breakpoint_marker}"
                     hit_char_limit=False,
                 )
 
-            telegram_digest.render_message_block = fake_render_message_block
+            telegram_digest.digest_pipeline.render_message_block = fake_render_message_block
 
             def fail_require_openai_api_key(config):
                 raise AssertionError("OpenAI key should not be required when skipping AI")
@@ -2437,8 +2623,8 @@ batch_digest_template = "Batch={batch_index}; {cache_breakpoint_marker}"
             def fail_summarize_channel_batches(*args, **kwargs):
                 raise AssertionError("summarize_channel_batches should not be called when below min_messages_for_ai")
 
-            telegram_digest.require_openai_api_key = fail_require_openai_api_key
-            telegram_digest.summarize_channel_batches = fail_summarize_channel_batches
+            telegram_digest.digest_settings.require_openai_api_key = fail_require_openai_api_key
+            telegram_digest.digest_pipeline.summarize_channel_batches = fail_summarize_channel_batches
             telegram_digest.bridge.require_token = lambda: "token"
             sent: list[str] = []
             telegram_digest.bridge.send_text_chunks = lambda token, chat_id, message, chunk_size=None, parse_mode=None: sent.append(message)
@@ -2451,12 +2637,12 @@ batch_digest_template = "Batch={batch_index}; {cache_breakpoint_marker}"
             telegram_digest.history_client.connect_db = original_connect_db
             telegram_digest.history_client.init_db = original_init_db
             telegram_digest.history_client.resolve_channels_argument = original_resolve_channels_argument
-            telegram_digest.require_openai_api_key = original_require_openai_api_key
+            telegram_digest.digest_settings.require_openai_api_key = original_require_openai_api_key
             telegram_digest.run_sync = original_run_sync
             telegram_digest.iter_channel_messages = original_iter_channel_messages
             telegram_digest.count_channel_messages = original_count_channel_messages
-            telegram_digest.render_message_block = original_render_message_block
-            telegram_digest.summarize_channel_batches = original_summarize_channel_batches
+            telegram_digest.digest_pipeline.render_message_block = original_render_message_block
+            telegram_digest.digest_pipeline.summarize_channel_batches = original_summarize_channel_batches
             telegram_digest.bridge.require_token = original_require_token
             telegram_digest.bridge.send_text_chunks = original_send_text_chunks
             telegram_digest.PROJECT_ROOT = original_project_root
@@ -2559,7 +2745,7 @@ batch_digest_template = "Batch={batch_index}; {cache_breakpoint_marker}"
                 """
             )
             telegram_digest.history_client.resolve_channels_argument = lambda runtime, channel: ["@a"]
-            telegram_digest.require_openai_api_key = lambda config: "k"
+            telegram_digest.digest_settings.require_openai_api_key = lambda config: "k"
 
             async def fake_run_sync(runtime, **kwargs):
                 return [{"channel": "@a"}]
@@ -2569,13 +2755,13 @@ batch_digest_template = "Batch={batch_index}; {cache_breakpoint_marker}"
                 [{"title": "Channel A", "username": "a", "message_id": 1, "date_utc": since, "sender_username": "u", "sender_display_name": "User", "forwards": 0, "replies": 0, "text": "x", "ocr_text": None}]
             )
             telegram_digest.count_channel_messages = lambda conn, channel, since, until: 1
-            telegram_digest.render_message_block = lambda messages, **kwargs: telegram_digest.ChannelDigestInput(
+            telegram_digest.digest_pipeline.render_message_block = lambda messages, **kwargs: telegram_digest.ChannelDigestInput(
                 channel_name="Channel A",
                 message_count=1,
                 message_block="block",
                 hit_char_limit=False,
             )
-            telegram_digest.summarize_channel_batches = lambda conn, **kwargs: (1, "summary ok", False, False)
+            telegram_digest.digest_pipeline.summarize_channel_batches = lambda conn, **kwargs: (1, "summary ok", False, False)
             telegram_digest.bridge.require_token = lambda: "token"
             telegram_digest.bridge.send_text_chunks = lambda token, chat_id, message, chunk_size=None, parse_mode=None: None
 
@@ -2588,12 +2774,12 @@ batch_digest_template = "Batch={batch_index}; {cache_breakpoint_marker}"
             telegram_digest.history_client.connect_db = original_connect_db
             telegram_digest.history_client.init_db = original_init_db
             telegram_digest.history_client.resolve_channels_argument = original_resolve_channels_argument
-            telegram_digest.require_openai_api_key = original_require_openai_api_key
+            telegram_digest.digest_settings.require_openai_api_key = original_require_openai_api_key
             telegram_digest.run_sync = original_run_sync
             telegram_digest.iter_channel_messages = original_iter_channel_messages
             telegram_digest.count_channel_messages = original_count_channel_messages
-            telegram_digest.render_message_block = original_render_message_block
-            telegram_digest.summarize_channel_batches = original_summarize_channel_batches
+            telegram_digest.digest_pipeline.render_message_block = original_render_message_block
+            telegram_digest.digest_pipeline.summarize_channel_batches = original_summarize_channel_batches
             telegram_digest.bridge.require_token = original_require_token
             telegram_digest.bridge.send_text_chunks = original_send_text_chunks
             telegram_digest.PROJECT_ROOT = original_project_root

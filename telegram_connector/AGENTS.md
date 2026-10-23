@@ -17,8 +17,16 @@ It must stay operationally separate from `telegram_agent_bot`.
 
 - Keep a split architecture:
   - `telegram_bridge.py`: Bot API bridge and command surface
-  - `telegram_history_client.py`: Telethon ingestion, OCR, export, and SQLite system of record
+  - `telegram_history_client.py`: history CLI/composition, ordinary ingestion, OCR/export orchestration and compatibility exports
+  - `history_settings.py`: Connector runtime configuration, paths, secret adapters and input date semantics; history entrypoint preserves public exports
+  - `history_messages.py`: pure message/entity normalization, UTF-16 links, metadata and source rendering; no SQL, network or file writes
+  - `history_store.py`: history schema/migrations, FTS primitives, prepared message/media writers and transactional mutations; analytics page/checkpoint orchestration stays outside
+  - `history_session.py`: auth/reference and SDK sender/media adapters, exclusive Telethon session ownership and bounded startup/retry/cleanup; caller retains sync policy and outer TTL
+  - `analysis_history.py`: durable history planning/pages/reservations, checkpoint recovery and FTS backfill; keeps message/index/checkpoint mutations atomic using the existing store connection
   - `telegram_digest.py`: digest orchestration and Telegram delivery
+  - `digest_settings.py`: digest config/prompts/window/profile resolution and lazy AI-key adapter; independent of entrypoints and pipeline
+  - `digest_rendering.py`: pure digest HTML/status messages, canonical headings and source-link repair; no pipeline, storage or delivery
+  - `digest_pipeline.py`: bounded input packing, shared-provider adapter, cache/usage and single/batch/final synthesis; run audit/delivery remain in the digest entrypoint
   - `telegram_analysis.py`: analytics admission/control, legacy settings adapter, supervised worker, OCR, artifact and delivery orchestration; stable public CLI and compatibility exports
   - `analysis_settings.py`: analytics policy, prompts, profiles and reviewed model metadata; receives legacy settings from the entrypoint
   - `analysis_evidence.py`: evidence schemas, source snapshots, text/OCR offsets, citation/QA/URL validation
@@ -26,6 +34,7 @@ It must stay operationally separate from `telegram_agent_bot`.
   - `analysis_pipeline.py`: selection/manifest, physical provider requests, extraction/cache, relations, merge and synthesis
   - `analysis_store.py`: SQL, transactions, durable budgets and provenance ledger
 - Internal analytics calls and dependency patches use the owning module, including evaluator capture hooks. Compatibility exports are for existing callers, not mutable lookup ownership.
+- Extracted history/digest owners must not import their entrypoints or bridge. Keep public facade calls compatible and apply [dependency lookup conventions](../CODE_CONVENTIONS.md#python-baseline) to runtime, tests and instrumentation.
 - Extracted analytics modules must not import the entrypoint or bridge. Settings and rendering remain independent of pipeline and persistence. Keep related pipeline algorithms together to avoid scattering state and limit handling; revisit this agreed boundary when responsibilities change.
 - Keep `telegram_shared` limited to infrastructure primitives.
 - Do not move digest, history, OCR, analytics, export, or Telethon business logic into `telegram_shared`.
@@ -55,7 +64,7 @@ If README, code, and tests disagree, update them together.
 - Treat SQLite history as the system of record; digest and other analysis flows work over stored data.
 - Keep bridge access-control docs aligned with runtime behavior for `allowed_chat_ids`, `allowed_user_ids`, and `allowed_usernames`.
 - Keep `/agent-stats` local to the bridge and bounded to a recent-window query.
-- Keep digest HTML formatting owned by `telegram_digest.py`; the bridge must not reformat already-prepared HTML payloads.
+- Keep digest HTML formatting owned by `digest_rendering.py`; the bridge must not reformat already-prepared HTML payloads.
 - Keep analytics commands on one shared workflow; channels remain explicit and linked discussion comments stay outside scope.
 - When changing analytics extraction, linking, merge or synthesis, use [analysis_prompts.toml](./config/analysis_prompts.toml) for task semantics and the existing schemas, validators and regression tests for executable contracts; verify required information and source support in the actual final synthesis request, including after context packing or reduction, rather than only in stored intermediate records.
 - Run enabled, bounded OCR before freezing a new input manifest; resume must preserve existing manifest digests.
