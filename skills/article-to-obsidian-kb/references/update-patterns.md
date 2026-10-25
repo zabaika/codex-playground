@@ -103,8 +103,9 @@ Bullet format:
 - Do not rewrite the concept definition unless the existing definition is clearly incomplete or inaccurate.
 - `source` is allowed in concept-note frontmatter when it preserves useful provenance from the originating source or a migrated legacy note.
 - When updating or normalizing an older concept note, keep surviving `source` values instead of stripping them only because `type: concept` does not require `source`.
-- If the note has no insight log, add `headings.additional_insights`.
-- Append one dated bullet that references the source-derived note and nearby concepts.
+- Add a dated insight only when the source contributes durable knowledge to the concept: a mechanism, a useful example, a decision criterion, or a material condition of application. Processing another source or mentioning the concept in a source-derived note does not by itself justify an update.
+- Skip additions that only repeat the definition, audit the source's terminology, describe transcript quality, or list missing information without extending the concept. Apply the knowledge-relevance and material-qualification pass from [vault-conventions.md](vault-conventions.md).
+- When an insight qualifies, add `headings.additional_insights` only if needed and append one dated bullet linking to the source-derived note and relevant nearby concepts. Otherwise leave the concept note unchanged; the source-derived note may still link to it.
 - Keep `headings.additional_insights` chronological unless the user explicitly asked for latest-first ordering.
 - Keep concept notes `compact` by default, but promote them to an `expanded` shape when the compact form would still leave the concept easy to confuse, too compressed, or too opaque.
 - Use `expanded` especially for contrastive concepts, abbreviation-based metric names, and concepts that need an explicit distinction from a neighboring note.

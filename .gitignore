@@ -11,6 +11,7 @@ scratch/
 *.local.env
 __pycache__/
 *.pyc
+skills/.venv-validation/
 tmp*
 *tmp
 data/

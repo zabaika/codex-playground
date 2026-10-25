@@ -378,6 +378,7 @@ Rules:
 - when a refactor changes install layout, runtime roots, or vendored dependency handling, update those runtime-contract tests in the same change
 - do not modify system-provided Codex skills in place as a normal customization path
 - when a system skill is missing a dependency, validation helper, or local convention, solve that through a project-local wrapper, companion skill, additional checker, or shared rulebook guidance instead of patching the system skill itself
+- for the system `skill-creator` validator, use the shared environment and recovery commands in [Skill Validation](./skills/README.md#skill-validation); keep that document as the owner of the interpreter and dependency setup
 - treat edits to system skills as an explicit exception path only when a user directly requests that change and the operational tradeoff is understood
 - for repository-managed local skill repository-shape and documentation-ownership rules, follow the canonical repo-level guidance in the repository root [AGENTS.md](./AGENTS.md)
 

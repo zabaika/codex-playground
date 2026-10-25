@@ -42,6 +42,9 @@ Workspace for local Codex-oriented projects, tools, plugins, skills, and shared 
 - [RULEBOOK.md](./RULEBOOK.md)  
   Cross-project rules for secrets, runtime safety, logging, daemon behavior, database conventions, and repository hygiene.
 
+- [CODE_CONVENTIONS.md](./CODE_CONVENTIONS.md)\
+  Shared Python coding conventions and function/module size-review signals for new and changed code.
+
 - [AGENTS.md](./AGENTS.md)  
   Repo-level quickstart for coding agents, including navigation anchors and source-of-truth order by project area.
 

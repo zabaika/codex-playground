@@ -207,7 +207,11 @@ Frontmatter is part of the note schema, not optional decoration.
 - The note should read as a note about the mechanism, risk, operating model, recommendation, or concept itself, not as a note about the source artifact.
 - Rewrite source-container or source-actor phrasing into direct subject prose whenever the source identity is not materially needed for interpretation.
 - Keep source attribution when it materially changes interpretation, scope, provenance, or trustworthiness of a concrete claim, number, or observation.
-- This is especially important for the intro and other stable body sections; provenance-oriented sections such as dated evidence logs remain exempt from this de-meta preference.
+- This is especially important for the intro and other stable body sections. Dated provenance logs may name the source, but remain subject to the knowledge-relevance and material-qualification pass below.
+- Store durable subject knowledge in the note, including dated logs. Keep extraction diagnostics, recognition problems, omitted uncertain names, and inventories of missing source details in scratch artifacts or, when they affect the user's next action, in the processing report.
+- Keep a qualification only when removing it would change the claim's meaning, the interpretation of a number, or the conditions for applying a recommendation. Place the shortest necessary qualification next to that claim; prefer an explicit scope or status over a separate defensive disclaimer. Preserve distinctions such as a pilot versus an implemented process, a target versus an achieved result, and a change in throughput versus a change in business value.
+- Do not add general assurances against hypothetical overinterpretation or list absent measurements that the retained claims do not require. If a claim depends on missing or uncertain information, narrow or omit the claim rather than keeping a confident assertion with a generic disclaimer.
+- During final editorial review, apply a knowledge-relevance and material-qualification pass to every note section: ask what knowledge, decision criterion, or necessary attribution the reader would lose if each sentence were removed. Remove sentences that add none of these. This semantic pass is mandatory; mechanical checker success does not establish it.
 - Before saving any non-`concept` note, check that each section has a distinct informational role; if two sections mostly carry the same signal, merge them or delete the weaker one.
 - Do not create a section only because the schema supports that section family; include it only when the source gives enough independent material for it.
 - Use schema-owned section families when they fit the source cleanly:
@@ -288,7 +292,7 @@ Frontmatter is part of the note schema, not optional decoration.
 - This includes phrases such as `источник показывает`, `автор выделяет`, or `в транскрипте` when they can be rewritten as direct knowledge.
 - Do not replace source-first phrasing with empty discourse placeholders such as `здесь`, `тут`, `в этом`, or similar stand-ins when they no longer point to a real object; rewrite the sentence so the real subject is named directly.
 - Keep provenance in frontmatter and use source mentions in the body only when the source itself is a useful case, scenario, or comparison rather than a process footnote.
-- Do not apply that source-scaffolding cleanup to schema-defined dated log sections such as `headings.evidence`, `headings.additional_insights`, and `headings.observed_practices`; in those sections, references to `статья`, `подкаст`, `выпуск`, or similar source-type labels are useful provenance and should normally stay.
+- In schema-defined dated log sections such as `headings.evidence`, `headings.additional_insights`, and `headings.observed_practices`, keep source-type labels such as `статья`, `подкаст`, or `выпуск` when needed for provenance. These sections still require the knowledge-relevance and material-qualification pass above.
 - Before finalizing a source-derived note, apply the source-supported practicality gate below and check whether the draft has flattened the source into generic statements.
 - Keep `headings.key_theses`, `headings.practice`, and `headings.pitfalls` functionally distinct.
 - `headings.key_theses` should carry the main ideas, distinctions, and decision logic.

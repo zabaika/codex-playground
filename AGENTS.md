@@ -94,6 +94,11 @@ When working in `skills`, prefer these sources in this order:
 - [RULEBOOK.md](./RULEBOOK.md) for cross-project rules
 - any skill-local scripts or tests for executable expectations
 
+For the system `skill-creator` validator, use the shared interpreter and setup
+commands in [Skill Validation](./skills/README.md#skill-validation). Do not run
+`quick_validate.py` with an arbitrary Python interpreter or patch the system skill
+to work around a missing dependency.
+
 When working in `plugins`, prefer these sources in this order:
 - [plugins/README.md](./plugins/README.md) for the plugin catalog and installation intent
 - the target plugin's local docs such as `README.md`, `AGENTS.md`, and bundled skill docs for behavior and maintenance rules

@@ -14,6 +14,28 @@ For local skills in this repository:
 - if both human-readable diagnostics and structured diagnostics are needed, make one representation canonical and keep the other clearly subordinate instead of letting them diverge
 - when introducing a new reusable pattern here, prefer codifying it in [RULEBOOK.md](../RULEBOOK.md) so future skills inherit it by default
 
+## Skill Validation
+
+Run the system `skill-creator` validator with the shared validation environment,
+not an arbitrary `python3` or another project's virtualenv. From repository root,
+create or restore the environment with:
+
+```bash
+python3 -m venv skills/.venv-validation
+skills/.venv-validation/bin/python -m pip install -r skills/requirements-validation.txt
+```
+
+Then validate a skill using the environment's interpreter directly:
+
+```bash
+skills/.venv-validation/bin/python "${CODEX_HOME:-$HOME/.codex}/skills/.system/skill-creator/scripts/quick_validate.py" skills/article-to-obsidian-kb
+```
+
+Replace the final argument with the target skill directory. This environment
+supplies PyYAML, whose import name is `yaml`; it does not replace skill-specific
+tests. If the environment is missing or its dependency import fails, restore it
+with the setup commands before validation. Keep the bundled system skill unchanged.
+
 ## Catalog
 
 Root skill docs in this folder should act as a catalog and navigation layer only. Do not duplicate behavior, contracts, prompts, or maintenance details that already live in the target skill's local docs.
