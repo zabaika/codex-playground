@@ -2,12 +2,15 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
+from dataclasses import dataclass
 import json
 import os
 from pathlib import Path
 import signal
 import subprocess
 import sys
+import threading
 import time
 from datetime import datetime, timezone
 from typing import Any, Callable, Sequence
@@ -162,6 +165,40 @@ def cleanup_caffeinate(proc: subprocess.Popen[str] | None) -> None:
         proc.wait()
 
 
+@dataclass
+class _Cancellation:
+    kill_signal: str
+    signum: int | None = None
+    process_group_id: int | None = None
+
+    def forward(self, signum=None, frame=None) -> None:
+        if self.signum is None and signum is not None:
+            self.signum = signum
+        if self.signum is not None and self.process_group_id is not None:
+            # The outer supervisor may KILL us before our own grace expires.
+            send_signal_to_process_group(self.process_group_id, self.kill_signal)
+
+
+@contextmanager
+def _capture_cancellation(cancellation: _Cancellation):
+    previous = {}
+    handler = cancellation.forward
+    try:
+        if threading.current_thread() is threading.main_thread():
+            for signum in (signal.SIGTERM, signal.SIGINT):
+                prior = signal.getsignal(signum)
+                # Application handlers and deliberate SIG_IGN remain caller-owned.
+                if prior in (signal.SIG_DFL, signal.default_int_handler):
+                    previous[signum] = prior
+                    signal.signal(signum, handler)
+        yield previous
+    finally:
+        cancellation.process_group_id = None
+        for signum, prior in previous.items():
+            if signal.getsignal(signum) == handler:
+                signal.signal(signum, prior)
+
+
 def run_with_ttl(
     command: Sequence[str],
     *,
@@ -178,6 +215,41 @@ def run_with_ttl(
     stop_requested: Callable[[], bool] | None = None,
     env: dict[str, str] | None = None,
 ) -> int:
+    cancellation = _Cancellation(kill_signal)
+    with _capture_cancellation(cancellation) as previous:
+        result = _run_with_ttl(
+            command, timeout_seconds=timeout_seconds, grace_seconds=grace_seconds,
+            poll_interval_seconds=poll_interval_seconds, timeout_exit_code=timeout_exit_code,
+            term_signal=term_signal, kill_signal=kill_signal, audit_file=audit_file,
+            timeout_reason=timeout_reason, use_caffeinate=use_caffeinate,
+            sleep_policy=sleep_policy, stop_requested=stop_requested, env=env,
+            cancellation=cancellation,
+        )
+    if cancellation.signum is not None:
+        prior = previous[cancellation.signum]
+        if callable(prior):
+            prior(cancellation.signum, None)  # Preserve default KeyboardInterrupt.
+        return 128 + cancellation.signum
+    return result
+
+
+def _run_with_ttl(
+    command: Sequence[str],
+    *,
+    timeout_seconds: float,
+    grace_seconds: float,
+    poll_interval_seconds: float,
+    timeout_exit_code: int,
+    term_signal: str,
+    kill_signal: str,
+    audit_file: Path | None,
+    timeout_reason: str,
+    use_caffeinate: bool,
+    sleep_policy: str = "interrupt",
+    stop_requested: Callable[[], bool] | None = None,
+    env: dict[str, str] | None = None,
+    cancellation: _Cancellation,
+) -> int:
     if sleep_policy not in SLEEP_POLICIES:
         raise ValueError(f"Unknown sleep policy: {sleep_policy}")
     config = common_process.load_process_config()
@@ -189,8 +261,12 @@ def run_with_ttl(
     spawn_options: dict[str, Any] = {"start_new_session": True}
     if env is not None:
         spawn_options["env"] = env
+    if cancellation.signum is not None:
+        return 128 + cancellation.signum
     child = subprocess.Popen(list(command), **spawn_options)
-    process_group_id = os.getpgid(child.pid)
+    process_group_id = child.pid  # start_new_session makes this the group leader.
+    cancellation.process_group_id = process_group_id
+    cancellation.forward()  # Also handle cancellation received during Popen.
     caffeinate_proc = None
     if use_caffeinate:
         try:
@@ -204,6 +280,13 @@ def run_with_ttl(
     def publish_diagnostics() -> None:
         if audit_file is not None:
             payload = load_audit_payload(audit_file)
+            if cancellation.signum is not None:
+                timestamp = audit_timestamp()
+                payload.pop("timeout_reason", None)
+                payload.update(status="cancelled", reason="external_signal",
+                               cancel_signal=signal.Signals(cancellation.signum).name,
+                               updated_at=timestamp, finished_at=timestamp,
+                               stopped_pid=child.pid, stopped_process_group_id=process_group_id)
             payload.update(caffeinate=caffeinate_info,
                            sleep_policy=sleep_policy,
                            ttl_elapsed_seconds=round(ttl_clock() - started_ttl, 3),
@@ -289,6 +372,8 @@ def run_with_ttl(
     finally:
         # Audit/clock failures must not leave workers or sleep inhibitors alive.
         try:
+            if sys.exc_info()[0] is not None:
+                send_signal_to_process_group(process_group_id, kill_signal)
             if child.poll() is None:
                 send_signal_to_process_group(process_group_id, kill_signal)
                 child.wait(timeout=max(1.0, grace_seconds))

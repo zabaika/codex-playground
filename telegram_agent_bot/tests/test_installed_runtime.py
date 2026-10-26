@@ -1,4 +1,5 @@
 import os
+import json
 from pathlib import Path
 import shutil
 import subprocess
@@ -35,6 +36,10 @@ def test_installer_stages_self_contained_runtime(tmp_path):
         check=True, capture_output=True, text=True, env=env, timeout=10,
     )
     runtime = staged / "telegram_agent_bot_service"
+    binding = json.loads((project / "data/runtime/python.json").read_text())
+    assert binding["architecture"] == "arm64"
+    assert binding["policy_digest"]
+    assert Path(binding["executable"]).is_file()
     for name in ("telegram_agent_bridge.py", "telegram_agent_worker.py"):
         result = subprocess.run(
             [sys.executable, "-I", "-c",

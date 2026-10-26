@@ -558,7 +558,7 @@ def preflight() -> dict:
     return {
         "python": {"available": True, "path": sys.executable, "version": sys.version.split()[0]},
         "soffice": command_version("soffice", ["--version"]),
-        "pymupdf": python_module_available("fitz"),
+        "pymupdf": python_module_available("pymupdf"),
         "pdftotext": command_version("pdftotext", ["-v"]),
         "pdfinfo": command_version("pdfinfo", ["-v"]),
     }
@@ -1887,7 +1887,7 @@ def convert_pptx(source: Path, target: Path, rel: Path, force: bool, state: Inde
 def convert_pdf(source: Path, rel: Path, state: IndexState) -> ConversionResult:
     if not state.build_index:
         return ConversionResult(str(source), None, ".pdf", "skipped", "PDF requires --build-index in this pipeline")
-    if python_module_available("fitz")["available"]:
+    if python_module_available("pymupdf")["available"]:
         document_count = len(state.documents)
         chunk_count = len(state.chunks)
         table_count = len(state.tables)
@@ -1902,7 +1902,7 @@ def convert_pdf(source: Path, rel: Path, state: IndexState) -> ConversionResult:
 
 
 def rect_from(value):
-    import fitz
+    import pymupdf as fitz
 
     return fitz.Rect(value) if value is not None else None
 
@@ -1923,7 +1923,7 @@ def center_in(outer, inner) -> bool:
 
 def index_pdf_pymupdf(source: Path, rel: Path, state: IndexState) -> ConversionResult:
     try:
-        import fitz
+        import pymupdf as fitz
 
         doc_id = doc_id_for_source(rel)
         source_path = rel.as_posix()

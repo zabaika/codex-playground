@@ -78,6 +78,17 @@ Install or refresh the macOS LaunchAgents:
 bash telegram_connector/scripts/install_launch_agent.sh
 ```
 
+The installer prepares a service-local venv through the shared
+[Python runtime owner](../common/README.md#python-runtime-selection).
+`BASE_PYTHON_BIN` selects its base; `PYTHON_BIN` selects an existing environment.
+Optional `[python].executable` in the local runtime config overrides discovery.
+Policy and dependency validation happen before replacement. Invalid overrides fail.
+
+The requirements include a repository-owned PyAES wheel for clean binary-only
+installation. Its local index supplies the SHA-256 checked by pip, so no manual
+`PIP_FIND_LINKS` or source build is required. See its
+[provenance and checkout reproduction](./third_party/pyaes/AUDIT.md).
+
 To inspect a copied runtime without loading or restarting services, pass
 `--staging-root /absolute/path/to/staging`. The installer writes the runtime and
 plists there and does not call `launchctl`; this is a fixture check, not a live
@@ -301,8 +312,7 @@ Required runtime dependencies:
 Python setup:
 
 ```bash
-python3 -m venv .venv-test-gap-detection
-.venv-test-gap-detection/bin/python -m pip install -r telegram_connector/requirements.txt
+bash common/setup_python.sh tests
 ```
 
 ## Tests

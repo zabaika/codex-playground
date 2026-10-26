@@ -6,11 +6,20 @@ OCR. Checks run through CLI, Telegram or launchd; notifications use the existing
 
 ## Requirements
 
-- macOS, Python 3.11+ and access to the official InfoExt site.
+- macOS on Apple Silicon, compatible Python 3 and access to the official InfoExt site.
 - Xcode Command Line Tools (`xcode-select --install`).
 - A configured sibling `telegram_connector` project.
 
 ## Installation and configuration
+
+The installer uses the shared [Python runtime owner](../common/README.md#python-runtime-selection)
+and validates project/service venvs before changing them. It recreates environments
+when their base or ABI changes and restores the previous runtime if preparation fails.
+`PYTHON_BIN` or local `[python].executable` can select a compatible base interpreter.
+
+Use `bash scripts/install.sh --prepare-only` to prepare code, dependencies and
+the Vision helper while preserving the current LaunchAgent registration state.
+This mode does not enable scheduling or trigger a check.
 
 ```bash
 cd /path/to/infoext-monitor

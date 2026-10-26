@@ -74,6 +74,8 @@ a numeric suffix such as `document-2.html`.
   recovery is recorded in the report.
 - PDF remains the readable source; index data and detected table JSON are
   extracted separately.
+- PDF indexing uses the `pymupdf` Python module when available, with Poppler as
+  the fallback. The legacy `fitz` import is avoided to keep dry-run stdout valid JSON.
 - XLSX converts to Markdown plus structured table JSON.
 - PPTX converts to Markdown slide text plus extracted slide images.
 
@@ -120,3 +122,14 @@ For a successful full regeneration, check `index/conversion-summary.md` and
 - no failed conversions
 - no missing table packs
 - no missing asset links
+
+## Tests
+
+Run the PDF integration check with a Python interpreter that has PyMuPDF:
+
+```bash
+python3 -m unittest discover -s tools/document-converter/tests -v
+```
+
+The check runs the real CLI on a temporary PDF, verifies dry-run JSON and
+PyMuPDF indexing, and confirms that the source bytes and modification time remain unchanged.

@@ -69,6 +69,11 @@ Install or refresh the macOS LaunchAgent:
 bash telegram_agent_bot/scripts/install_launch_agent.sh
 ```
 
+The installer uses the shared [Python runtime owner](../common/README.md#python-runtime-selection)
+and records the validated interpreter in the generated runner.
+`PYTHON_BIN` or local `[python].executable` can override discovery.
+Validation happens before the runtime is replaced; restarts use its fixed binding.
+
 Reload only the already-installed service:
 
 ```bash

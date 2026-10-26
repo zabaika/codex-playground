@@ -84,6 +84,7 @@ def test_stop_callback_terminates_owned_process_group(tmp_path):
 def test_stop_callback_failure_cleans_child_before_propagating(tmp_path, monkeypatch):
     assert "stop_requested" in inspect.signature(ttl_runner.run_with_ttl).parameters
     children = []
+    previous_handlers = {signum: signal.getsignal(signum) for signum in (signal.SIGTERM, signal.SIGINT)}
     original = subprocess.Popen
 
     def capture(*a, **kw):
@@ -104,6 +105,7 @@ def test_stop_callback_failure_cleans_child_before_propagating(tmp_path, monkeyp
         )
     assert children[0].poll() is not None
     assert not ttl_runner.process_group_exists(children[0].pid)
+    assert {signum: signal.getsignal(signum) for signum in previous_handlers} == previous_handlers
 
 
 def test_ttl_child_receives_explicit_environment_only(tmp_path, monkeypatch):
@@ -146,6 +148,136 @@ def test_root_exit_does_not_leave_owned_descendant(tmp_path):
             group = json.loads(group_file.read_text())["pgid"]
         if group is not None:
             ttl_runner.send_signal_to_process_group(group, "KILL")
+
+
+def test_external_timeout_during_nested_cleanup_stops_descendant(tmp_path):
+    import time
+
+    group_file = tmp_path / "group.json"
+    ready = tmp_path / "ready"
+    effect = tmp_path / "orphan-effect"
+    descendant = (
+        "import signal,sys,time;from pathlib import Path;"
+        "signal.signal(signal.SIGTERM,signal.SIG_IGN);"
+        "Path(sys.argv[1]).touch();time.sleep(5);Path(sys.argv[2]).touch()"
+    )
+    worker = (
+        "import json,os,subprocess,sys,time;from pathlib import Path;"
+        "subprocess.Popen([sys.executable,'-I','-c',sys.argv[1],sys.argv[2],sys.argv[3]]);"
+        "\nwhile not Path(sys.argv[2]).exists():time.sleep(0.01)"
+        "\nPath(sys.argv[4]).write_text(json.dumps({'pgid':os.getpgrp()}))"
+    )
+    nested = [sys.executable, "-I", ttl_runner.__file__, "--timeout-seconds", "30",
+              "--grace-seconds", "20", "--poll-interval-seconds", "0.02", "--",
+              sys.executable, "-I", "-c", worker, descendant, str(ready), str(effect), str(group_file)]
+    group = None
+    try:
+        result = ttl_runner.run_with_ttl(
+            nested, timeout_seconds=3, grace_seconds=0.1, poll_interval_seconds=0.02,
+            timeout_exit_code=124, term_signal="TERM", kill_signal="KILL",
+            audit_file=None, timeout_reason="fixture_outer_timeout", use_caffeinate=False,
+        )
+        assert result == 124
+        assert group_file.exists()
+        group = json.loads(group_file.read_text())["pgid"]
+        deadline = time.monotonic() + 3
+        while ttl_runner.process_group_exists(group) and time.monotonic() < deadline and not effect.exists():
+            time.sleep(0.02)
+        assert not effect.exists(), "Descendant survived cancellation during nested cleanup"
+        assert not ttl_runner.process_group_exists(group)
+    finally:
+        if group is None and group_file.exists():
+            group = json.loads(group_file.read_text())["pgid"]
+        if group is not None:
+            ttl_runner.send_signal_to_process_group(group, "KILL")
+
+
+def test_external_term_is_cancelled_not_a_local_timeout(tmp_path):
+    import time
+
+    group_file = tmp_path / "group.json"
+    audit = tmp_path / "audit.json"
+    audit.write_text('{"phase":"fixture"}')
+    code = (
+        "import json,os,signal,sys,time;from pathlib import Path;"
+        "signal.signal(signal.SIGTERM,signal.SIG_IGN);"
+        "Path(sys.argv[1]).write_text(json.dumps({'pgid':os.getpgrp()}));time.sleep(30)"
+    )
+    supervisor = subprocess.Popen([
+        sys.executable, "-I", ttl_runner.__file__, "--timeout-seconds", "30",
+        "--grace-seconds", "20", "--poll-interval-seconds", "0.02",
+        "--audit-file", str(audit), "--", sys.executable, "-I", "-c", code, str(group_file),
+    ])
+    group = None
+    try:
+        deadline = time.monotonic() + 5
+        while not group_file.exists() and supervisor.poll() is None and time.monotonic() < deadline:
+            time.sleep(0.02)
+        assert group_file.exists()
+        group = json.loads(group_file.read_text())["pgid"]
+        supervisor.send_signal(signal.SIGTERM)
+        assert supervisor.wait(timeout=3) == 128 + signal.SIGTERM
+        payload = json.loads(audit.read_text())
+        assert payload["status"] == "cancelled" and payload["reason"] == "external_signal"
+        assert payload["phase"] == "fixture" and payload["cancel_signal"] == "SIGTERM"
+        assert "timeout_reason" not in payload
+        assert not ttl_runner.process_group_exists(group)
+    finally:
+        if supervisor.poll() is None:
+            supervisor.kill()
+            supervisor.wait(timeout=3)
+        if group is None and group_file.exists():
+            group = json.loads(group_file.read_text())["pgid"]
+        if group is not None:
+            ttl_runner.send_signal_to_process_group(group, "KILL")
+
+
+def test_application_sigterm_handler_keeps_its_exception_and_is_restored(tmp_path, monkeypatch):
+    class FixtureTermination(BaseException):
+        pass
+
+    def application_handler(signum, frame):
+        raise FixtureTermination()
+
+    children = []
+    actual_popen = subprocess.Popen
+
+    def capture(*args, **kwargs):
+        child = actual_popen(*args, **kwargs)
+        children.append(child)
+        return child
+
+    monkeypatch.setattr(ttl_runner.subprocess, "Popen", capture)
+    previous = signal.signal(signal.SIGTERM, application_handler)
+    try:
+        with pytest.raises(FixtureTermination):
+            ttl_runner.run_with_ttl(
+                [sys.executable, "-I", "-c",
+                 "import os,signal,time;time.sleep(0.1);os.kill(os.getppid(),signal.SIGTERM);time.sleep(30)"],
+                timeout_seconds=5, grace_seconds=0.1, poll_interval_seconds=0.02,
+                timeout_exit_code=124, term_signal="TERM", kill_signal="KILL",
+                audit_file=None, timeout_reason="fixture", use_caffeinate=False,
+            )
+        assert signal.getsignal(signal.SIGTERM) is application_handler
+        assert children[0].poll() is not None
+        assert not ttl_runner.process_group_exists(children[0].pid)
+    finally:
+        signal.signal(signal.SIGTERM, previous)
+
+
+def test_thread_caller_keeps_application_owned_signal_policy():
+    from concurrent.futures import ThreadPoolExecutor
+
+    previous = {signum: signal.getsignal(signum) for signum in (signal.SIGTERM, signal.SIGINT)}
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        result = pool.submit(
+            ttl_runner.run_with_ttl, [sys.executable, "-I", "-c", "pass"],
+            timeout_seconds=5, grace_seconds=0.1, poll_interval_seconds=0.02,
+            timeout_exit_code=124, term_signal="TERM", kill_signal="KILL",
+            audit_file=None, timeout_reason="fixture", use_caffeinate=False,
+        ).result(timeout=10)
+    assert result == 0
+    assert {signum: signal.getsignal(signum) for signum in previous} == previous
 
 
 if __name__ == "__main__":

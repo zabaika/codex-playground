@@ -5,6 +5,7 @@ import sqlite3
 import subprocess
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -638,19 +639,14 @@ class TelegramConnectorTests(unittest.TestCase):
         self.assertEqual(value, "secret-from-op")
 
     def test_build_history_client_subprocess_env_whitelists_parent_env(self) -> None:
-        original_project_root = os.environ.get("TELEGRAM_CONNECTOR_PROJECT_ROOT")
-        os.environ["TELEGRAM_CONNECTOR_PROJECT_ROOT"] = "/tmp/project-root"
-        os.environ["PATH"] = "/usr/bin"
-        os.environ["SECRET_NOISE"] = "should_not_leak"
-        try:
+        with patch.dict(os.environ, {
+            "TELEGRAM_CONNECTOR_PROJECT_ROOT": "/tmp/project-root",
+            "PATH": "/usr/bin",
+            "SECRET_NOISE": "should_not_leak",
+        }):
             env = telegram_connector.build_history_client_subprocess_env(
                 {"TELEGRAM_API_HASH": "hash", "TELEGRAM_BOT_TOKEN": "token"}
             )
-        finally:
-            if original_project_root is None:
-                os.environ.pop("TELEGRAM_CONNECTOR_PROJECT_ROOT", None)
-            else:
-                os.environ["TELEGRAM_CONNECTOR_PROJECT_ROOT"] = original_project_root
 
         self.assertEqual(env["TELEGRAM_API_HASH"], "hash")
         self.assertEqual(env["TELEGRAM_BOT_TOKEN"], "token")

@@ -25,6 +25,14 @@ STDOUT_LOG="$PROJECT_LOG_DIR/bridge.stdout.log"
 STDERR_LOG="$PROJECT_LOG_DIR/bridge.stderr.log"
 BRIDGE_LAUNCHER="$SERVICE_ROOT/scripts/telegram-agent-bot-bridge-launcher"
 LAUNCHCTL_DOMAIN="gui/$(id -u)"
+source "$SOURCE_ROOT/../common/python_runtime.sh"
+PYTHON_BIN="$(python_runtime_select \
+  --config "$SOURCE_ROOT/config/runtime.local.toml" \
+  --record "$SOURCE_ROOT/data/runtime/python.json" --path-only)"
+(
+  cd "$SOURCE_ROOT"
+  "$PYTHON_BIN" -c 'import telegram_agent_bridge, telegram_agent_worker'
+)
 
 mkdir -p "$SERVICE_ROOT/config" "$SERVICE_ROOT/data/launchd" "$SERVICE_ROOT/scripts" "$LAUNCH_AGENTS_DIR" "$PROJECT_LOG_DIR"
 
@@ -37,19 +45,21 @@ cp -R "$SOURCE_ROOT/../common" "$SERVICE_ROOT/common"
 cp "$SOURCE_ROOT/config/runtime.local.toml" "$SERVICE_ROOT/config/runtime.local.toml"
 cp "$SOURCE_ROOT/config/runtime.example.toml" "$SERVICE_ROOT/config/runtime.example.toml"
 
-cat > "$SERVICE_ROOT/scripts/run_telegram_agent_bridge.sh" <<'EOF'
-#!/usr/bin/env bash
+{
+printf '#!/bin/bash\nPYTHON_BIN=%q\n' "$PYTHON_BIN"
+cat <<'EOF'
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-export PATH="/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+export PATH="/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 : "${TELEGRAM_AGENT_BOT_PROJECT_ROOT:?TELEGRAM_AGENT_BOT_PROJECT_ROOT is required}"
 STARTUP_LOG="$TELEGRAM_AGENT_BOT_PROJECT_ROOT/data/launchd/bridge.startup.log"
 
 cd "$ROOT"
 printf '[%s] starting telegram agent bridge from %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$ROOT" >> "$STARTUP_LOG"
-exec /usr/local/bin/python3 "$ROOT/telegram_agent_bridge.py" listen --run-commands
+exec "$PYTHON_BIN" "$ROOT/telegram_agent_bridge.py" listen --run-commands
 EOF
+} > "$SERVICE_ROOT/scripts/run_telegram_agent_bridge.sh"
 
 chmod +x "$SERVICE_ROOT/scripts/run_telegram_agent_bridge.sh"
 
@@ -102,7 +112,7 @@ EOF
 
 (
   cd "$SERVICE_ROOT"
-  /usr/local/bin/python3 -c 'import telegram_agent_bridge, telegram_agent_worker'
+  "$PYTHON_BIN" -c 'import telegram_agent_bridge, telegram_agent_worker'
 )
 
 if [[ -z "$STAGING_ROOT" ]]; then

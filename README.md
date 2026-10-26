@@ -37,6 +37,22 @@ Workspace for local Codex-oriented projects, tools, plugins, skills, and shared 
 - [plugins](./plugins/README.md)  
   Local Codex plugin sources that package reusable skills and, when needed, broader Codex integrations such as `codex-token-monitor`.
 
+## Python dependency follow-ups
+
+The following projects use reviewed temporary distributions. Exact versions,
+compatibility ranges, hashes and provenance remain in their owning inputs.
+Review official metadata and wheel tags before replacing them for a selected Python.
+
+| Project / environment | Temporary distribution | Replacement and verification |
+| --- | --- | --- |
+| [video-transcribe-skill](./skills/video-transcribe-skill/README.md), also used by `video-to-obsidian-kb` | Local transcript API wheel with adjusted compatibility metadata; Python sources unchanged | Adopt a compatible official release. Review the archive, manifest, lockfile and hashes, then run offline install/parser/runner tests and reinstall. See the [audit record](./skills/video-transcribe-skill/THIRD_PARTY_AUDIT_YOUTUBE_TRANSCRIPT_API.md) and [manifest](./skills/video-transcribe-skill/config/vendor-manifest.toml). |
+| [Shared skill validation](./skills/README.md#skill-validation), `skills/.venv-validation` | Reviewed pure-Python PyYAML wheel with its optional C extension disabled | Adopt an official compatible ARM64 wheel. Review any change to [dependency inputs](./skills/requirements-validation.txt), prepare the environment and rerun skill validation and affected contract tests. |
+| [video-transcribe-skill](./skills/video-transcribe-skill/README.md), optional acceleration | Official pure-Python charset-normalizer wheel recorded in the manifest | Functionality already works. If useful, review a compatible official accelerated wheel, update audited archive/hashes and rerun encoding/parser tests before reinstalling. |
+
+Pure-Python wheels preserve functionality; optional native extensions can affect
+performance. Never relabel an incompatible wheel or silently replace audited inputs.
+Use the [shared runtime upgrade procedure](./common/README.md#python-runtime-upgrades).
+
 ## Shared Docs
 
 - [RULEBOOK.md](./RULEBOOK.md)  

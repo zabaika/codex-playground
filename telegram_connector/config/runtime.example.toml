@@ -1,3 +1,7 @@
+# Optional interpreter override; empty means shared discovery.
+[python]
+executable = ""
+
 # Copy this file to runtime.local.toml and fill in machine-specific values there.
 # Keep runtime.local.toml untracked.
 

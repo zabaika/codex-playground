@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "kb-index"
 version = "0.1.0"
 description = "Local SQLite/FTS5 knowledge-base index for Obsidian vaults"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 
 [tool.setuptools]
 package-dir = {"" = "src"}

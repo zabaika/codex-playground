@@ -1,0 +1,8 @@
+[python]
+# Shared stdlib/bootstrap floor, not a claim about every project's dependencies.
+# Only this major is eligible; project metadata may impose stricter limits.
+minimum_version = [3, 11]
+implementation = "cpython"
+architecture = "arm64"
+# Audited native dependencies currently require the ordinary GIL build.
+free_threaded = false

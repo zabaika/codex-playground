@@ -1,3 +1,7 @@
+# Optional interpreter override; empty means shared discovery.
+[python]
+executable = ""
+
 [vault]
 root = '/absolute/path/to/obsidian-vault'
 

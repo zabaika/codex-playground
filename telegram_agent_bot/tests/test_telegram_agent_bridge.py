@@ -4,6 +4,7 @@ import sqlite3
 import subprocess
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 
@@ -147,17 +148,12 @@ class TelegramAgentBridgeTests(unittest.TestCase):
         self.assertEqual(payload["command_text"], "/agent проверь README")
 
     def test_build_worker_subprocess_env_whitelists_parent_env(self) -> None:
-        original_project_root = os.environ.get("TELEGRAM_AGENT_BOT_PROJECT_ROOT")
-        os.environ["TELEGRAM_AGENT_BOT_PROJECT_ROOT"] = "/tmp/project-root"
-        os.environ["PATH"] = "/usr/bin"
-        os.environ["SECRET_NOISE"] = "should_not_leak"
-        try:
+        with patch.dict(os.environ, {
+            "TELEGRAM_AGENT_BOT_PROJECT_ROOT": "/tmp/project-root",
+            "PATH": "/usr/bin",
+            "SECRET_NOISE": "should_not_leak",
+        }):
             env = telegram_agent_bridge.build_worker_subprocess_env({"OPENAI_API_KEY": "key"})
-        finally:
-            if original_project_root is None:
-                os.environ.pop("TELEGRAM_AGENT_BOT_PROJECT_ROOT", None)
-            else:
-                os.environ["TELEGRAM_AGENT_BOT_PROJECT_ROOT"] = original_project_root
         self.assertEqual(env["OPENAI_API_KEY"], "key")
         self.assertEqual(env["TELEGRAM_AGENT_BOT_PROJECT_ROOT"], "/tmp/project-root")
         self.assertEqual(env["PATH"], "/usr/bin")

@@ -6,6 +6,17 @@ Use it as an entry guide. For repository-wide engineering policy, safety rules, 
 - [RULEBOOK.md](./RULEBOOK.md)
 - For code changes, apply [CODE_CONVENTIONS.md](./CODE_CONVENTIONS.md) together with the relevant project guidance.
 
+## File and Context Reading
+
+Apply this procedure before opening referenced documents, including `RULEBOOK.md`.
+
+- narrow discovery to relevant files, symbols, and ranges before detailed reads; inspect a large file's size and headings before choosing its read scope
+- read long documents in bounded sections or line ranges; choose chunk sizes by expected output volume rather than treating a fixed line count as a guaranteed bound
+- account for both per-command output limits and the combined response limit when batching independent reads; split large reads when their aggregate output may exceed either budget
+- inspect each result for truncation even when the command exits successfully; an exit code alone does not establish complete output
+- if output is truncated, identify the missing ranges and read only those ranges; track coverage until the required scope is complete instead of restarting the full read
+- reuse complete, current content already available in the chat; reread only missing, uncertain, or changed fragments, or the exact saved content needed for required verification
+
 ## Repo Layout
 
 - [README.md](./README.md): top-level project index

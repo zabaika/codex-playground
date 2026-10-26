@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import os
+import json
 import platform
+import shlex
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 from xml.sax.saxutils import escape
 
@@ -48,35 +51,19 @@ def _replace_with_symlink(link_path: Path, target_path: Path) -> None:
     link_path.symlink_to(target_path)
 
 
-def render_runner_script(auto_update: AutoUpdateConfig, project_root: Path) -> str:
+def render_runner_script(
+    auto_update: AutoUpdateConfig, project_root: Path, python_bin: str,
+) -> str:
     service_root = service_root_for(auto_update)
     runtime_config = service_runtime_config_path_for(auto_update)
-    return f"""#!/usr/bin/env bash
+    return f"""#!/bin/bash
 set -euo pipefail
 
+PYTHON_BIN={shlex.quote(python_bin)}
 ROOT="$HOME/Library/Application Support/kb_index_service"
-export PATH="/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+export PATH="/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 : "${{KB_INDEX_PROJECT_ROOT:?KB_INDEX_PROJECT_ROOT is required}}"
 STARTUP_LOG="$KB_INDEX_PROJECT_ROOT/data/launchd/auto_update.startup.log"
-
-resolve_python_bin() {{
-  local candidates=(
-    "/usr/local/bin/python3"
-    "/opt/homebrew/bin/python3"
-    "/usr/bin/python3"
-  )
-  local py
-  for py in "${{candidates[@]}}"; do
-    [[ -x "$py" ]] || continue
-    printf '%s\\n' "$py"
-    return 0
-  done
-
-  echo "No usable python interpreter found." >&2
-  exit 1
-}}
-
-PYTHON_BIN="$(resolve_python_bin)"
 
 cd "$ROOT"
 printf '[%s] starting kb-index auto-update from %s\\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$ROOT" >> "$STARTUP_LOG"
@@ -131,7 +118,10 @@ def render_launchd_plist(auto_update: AutoUpdateConfig, project_root: Path) -> s
 """
 
 
-def _sync_runtime_copy(auto_update: AutoUpdateConfig, config_path: Path, project_root: Path) -> dict[str, Path]:
+def _sync_runtime_copy(
+    auto_update: AutoUpdateConfig, config_path: Path, project_root: Path,
+    python_bin: str,
+) -> dict[str, Path]:
     service_root = service_root_for(auto_update)
     src_root = project_root / 'src' / 'kb_index'
     dst_src_root = service_root / 'src' / 'kb_index'
@@ -172,7 +162,9 @@ def _sync_runtime_copy(auto_update: AutoUpdateConfig, config_path: Path, project
             stale_log.unlink()
 
     runner_path = service_runner_path_for(auto_update)
-    runner_path.write_text(render_runner_script(auto_update, project_root), encoding='utf-8')
+    runner_path.write_text(
+        render_runner_script(auto_update, project_root, python_bin), encoding='utf-8',
+    )
     runner_path.chmod(0o755)
 
     return {
@@ -195,7 +187,34 @@ def install_launchd_auto_update(
     if not auto_update.enabled:
         raise RuntimeError('Auto-update is disabled in runtime.local.toml')
 
-    runtime_paths = _sync_runtime_copy(auto_update, config_path, project_root)
+    common_root = shared_common_root_for(project_root)
+    command = [
+        sys.executable, '-I', str(common_root / 'python_runtime.py'),
+        '--config', str(config_path),
+        '--record', str(project_root / 'data/runtime/python.json'),
+        '--scratch', str(common_root.parent / 'scratch/python-runtime'),
+    ]
+    metadata = project_root / 'pyproject.toml'
+    if metadata.exists():
+        command.extend(['--pyproject', str(metadata)])
+    selection = subprocess.run(command, capture_output=True, text=True)
+    if selection.returncode:
+        raise RuntimeError('No compatible Python for kb-index installation')
+    python_bin = json.loads(selection.stdout)['executable']
+    probe = subprocess.run([
+        sys.executable, '-I', str(common_root / 'ttl_runner.py'), '--',
+        python_bin, '-I', '-c',
+        'import sqlite3,ssl,sys; sys.path[:0] = sys.argv[1:]; '
+        'db=sqlite3.connect(":memory:"); '
+        'db.execute("create virtual table probe using fts5(text)"); '
+        'from kb_index.cli import main',
+        str(project_root / 'src'), str(common_root.parent),
+    ], capture_output=True, text=True)
+    if probe.returncode:
+        raise RuntimeError('Selected Python failed kb-index imports/TLS/FTS5')
+    runtime_paths = _sync_runtime_copy(
+        auto_update, config_path, project_root, python_bin,
+    )
     auto_update.plist_path.parent.mkdir(parents=True, exist_ok=True)
     plist_content = render_launchd_plist(auto_update, project_root)
     auto_update.plist_path.write_text(plist_content, encoding='utf-8')

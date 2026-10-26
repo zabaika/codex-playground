@@ -3,6 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
+import subprocess
+import sys
 from unittest.mock import patch
 
 from kb_index.auto_update import (
@@ -70,12 +72,21 @@ class AutoUpdateTests(unittest.TestCase):
                 kill_signal='KILL',
             )
 
-            payload = render_runner_script(auto_update, root)
+            payload = render_runner_script(auto_update, root, sys.executable)
+            self.assertTrue(payload.startswith('#!/bin/bash\n'))
 
             self.assertIn('ROOT="$HOME/Library/Application Support/kb_index_service"', payload)
             self.assertIn(': "${KB_INDEX_PROJECT_ROOT:?KB_INDEX_PROJECT_ROOT is required}"', payload)
             self.assertIn('STARTUP_LOG="$KB_INDEX_PROJECT_ROOT/data/launchd/auto_update.startup.log"', payload)
-            self.assertIn('resolve_python_bin()', payload)
+            self.assertNotIn('resolve_python_bin()', payload)
+            assignment = next(line for line in payload.splitlines()
+                              if line.startswith('PYTHON_BIN='))
+            selected = subprocess.run(
+                ['/bin/bash', '-c', assignment + '\nprintf "%s" "$PYTHON_BIN"'],
+                env={'PATH': '/invalid', 'PYTHON_BIN': '/wrong-python'},
+                text=True, capture_output=True, check=True,
+            )
+            self.assertEqual(selected.stdout, sys.executable)
             self.assertIn('arming kb-index ttl=120s grace=5s poll=0.5s', payload)
             self.assertIn(f"exec \"$PYTHON_BIN\" \"{service_root_for(auto_update) / 'common' / 'ttl_runner.py'}\" \\", payload)
             self.assertIn('--timeout-seconds "120" \\', payload)
@@ -122,7 +133,9 @@ class AutoUpdateTests(unittest.TestCase):
             )
 
             with patch('kb_index.auto_update.service_root_for', return_value=service_root):
-                runtime_paths = _sync_runtime_copy(auto_update, config_path, project_root)
+                runtime_paths = _sync_runtime_copy(
+                    auto_update, config_path, project_root, sys.executable,
+                )
 
             runtime_config_path = service_root / 'config' / 'runtime.local.toml'
             self.assertEqual(runtime_paths['runtime_config_path'], runtime_config_path)

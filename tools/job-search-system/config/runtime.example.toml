@@ -1,3 +1,7 @@
+# Optional interpreter override; empty means shared discovery.
+[python]
+executable = ""
+
 [paths]
 db_path = '/absolute/path/to/project/data/job_search.sqlite'
 artifact_root = '/absolute/path/to/project/data/artifacts'

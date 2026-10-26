@@ -69,6 +69,12 @@ That service root contains:
 - a symlinked `config/runtime.local.toml`
 - the shell runner used by `launchd`
 
+Installation validates Python through the shared
+[runtime owner](../../common/README.md#python-runtime-selection) and project metadata.
+`PYTHON_BIN` or local `[python].executable` can override discovery at installation.
+The scheduled runner uses the resulting fixed binding, independent of ambient
+`PATH` or `PYTHON_BIN`. External commands prefer ARM Homebrew in PATH.
+
 Canonical operational logs still stay in project-local `data/launchd/`, not in the service root.
 
 ## Config

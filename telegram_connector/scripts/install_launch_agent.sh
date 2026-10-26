@@ -35,46 +35,28 @@ DIGEST_LAUNCHER="$SERVICE_ROOT/scripts/telegram-connector-digest-launcher"
 LAUNCHCTL_DOMAIN="gui/$(id -u)"
 
 resolve_python_bin() {
-  local explicit="${PYTHON_BIN:-}"
-  local candidates=()
-  if [[ -n "$explicit" ]]; then
-    candidates+=("$explicit")
+  if [[ -n "${PYTHON_BIN:-}" ]]; then
+    python_runtime_select --config "$SOURCE_ROOT/config/runtime.local.toml" \
+      --requirements "$SOURCE_ROOT/requirements.txt" \
+      --scratch "$SOURCE_ROOT/../scratch/python-runtime" \
+      --record "$SOURCE_ROOT/data/runtime/python.json" --path-only
+    return
   fi
-  candidates+=(
-    "/usr/local/opt/python@3.13/bin/python3.13"
-    "/usr/local/bin/python3"
-    "/opt/homebrew/bin/python3"
-    "/usr/bin/python3"
-  )
-
-  local py
-  for py in "${candidates[@]}"; do
-    [[ -x "$py" ]] || continue
-    if "$py" - <<'PY' >/dev/null 2>&1
-import importlib.util
-import sys
-sys.exit(0 if importlib.util.find_spec("telethon") is not None else 1)
-PY
-    then
-      printf '%s\n' "$py"
-      return 0
-    fi
-  done
-
-  for py in "${candidates[@]}"; do
-    [[ -x "$py" ]] || continue
-    printf '%s\n' "$py"
-    return 0
-  done
-
-  echo "No usable python interpreter found." >&2
-  exit 1
+  local options=(--config "$SOURCE_ROOT/config/runtime.local.toml"
+    --venv "$SERVICE_ROOT/.venv" --requirements "$SOURCE_ROOT/requirements.txt"
+    --scratch "$SOURCE_ROOT/../scratch/python-runtime"
+    --import telethon --import urllib3 --path-only)
+  if [[ -n "${BASE_PYTHON_BIN:-}" ]]; then
+    options+=(--python "$BASE_PYTHON_BIN")
+  fi
+  python_runtime_prepare "${options[@]}"
 }
 
+source "$SOURCE_ROOT/../common/python_runtime.sh"
 PYTHON_BIN="$(resolve_python_bin)"
 
-if ! "$PYTHON_BIN" -c 'import urllib3' >/dev/null 2>&1; then
-  echo "Missing urllib3; install telegram_connector/requirements.txt with $PYTHON_BIN." >&2
+if ! "$PYTHON_BIN" -c 'import telethon, urllib3' >/dev/null 2>&1; then
+  echo "Missing Telethon or urllib3; install telegram_connector/requirements.txt with $PYTHON_BIN." >&2
   exit 1
 fi
 
@@ -158,11 +140,11 @@ if [[ -d "$SOURCE_ROOT/data/media" && ! -d "$SERVICE_ROOT/data/media" ]]; then
 fi
 
 cat > "$SERVICE_ROOT/scripts/run_telegram_bridge.sh" <<EOF
-#!/usr/bin/env bash
+#!/bin/bash
 set -euo pipefail
 
 ROOT=$SERVICE_ROOT_SHELL
-export PATH="/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+export PATH="/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 : "\${TELEGRAM_CONNECTOR_PROJECT_ROOT:?TELEGRAM_CONNECTOR_PROJECT_ROOT is required}"
 STARTUP_LOG="\$TELEGRAM_CONNECTOR_PROJECT_ROOT/data/launchd/bridge.startup.log"
 
@@ -181,11 +163,11 @@ EOF
 chmod +x "$BRIDGE_LAUNCHER"
 
 cat > "$SERVICE_ROOT/scripts/run_telegram_digest.sh" <<EOF
-#!/usr/bin/env bash
+#!/bin/bash
 set -euo pipefail
 
 ROOT=$SERVICE_ROOT_SHELL
-export PATH="/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+export PATH="/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 : "\${TELEGRAM_CONNECTOR_PROJECT_ROOT:?TELEGRAM_CONNECTOR_PROJECT_ROOT is required}"
 STARTUP_LOG="\$TELEGRAM_CONNECTOR_PROJECT_ROOT/data/launchd/digest.startup.log"
 AUDIT_LOG="\$TELEGRAM_CONNECTOR_PROJECT_ROOT/data/launchd/digest.last_attempt.json"

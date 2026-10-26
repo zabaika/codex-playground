@@ -39,6 +39,8 @@ def installation(tmp_path):
     for name in MODULES:
         shutil.copy2(ROOT / "telegram_connector" / name, project / name)
     shutil.copy2(installer, project / "scripts/install_launch_agent.sh")
+    shutil.copy2(ROOT / "telegram_connector/requirements.txt", project / "requirements.txt")
+    shutil.copytree(ROOT / "telegram_connector/third_party", project / "third_party")
     for name in ("runtime.example.toml", "digest_prompts.toml", "analysis_prompts.toml"):
         shutil.copy2(ROOT / "telegram_connector/config" / name, project / "config" / name)
     shutil.copy2(project / "config/runtime.example.toml", project / "config/runtime.local.toml")
@@ -73,6 +75,10 @@ def test_s37_runtime_bundle_staging_parity_imports_and_reinstall(installation):
     assert f"Python interpreter: {sys.executable}" in outcome.stdout
     assert not marker.exists()
     service = staging / "telegram_connector_service"
+    binding = json.loads((project / "data/runtime/python.json").read_text())
+    assert binding["policy_digest"]
+    assert binding["architecture"] == "arm64"
+    assert binding["dependency_inputs"]["requirements.txt"]
     for name in MODULES:
         assert (service / name).read_bytes() == (project / name).read_bytes()
     for name in ("digest_prompts.toml", "analysis_prompts.toml", "runtime.local.toml"):
@@ -83,6 +89,7 @@ def test_s37_runtime_bundle_staging_parity_imports_and_reinstall(installation):
         assert plist["WorkingDirectory"] == str(service)
         assert Path(plist["ProgramArguments"][0]).exists()
         runner = service / "scripts" / f"run_telegram_{command}.sh"
+        assert runner.read_text().startswith("#!/bin/bash\n")
         subprocess.run(["bash", "-n", str(runner)], check=True, capture_output=True)
         assignment = next(line for line in runner.read_text().splitlines() if line.startswith("ROOT="))
         resolved = subprocess.run(["bash", "-c", assignment + '\nprintf "%s" "$ROOT"'],

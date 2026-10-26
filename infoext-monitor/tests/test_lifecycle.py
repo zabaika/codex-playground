@@ -131,13 +131,17 @@ def test_runtime_sync_keeps_project_config_and_installs_shared_assets(tmp_path) 
     (service / "common").mkdir(parents=True)
     (service / "common/obsolete.py").touch()
     script = (PROJECT_ROOT / "scripts/install.sh").read_text()
+    assert "# Prepare installed environment" in script
     sync = script.split("# Keep executable code outside Documents", 1)[1].split(
-        '\n"$PROJECT_ROOT/.venv/bin/python" -m venv', 1
+        '\n# Prepare installed environment', 1
     )[0]
     env = {**os.environ, "PROJECT_ROOT": str(root), "SERVICE_ROOT": str(service)}
     subprocess.run(["/bin/bash", "-c", "set -euo pipefail\n# Keep executable code outside Documents" + sync],
                    env=env, check=True, capture_output=True)
     assert (service / "common/config/process.toml").is_file()
+    assert (service / "common/config/python.toml").is_file()
+    assert (service / "common/python_runtime.py").is_file()
+    assert (service / "common/python_environment.py").is_file()
     assert not (service / "common/obsolete.py").exists()
     assert not (service / "config/runtime.local.toml").exists()
     assert (service / "bin/infoext-vision-ocr").is_file()
@@ -167,3 +171,22 @@ def test_uninstall_removes_only_agent_and_preserves_runtime_data(tmp_path) -> No
     assert calls.read_text().splitlines() == [f"bootout gui/test-user {target}"]
     assert all((tmp_path / name).read_text() == "preserved"
                for name in ("state.json", "history.jsonl", "runtime.local.toml"))
+
+
+def test_prepare_only_preserves_registration_until_explicit_install(tmp_path) -> None:
+    project = tmp_path / "project"
+    (project / "scripts").mkdir(parents=True)
+    marker = tmp_path / "registration-called"
+    reload_script = project / "scripts/reload_launch_agent.sh"
+    reload_script.write_text('printf called > "$REGISTRATION_MARKER"\n')
+    source = (PROJECT_ROOT / "scripts/install.sh").read_text()
+    block = 'if [[ "$PREPARE_ONLY" == false ]]; then' + source.split(
+        'if [[ "$PREPARE_ONLY" == false ]]; then', 1
+    )[1].split('\nfi', 1)[0] + '\nfi\n'
+    env = {"PATH": os.defpath, "PROJECT_ROOT": str(project),
+           "REGISTRATION_MARKER": str(marker), "PREPARE_ONLY": "true"}
+    subprocess.run(["/bin/bash", "-c", block], env=env, check=True, timeout=10)
+    assert not marker.exists()
+    env["PREPARE_ONLY"] = "false"
+    subprocess.run(["/bin/bash", "-c", block], env=env, check=True, timeout=10)
+    assert marker.read_text() == "called"

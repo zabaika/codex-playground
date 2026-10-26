@@ -38,7 +38,7 @@ require_workspace
 require_file "${CONFIG_PATH}" "runtime config"
 mkdir -p "$(dirname "${audit_file}")"
 
-python3 "${PLAYGROUND_ROOT}/common/ttl_runner.py" \
+"${PYTHON_BIN}" "${PLAYGROUND_ROOT}/common/ttl_runner.py" \
   --timeout-seconds "${timeout_seconds}" \
   --audit-file "${audit_file}" \
   --timeout-reason "job_search_daily_routine_ttl_expired" \

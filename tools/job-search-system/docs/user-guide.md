@@ -126,6 +126,11 @@ CLI и shell scripts нужны для повторяемых операций, 
 
 ## Базовая настройка
 
+Операторские скрипты используют общий [Python runtime owner](../../../common/README.md#python-runtime-selection).
+Переменная `PYTHON_BIN` или локальный `[python].executable` задаёт интерпретатор.
+Без override resolver ищет установленный совместимый Python 3.
+Скрипты проверяют policy и project metadata до запуска CLI/API.
+
 Работайте из корня репозитория:
 
 ```bash

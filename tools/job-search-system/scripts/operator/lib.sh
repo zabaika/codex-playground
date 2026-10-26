@@ -7,6 +7,18 @@ export PLAYGROUND_ROOT="$(cd "${JSS_ROOT}/../.." && pwd)"
 export CONFIG_PATH="${CONFIG_PATH:-${JSS_ROOT}/config/runtime.local.toml}"
 export WORKSPACE_PATH="${WORKSPACE_PATH:-}"
 export PYTHONPATH="${JSS_ROOT}/src:${PLAYGROUND_ROOT}:${PYTHONPATH:-}"
+source "${PLAYGROUND_ROOT}/common/python_runtime.sh"
+jss_python_args=(--pyproject "${JSS_ROOT}/pyproject.toml"
+  --scratch "${PLAYGROUND_ROOT}/scratch/python-runtime" --path-only)
+if [[ -f "${CONFIG_PATH}" ]]; then
+  jss_python_args+=(--config "${CONFIG_PATH}")
+fi
+if [[ -n "${PYTHON_BIN:-}" ]]; then
+  jss_python_args+=(--python "${PYTHON_BIN}")
+fi
+PYTHON_BIN="$(python_runtime_select "${jss_python_args[@]}")"
+export PYTHON_BIN
+unset jss_python_args
 
 require_workspace() {
   if [[ -z "${WORKSPACE_PATH}" ]]; then
@@ -27,7 +39,7 @@ require_file() {
 run_system_cli() {
   require_workspace
   require_file "${CONFIG_PATH}" "runtime config"
-  python3 -m job_search.interfaces.cli.system_cli \
+  "${PYTHON_BIN}" -m job_search.interfaces.cli.system_cli \
     --config-path "${CONFIG_PATH}" \
     --workspace-path "${WORKSPACE_PATH}" \
     "$@"
@@ -36,7 +48,7 @@ run_system_cli() {
 run_candidate_cli() {
   require_workspace
   require_file "${CONFIG_PATH}" "runtime config"
-  python3 -m job_search.interfaces.cli.candidate_cli \
+  "${PYTHON_BIN}" -m job_search.interfaces.cli.candidate_cli \
     --config-path "${CONFIG_PATH}" \
     --workspace-path "${WORKSPACE_PATH}" \
     "$@"
@@ -45,7 +57,7 @@ run_candidate_cli() {
 run_vacancy_cli() {
   require_workspace
   require_file "${CONFIG_PATH}" "runtime config"
-  python3 -m job_search.interfaces.cli.vacancy_cli \
+  "${PYTHON_BIN}" -m job_search.interfaces.cli.vacancy_cli \
     --config-path "${CONFIG_PATH}" \
     --workspace-path "${WORKSPACE_PATH}" \
     "$@"

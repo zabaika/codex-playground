@@ -46,17 +46,35 @@ The installer:
 
 - copies the skill into `~/.codex/skills/video-transcribe-skill`
 - reads the audited archive root from `CODEX_AUDITED_ARTIFACTS_ROOT` or `[artifacts].root_dir`
-- requires `python3.14` so the bootstrapped runtime matches the audited local wheels
+- selects an installed Python 3 through the shared runtime policy; `PYTHON_BIN`
+  or the local `[python].executable` can select a compatible interpreter
 - verifies archive checksums and required audit metadata from `config/vendor-manifest.toml`
 - unpacks `bgutil-plugin`, `bgutil-provider`, and the `youtube-transcript-api` wheel set from local audited archives
 - creates `vendor/youtube-transcript-api/venv`
 - installs `youtube-transcript-api` and its dependencies from the unpacked audited local wheels only
 - does not fetch packages from the internet during install
+- validates archive hashes, manifest inventory and the real locked dependency
+  plan before replacing an existing installation
+- restores the previous runtime if preparation fails, preserves installed data,
+  and links the installed local config to its repository owner
+- includes the common runtime bundle and records its validated interpreter
+  identity in the generated `.python-runtime.json`
+
+The reviewed wheel set uses pure-Python distributions. Python compatibility
+comes from their metadata, not the manifest's `build_python` provenance field.
+Exact reviewed distributions, local modifications and provenance are documented in
+`THIRD_PARTY_AUDIT_YOUTUBE_TRANSCRIPT_API.md` and the lockfile. A new installed
+Python may still require a separately reviewed wheel-set update.
+
+Shared selection and override behavior are documented in the repository's
+`common/README.md`. Installation runs under the shared process TTL. Use the
+repository installer for updates; installed copies remain derived artifacts.
 
 ## Main Files
 
 - `SKILL.md`: runtime workflow entrypoint
 - `install-local.sh`: install or refresh helper
+- `scripts/install_runtime.py`: private preflight, installation and rollback worker
 - `config/runtime.example.toml`: runtime config shape and defaults
 - `config/vendor-manifest.toml`: audited archive provenance, install targets, and checksums
 - `third_party/`: audit metadata and lockfiles for the reviewed dependency set

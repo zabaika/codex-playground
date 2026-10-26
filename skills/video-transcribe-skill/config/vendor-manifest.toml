@@ -36,21 +36,22 @@ metadata_files = [
 [vendor.youtube_transcript_api_wheels]
 kind = "audited-wheel-set"
 primary_package = "youtube-transcript-api"
-primary_version = "1.2.4"
-python = "3.14"
-platform = "macosx_10_15_universal2"
-archive = "video-transcribe-skill/youtube-transcript-api-wheels-py314-macosx_10_15_universal2.tar.gz"
-sha256 = "d0ba29f7dfcccce892b860a5d2ca4ad96a1c3255013fa2e3943d4c9d893c6bf4"
+primary_version = "1.2.4+py315"
+# Reviewed build provenance only; compatibility is checked from locked wheels.
+build_python = "3.15"
+platform = "any"
+archive = "video-transcribe-skill/youtube-transcript-api-wheels-py315-any.tar.gz"
+sha256 = "05b2b92be177205a11218908f49e9338061ccb73e40b78c8b5f634cba5963684"
 install_subdir = "vendor/youtube-transcript-api/wheels"
 audit_doc = "THIRD_PARTY_AUDIT_YOUTUBE_TRANSCRIPT_API.md"
-local_modifications = false
+local_modifications = true
 metadata_files = [
   "third_party/youtube-transcript-api/requirements.lock",
 ]
 
 [[vendor.youtube_transcript_api_wheels.packages]]
 name = "youtube-transcript-api"
-version = "1.2.4"
+version = "1.2.4+py315"
 
 [[vendor.youtube_transcript_api_wheels.packages]]
 name = "requests"

@@ -21,9 +21,18 @@ not an arbitrary `python3` or another project's virtualenv. From repository root
 create or restore the environment with:
 
 ```bash
-python3 -m venv skills/.venv-validation
-skills/.venv-validation/bin/python -m pip install -r skills/requirements-validation.txt
+bash common/setup_python.sh validation
 ```
+
+Selection and recoverable preparation use the shared
+[Python runtime owner](../common/README.md#python-runtime-selection).
+The dependency pin remains in [requirements-validation.txt](./requirements-validation.txt).
+The current environment uses a reviewed pure-Python PyYAML wheel, preserving
+the YAML API without its optional C extension. For a clean installation without
+a compatible upstream wheel, supply the previously reviewed wheel directory with
+`PIP_FIND_LINKS=/absolute/path/to/reviewed-wheels`. The helper accepts wheels only;
+missing compatible artifacts stop preparation before replacing the working venv.
+A new source build or dependency change requires a separate review and decision.
 
 Then validate a skill using the environment's interpreter directly:
 

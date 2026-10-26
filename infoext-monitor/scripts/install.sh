@@ -3,15 +3,22 @@ set -euo pipefail
 
 PROJECT_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SERVICE_ROOT="$HOME/Library/Application Support/infoext_monitor_service"
-PYTHON_BIN="${PYTHON_BIN:-python3}"
-
-"$PYTHON_BIN" -m venv "$PROJECT_ROOT/.venv"
+PREPARE_ONLY=false
+if [[ $# -gt 0 ]]; then
+  if [[ $# -ne 1 || "$1" != "--prepare-only" ]]; then
+    echo "Usage: $0 [--prepare-only]" >&2
+    exit 2
+  fi
+  PREPARE_ONLY=true
+fi
+source "$PROJECT_ROOT/../common/python_runtime.sh"
+bootstrap="$(python_runtime_bootstrap)"
 if [[ ! -f "$PROJECT_ROOT/config/runtime.local.toml" ]]; then
   echo "Create config/runtime.local.toml from config/runtime.example.toml and fill in InfoExt data before installing LaunchAgent." >&2
   exit 1
 fi
 chmod 600 "$PROJECT_ROOT/config/runtime.local.toml"
-"$PROJECT_ROOT/.venv/bin/python" -c '
+"$bootstrap" -c '
 from pathlib import Path
 import sys
 root = Path(sys.argv[1])
@@ -19,8 +26,11 @@ sys.path.insert(0, str(root))
 from config import load_settings
 load_settings(root)
 ' "$PROJECT_ROOT"
-"$PROJECT_ROOT/.venv/bin/python" -m pip install --upgrade pip
-"$PROJECT_ROOT/.venv/bin/python" -m pip install -r "$PROJECT_ROOT/requirements.txt"
+python_runtime_prepare --config "$PROJECT_ROOT/config/runtime.local.toml" \
+  --venv "$PROJECT_ROOT/.venv" --venv "$SERVICE_ROOT/.venv" \
+  --requirements "$PROJECT_ROOT/requirements.txt" \
+  --scratch "$PROJECT_ROOT/../scratch/python-runtime" \
+  --import playwright --import PIL --import greenlet >/dev/null
 "$PROJECT_ROOT/.venv/bin/python" -m playwright install chromium
 
 if ! xcrun --find swiftc >/dev/null 2>&1; then
@@ -42,12 +52,17 @@ cp "$PROJECT_ROOT/requirements.txt" "$SERVICE_ROOT/requirements.txt"
 cp "$PROJECT_ROOT/launchd/"{run_monitor.py,infoext-monitor-launcher,infoext-monitor-launcher.sh} "$SERVICE_ROOT/launchd/"
 cp "$PROJECT_ROOT/bin/infoext-vision-ocr" "$SERVICE_ROOT/bin/infoext-vision-ocr"
 rsync -a --delete --exclude '__pycache__' --exclude 'tests' "$PROJECT_ROOT/../common/" "$SERVICE_ROOT/common/"
-"$PROJECT_ROOT/.venv/bin/python" -m venv "$SERVICE_ROOT/.venv"
-"$SERVICE_ROOT/.venv/bin/python" -m pip install -r "$SERVICE_ROOT/requirements.txt"
+# Prepare installed environment: both venvs passed the shared preparation above.
 "$SERVICE_ROOT/.venv/bin/python" -m playwright install chromium
 chmod +x "$SERVICE_ROOT/launchd/"{infoext-monitor-launcher,infoext-monitor-launcher.sh}
 
-bash "$PROJECT_ROOT/scripts/reload_launch_agent.sh"
+if [[ "$PREPARE_ONLY" == false ]]; then
+  bash "$PROJECT_ROOT/scripts/reload_launch_agent.sh"
+fi
 
 "$PROJECT_ROOT/.venv/bin/python" "$PROJECT_ROOT/main.py" --help >/dev/null
-echo "InfoExt monitor installed. The next check will start at the next configured calendar time."
+if [[ "$PREPARE_ONLY" == true ]]; then
+  echo "InfoExt runtime prepared. LaunchAgent registration was not changed."
+else
+  echo "InfoExt monitor installed. The next check will start at the next configured calendar time."
+fi

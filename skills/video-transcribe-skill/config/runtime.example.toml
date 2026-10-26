@@ -1,5 +1,10 @@
 # Copy to runtime.local.toml and keep that file untracked.
 
+[python]
+# Optional installed-interpreter override. Empty uses the shared runtime policy.
+# Keep machine-specific executable paths only in runtime.local.toml.
+executable = ""
+
 [engine]
 order = ["youtube-transcript-api", "yt-dlp"]
 

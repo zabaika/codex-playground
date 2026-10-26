@@ -36,6 +36,21 @@ Keep documentation split by responsibility:
 - when a repository-managed tool or skill is installed or copied into a runtime location such as `~/.codex/skills`, treat the repository copy as the only editable owner and the installed/runtime copy as a derived artifact
 - do not edit the installed/runtime copy directly; change the repository copy and then refresh the installed copy through the canonical install or sync path
 
+### Runtime and Dependency Version Ownership
+
+- declare interpreter compatibility, dependency ranges, approved pins, and artifact hashes in their owning machine-readable config, package metadata, manifest, or lockfile; reuse existing owners instead of creating parallel version catalogs
+- keep shared interpreter-selection policy and resolution under one domain-agnostic owner; project-specific dependency requirements remain with their projects and constrain the shared selection
+- code, installers, wrappers, and contract tests must consume those owners rather than repeat the current interpreter minor version, versioned package-manager prefix, or dependency pin as editable policy
+- use established package-manager compatibility checks for dependency metadata and binary artifacts; a matching interpreter version or successful import alone does not establish full runtime compatibility
+- resolve an interpreter from explicit operator overrides, local config, and available installations in a documented order; validate implementation, version requirements, architecture, and required runtime capabilities; an invalid explicit override must fail clearly instead of silently choosing another interpreter
+- keep bootstrap discovery small and independent of application dependencies; report a missing bootstrap capability clearly rather than downloading packages or changing the system implicitly
+- select or change the interpreter backing an installed service or persistent environment during an explicit install or upgrade operation; generated service launchers must use the validated interpreter or environment path instead of choosing a different Python from ambient PATH on each scheduled run
+- record the effective interpreter path, version, architecture, and dependency-input identity as generated installation evidence; exact versions and versioned paths are valid observations in generated artifacts, not additional editable policy
+- before replacing a working runtime, validate the proposed interpreter and dependency set; when the Python minor version, architecture, or ABI changes, recreate the environment from its dependency owner and verify it before completing deployment; retain recoverability without changing canonical data or secrets
+- preserve reviewed dependency pins, hashes, and offline-install contracts; removing version literals from code does not authorize dependency upgrades, relabeling incompatible binaries, or changing upstream compatibility metadata
+- contract tests must read current policy from its owner; explicit version literals remain appropriate for labeled historical evidence, boundary fixtures, and compatibility regression cases that do not define a second current-version policy
+- in ordinary setup and operator documentation, state the language major version or a verified minimum requirement and link to the owning dependency contract; keep current minor and patch versions in manifests and generated diagnostics; retain exact versions and hashes in audit, provenance, and reproducibility records when needed to identify the reviewed artifact
+
 ### README Config Discipline
 
 - do not turn project README files into config-key catalogs
@@ -60,7 +75,7 @@ Keep documentation split by responsibility:
 - at the start of each new skill workflow run, load the full applicable rule context before acting; a new skill workflow run starts when a user request invokes a skill for a new substantive task, source, artifact, workflow, or external target
 - for that run, read `RULEBOOK.md`, the invoked skill's `SKILL.md`, every directly referenced rule, config, convention, template, or route file required by the selected workflow path, and any delegated skill rules when the selected skill explicitly delegates part of the workflow to another skill
 - links explicitly marked as bibliographic or provenance references are not required rule-context inputs; do not open or fetch them merely because they occur in a local instruction file; follow the local owner's source-refresh policy, while preserving separately required source reads for the user's actual task
-- do not treat truncated tool output as a completed rule-context read; if output is truncated, continue reading the missing ranges until the relevant file is read to EOF before proceeding
+- read each required rule file completely to EOF before proceeding; use [File and Context Reading](./AGENTS.md#file-and-context-reading) for output budgeting, chunking, and recovery from truncated output
 - after the rule context is fully loaded, reuse it for follow-up turns inside the same workflow run instead of reloading everything for review, rename, rewrite, quality-check, approved-write, or final-verification requests
 - if chat context was compacted or summarized during an active skill workflow run, treat the summary as usable for rule-context continuity only when it explicitly states that the full required rule context was loaded successfully for this run and lists the relevant skill/rule files; otherwise reload the missing or uncertain rule context before continuing
 - when summarizing an active skill workflow run, include whether the full required rule context was loaded, which skill/rule files were included, and whether any required read was truncated or uncertain
@@ -172,8 +187,7 @@ Keep documentation split by responsibility:
 - before asserting a pipeline-wide property, inspect the relevant path from producer through transformations to consumers; a property of one component does not establish the same property for the whole workflow
 - limit each claim to the scope actually verified; distinguish self-review, automated checks, independent review, code inspection, and demonstrated runtime behavior, naming the applicable method and remaining limits in substantial verification reports
 - mechanical artifact validation must consume the current saved artifact; if it uses a separately maintained model, inventory or graph, first verify that representation against the artifact and identify the revision checked; report only the properties actually established by that check
-- narrow discovery results to relevant files, symbols, and ranges before detailed reads; size tool output so the required content remains inspectable
-- treat truncated output as incomplete evidence; narrow the request or read the missing ranges before relying on omitted content; follow Skill Rule Context Loading when a complete rule-file read is required
+- follow [File and Context Reading](./AGENTS.md#file-and-context-reading) when scoping reads and handling output limits; partial output remains incomplete evidence, and Skill Rule Context Loading defines when full rule-file coverage is required
 
 #### 5. External OS Services and Signing Agents
 
