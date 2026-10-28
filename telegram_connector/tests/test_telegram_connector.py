@@ -553,9 +553,70 @@ class TelegramConnectorTests(unittest.TestCase):
         )
         text, payload = telegram_connector.build_safe_command_response("tail", completed)
         self.assertIn("Status: failed (2)", text)
-        self.assertIn("<path>", text)
-        self.assertIn("<bot_token>", text)
+        self.assertIn("Команда не выполнена", text)
+        self.assertIn("data/launchd/bridge.stderr.log", text)
+        self.assertNotIn("failed at", text)
+        self.assertNotIn("FAKE_SECRET", text)
         self.assertIsNone(payload)
+
+    def test_failed_command_outputs_never_reach_telegram(self) -> None:
+        for output in ("internal diagnostic\n" * 100,
+                       '[{"error":"internal diagnostic"}]', ""):
+            with self.subTest(output=output[:30]):
+                completed = subprocess.CompletedProcess(
+                    args=[], returncode=1, stdout=output, stderr="",
+                )
+                text, _ = telegram_connector.build_safe_command_response_any(
+                    "run --auth-mode user", completed,
+                )
+                self.assertIn("Команда не выполнена", text)
+                self.assertNotIn("internal diagnostic", text)
+                self.assertLess(len(text), 300)
+
+    def test_digest_permission_failure_logs_traceback_and_sends_short_message(self) -> None:
+        diagnostic = (
+            'Traceback (most recent call last):\n'
+            '  File "/home/tester/telegram_digest.py", line 182, in logging\n'
+            '    startup_log.open("a")\n'
+            "PermissionError: [Errno 1] Operation not permitted: "
+            "'/home/tester/digest.startup.log' bot123456:FAKE_SECRET\n"
+        )
+        update = {"message": {"text": "/digest", "chat": {"id": 42},
+                              "from": {"id": 7}}}
+        config = {"bridge": {"allowed_chat_ids": "42", "allowed_user_ids": "7"}}
+        for stream in ("stderr", "stdout"):
+            with self.subTest(stream=stream):
+                completed = subprocess.CompletedProcess(
+                    args=[], returncode=1,
+                    stdout=diagnostic if stream == "stdout" else "",
+                    stderr=diagnostic if stream == "stderr" else "",
+                )
+                log = io.StringIO()
+                with patch.object(telegram_connector, "shared_run_worker_subprocess", return_value=completed), \
+                     patch.object(telegram_connector, "send_text_chunks") as send, \
+                     patch("sys.stderr", log):
+                    telegram_connector.handle_history_command("unused", config, update, secret_env={})
+                message = send.call_args.args[2]
+                self.assertIn("нет доступа к файлу или папке", message)
+                self.assertIn("разрешения macOS", message)
+                self.assertNotIn("Traceback", message)
+                self.assertNotIn("startup_log.open", message)
+                self.assertLess(len(message), 300)
+                logged = log.getvalue()
+                self.assertIn("Traceback", logged)
+                self.assertIn('startup_log.open("a")', logged)
+                self.assertIn("PermissionError: [Errno 1]", logged)
+                self.assertNotIn("FAKE_SECRET", logged)
+                self.assertNotIn("/home/tester", logged)
+
+    def test_successful_command_does_not_forward_stderr_traceback(self) -> None:
+        completed = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout="",
+            stderr="Traceback (most recent call last):\nRuntimeError: diagnostic",
+        )
+        text, _ = telegram_connector.build_safe_command_response_any("tail", completed)
+        self.assertNotIn("Traceback", text)
+        self.assertNotIn("diagnostic", text)
 
     def test_resolve_secret_value_reads_keychain_reference(self) -> None:
         original_run = telegram_connector.subprocess.run

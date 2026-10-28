@@ -763,11 +763,25 @@ def redact_sensitive_text(text: str) -> str:
     return shared_redact_sensitive_text(text)
 
 
+def command_error_summary(diagnostic: str) -> str:
+    if re.search(r"PermissionError:|\[Errno (?:1|13)\]", diagnostic):
+        reason = (
+            "Команда не выполнена: нет доступа к файлу или папке. "
+            "Проверьте разрешения macOS для Python."
+        )
+    else:
+        reason = "Команда не выполнена."
+    return f"{reason} Подробности: data/launchd/bridge.stderr.log."
+
+
 def build_safe_command_response(command_text: str, completed: subprocess.CompletedProcess[str]) -> tuple[str, dict[str, Any] | None]:
     status = "ok" if completed.returncode == 0 else f"failed ({completed.returncode})"
     lines = [f"Command: {command_text}", f"Status: {status}"]
     output = (completed.stdout or "").strip()
     error_output = redact_sensitive_text((completed.stderr or "").strip())
+    if completed.returncode != 0 or "Traceback (" in output:
+        lines.append(command_error_summary(error_output or output))
+        return "\n".join(lines), None
     json_output = None
     if output:
         try:
@@ -810,14 +824,14 @@ def build_safe_command_response(command_text: str, completed: subprocess.Complet
         if "errors" in json_output and json_output["errors"]:
             for item in json_output["errors"]:
                 lines.append(f"error: {redact_sensitive_text(str(item))}")
-    elif error_output:
-        lines.append(f"error: {error_output}")
-    elif output:
+    elif output and "Traceback (" not in output:
         lines.append(redact_sensitive_text(output))
     return "\n".join(lines), json_output if isinstance(json_output, dict) else None
 
 
 def build_safe_command_response_any(command_text: str, completed: subprocess.CompletedProcess[str]) -> tuple[str, dict[str, Any] | list[dict[str, Any]] | None]:
+    if completed.returncode != 0 or "Traceback (" in (completed.stdout or ""):
+        return build_safe_command_response(command_text, completed)
     output = (completed.stdout or "").strip()
     json_output: dict[str, Any] | list[dict[str, Any]] | None = None
     if output:
@@ -1436,6 +1450,19 @@ def handle_history_command(token: str, config: dict[str, Any], update: dict[str,
         send_text_message(token, chat_id, response)
         return
 
+    # launchd owns this stderr stream even if the worker cannot open its logs.
+    diagnostics = []
+    if completed.stderr:
+        diagnostics.append(completed.stderr)
+    if completed.stdout and (completed.returncode != 0 or "Traceback (" in completed.stdout):
+        diagnostics.append(completed.stdout)
+    if diagnostics:
+        timestamp = datetime.now(timezone.utc).isoformat()
+        print(
+            f"[{timestamp}] Worker {script_path.name} exited ({completed.returncode})\n"
+            + redact_sensitive_text("\n".join(diagnostics)),
+            file=sys.stderr, flush=True,
+        )
     safe_response, json_output = build_safe_command_response_any(" ".join(argv[2:]), completed)
     is_digest_command = text.split(maxsplit=1)[0] == "/digest"
     if not (is_digest_command and completed.returncode == 0):

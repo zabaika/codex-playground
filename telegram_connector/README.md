@@ -122,6 +122,11 @@ Launchd logs:
 - `telegram_connector/data/launchd/digest.stderr.log`
 - `telegram_connector/data/launchd/digest.last_attempt.json`
 
+Ошибки запуска команд bridge возвращает в Telegram кратким сообщением.
+Полная диагностика, включая traceback, сохраняется в `data/launchd/bridge.stderr.log`
+с удалением секретов и приватных путей. Этот журнал принимает ошибки раннего
+запуска digest, даже если digest ещё не смог открыть собственные журналы.
+
 ## Commands
 
 Bot command quick reference:
