@@ -129,8 +129,8 @@ When `structured` mode is explicitly selected, route by [references/structured-n
        - optional second query only when needed:
          - `concept + context`
          - or alternate Russian/English wording when both are plausible
-   - Prefer `2` article queries and `1` concept query by default. Escalate to an extra query only when the current shortlist is weak, noisy, or contradictory.
-   - Stop early when one note is clearly dominant and the nearby shortlist is coherent enough to support a confident `update vs create` check.
+   - Use `2` article queries and `1` concept query as starting guidance, not a mandatory minimum or a total search limit. Add targeted queries when a substantial mechanism remains uncovered, following semantic link coverage in [references/vault-conventions.md](references/vault-conventions.md).
+   - Stop the main-note search early when one note clearly supports a confident `update vs create` decision. This does not end discovery for useful links to other notes.
    - Merge the returned notes into one candidate pool, deduplicate by `path`, and keep the strongest score per note.
    - Use the index to shortlist candidate notes from both `note_roots.article` and `note_roots.concept`.
    - Only after that open the most relevant files directly for full-text verification or merge work.
@@ -154,11 +154,10 @@ When `structured` mode is explicitly selected, route by [references/structured-n
    - Apply the canonical update contract from [references/update-patterns.md](references/update-patterns.md) whenever an existing note is touched.
    - For evidence-only reinforcement updates, use the canonical frontmatter provenance rule in [references/update-patterns.md](references/update-patterns.md); do not mutate `source` frontmatter from this entrypoint.
    - If you need intermediate files, previews, or staged markdown, store them only under the resolved scratch root and never under repo-local `tmp/`.
-8. Resolve source dates before final frontmatter normalization.
-   - Build a source-date map for every source that materially contributes to the saved note.
-   - For single-source notes, verify the source date before assigning `frontmatter.date`.
+8. Resolve source dates before dating log entries and final frontmatter normalization.
+   - Build a source-date map under [Source Date Resolution](references/vault-conventions.md#source-date-resolution), then use it for frontmatter and dated logs, including concept updates.
+   - Insert dated entries under the chronology rules in [references/update-patterns.md](references/update-patterns.md).
    - For multi-source notes, write dated bullets in the schema-defined `headings.evidence` section first, then derive `frontmatter.date` from the newest dated evidence source instead of setting it from memory.
-   - If a source date is unclear, verify it from the source page before saving rather than guessing.
 9. Before saving, run the canonical tag pass from [references/vault-conventions.md](references/vault-conventions.md).
 10. Re-check final titles, tags, links, duplicate risk, and chronology against the canonical contracts before saving.
    - Re-run the canonical closing-section deduplication pass after inline wikilinks are finalized.
@@ -382,9 +381,10 @@ PYTHONPATH=skills/article-to-obsidian-kb/scripts python3 -m unittest discover -s
   - If a late edit changes stable body sections, rerun this gate before the final regression sweep.
 - Before saving any source-derived note, run the final body-normalization sequence in this order:
   1. apply the de-meta pass from [references/vault-conventions.md](references/vault-conventions.md)
-  2. apply the inline-wikilink audit from [references/vault-conventions.md](references/vault-conventions.md)
-  3. apply closing-section deduplication from [references/vault-conventions.md](references/vault-conventions.md)
-  4. apply language normalization from [references/language-normalization.md](references/language-normalization.md)
+  2. apply semantic link coverage from [references/vault-conventions.md](references/vault-conventions.md), using its relevance and stopping criteria rather than a link-count target
+  3. apply the inline-wikilink audit from [references/vault-conventions.md](references/vault-conventions.md)
+  4. apply closing-section deduplication from [references/vault-conventions.md](references/vault-conventions.md)
+  5. apply language normalization from [references/language-normalization.md](references/language-normalization.md)
 - Treat the body-normalization sequence as an ordered gate, not as independent optional checks.
 - If any later edit changes stable body sections after one of those steps has run, re-run the sequence from the earliest affected step before final compliance.
 - When an inline-wikilink audit set exists, run:
@@ -392,6 +392,7 @@ PYTHONPATH=skills/article-to-obsidian-kb/scripts python3 -m unittest discover -s
   Treat failures as fix-before-save issues.
 - Run one final note-compliance pass before saving any touched note:
   - apply the full final-note contract from [references/vault-conventions.md](references/vault-conventions.md) to the final saved artifact, including the body-normalization sequence above
+  - separately verify relation quality, alias precision, and concrete comparative-navigation benefit under that contract; check that the closing block contains links only
   - apply language cleanup from [references/language-normalization.md](references/language-normalization.md) only after the inline-wikilink audit has resolved graph-backed terms
   - this pass is mandatory for every major rule family in that canonical contract, not just for the family you touched most recently
   - if the note was manually rewritten, merged, or changed late in the run, re-run the full contract after that late edit

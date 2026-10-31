@@ -207,7 +207,7 @@ def _closing_links_count(body: str) -> tuple[int | None, int]:
     for line in tail:
         if line.startswith("# "):
             break
-        if line.strip().startswith("[[") and line.strip().endswith("]]"):
+        if WIKILINK_RE.fullmatch(line.strip()):
             count += 1
     return line_no, count
 
@@ -1312,6 +1312,19 @@ def _check_closing_section(
                     "closing.related-section-not-final",
                     f"Блок `{RELATED_NOTES_HEADING}` должен быть последним heading в заметке.",
                     heading_line,
+                )
+            )
+    _, tail = _find_heading_block(body, RELATED_NOTES_HEADING)
+    for offset, line in enumerate(tail, start=1):
+        if not require_related_section_final and line.startswith("# "):
+            break
+        if line.strip() and not WIKILINK_RE.fullmatch(line.strip()):
+            violations.append(
+                Violation(
+                    "closing.non-link-content",
+                    f"В `{RELATED_NOTES_HEADING}` допустимы только отдельные "
+                    "wikilinks без пояснений и маркеров списка.",
+                    heading_line + offset,
                 )
             )
     violations.extend(_check_required_related_links(body, required_related_links))

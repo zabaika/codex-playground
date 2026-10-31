@@ -39,14 +39,10 @@ Canonical section-heading strings live in [config/note_schema.yaml](../config/no
   - move the old block lower in the note as a reference block
   - delete or replace it only after explicit approval
 - When the user asks to clean duplicates, treat newer analytical sections as the default cleanup surface and leave older checklists or reference blocks unchanged unless the user explicitly includes them.
-- Append a dated entry that links the touched note to the new article and related concepts.
-- Use the current insertion date in `YYYY-MM-DD` format.
-- Treat dated update sections as chronological append-only logs by default.
-- Keep dated bullets in ascending chronological order: oldest entries first, newest entries last.
-- Insert a new dated bullet after the last existing dated bullet in that section, not at the top.
+- Add a dated entry that links the touched note to the new article and related concepts.
+- Resolve the entry date under [Source Date Resolution](vault-conventions.md#source-date-resolution).
+- Insert it within the target dated section in ascending date order; for equal dates, place it after existing entries with that date.
 - Do not silently reorder older entries during a normal update unless their current order is already broken.
-- If an older source is being backfilled later, insert its bullet by date instead of mechanically pushing it to the end.
-- When appending into schema-defined dated sections such as `headings.additional_insights`, `headings.evidence`, or `headings.observed_practices`, place the new bullet immediately before the next heading or the end of the note.
 
 ## Dated-Log Reinforcement Updates
 
@@ -60,7 +56,7 @@ Canonical section-heading strings live in [config/note_schema.yaml](../config/no
 
 - Keep or improve the existing lesson wording only when the new article adds a clearer mechanism or trade-off.
 - If the note has no evidence section, add `headings.evidence`.
-- Append one bullet per processed article.
+- Add one dated bullet per processed article.
 - Keep `headings.evidence` chronological unless the user explicitly asked for latest-first ordering.
 
 Bullet format:
@@ -74,7 +70,7 @@ Bullet format:
 - Keep the stable summary of the source near the top.
 - Append only the new signal that the source adds, rather than rewriting the whole note into a different structure.
 - If the note has no evidence section, add `headings.evidence`.
-- Append one bullet per processed source.
+- Add one dated bullet per processed source.
 - Keep `headings.evidence` chronological unless the user explicitly asked for latest-first ordering.
 
 Bullet format:
@@ -89,7 +85,7 @@ Bullet format:
 - Keep concrete operating detail in the stable sections when the source supports it: team scope, owned systems, partner functions, named metrics, prioritization mechanics, AI rollout, and build-vs-buy constraints should survive rewrites.
 - When a section contains several distinct observations, keep them as separate bullets instead of merging them into one summary line.
 - If the note has no practice log, add `headings.observed_practices`.
-- Append one bullet per processed article with the date and links.
+- Add one dated bullet per processed article with links.
 - Keep `headings.observed_practices` chronological unless the user explicitly asked for latest-first ordering.
 
 Bullet format:
@@ -105,7 +101,7 @@ Bullet format:
 - When updating or normalizing an older concept note, keep surviving `source` values instead of stripping them only because `type: concept` does not require `source`.
 - Add a dated insight only when the source contributes durable knowledge to the concept: a mechanism, a useful example, a decision criterion, or a material condition of application. Processing another source or mentioning the concept in a source-derived note does not by itself justify an update.
 - Skip additions that only repeat the definition, audit the source's terminology, describe transcript quality, or list missing information without extending the concept. Apply the knowledge-relevance and material-qualification pass from [vault-conventions.md](vault-conventions.md).
-- When an insight qualifies, add `headings.additional_insights` only if needed and append one dated bullet linking to the source-derived note and relevant nearby concepts. Otherwise leave the concept note unchanged; the source-derived note may still link to it.
+- When an insight qualifies, add `headings.additional_insights` only if needed and insert one dated bullet linking to the source-derived note and relevant nearby concepts. Otherwise leave the concept note unchanged; the source-derived note may still link to it.
 - Keep `headings.additional_insights` chronological unless the user explicitly asked for latest-first ordering.
 - Keep concept notes `compact` by default, but promote them to an `expanded` shape when the compact form would still leave the concept easy to confuse, too compressed, or too opaque.
 - Use `expanded` especially for contrastive concepts, abbreviation-based metric names, and concepts that need an explicit distinction from a neighboring note.
@@ -122,15 +118,15 @@ Bullet format:
 
 - Update `headings.related_notes` after every create or update.
 - Prefer reusing already opened notes and the existing indexed shortlist before issuing any extra retrieval pass for related links.
-- Build candidate related links through indexed retrieval only when the current candidate pool still does not give enough strong options, and then read only the strongest shortlist that survived scoring.
+- Apply semantic link coverage from [vault-conventions.md](vault-conventions.md) to substantial mechanisms outside the initial shortlist too. Reuse results while the draft's topics remain unchanged; use targeted indexed retrieval for uncovered mechanisms, then read only the strongest candidates for semantic verification.
 - Inspect candidate tags, headings, and outgoing links from the index first; do not reopen files only to recover metadata the index already has.
 - Remove obvious duplicate wikilinks.
 - After inline wikilinks are finalized, remove from `headings.related_notes` any note that is already linked inline in the body.
 - If the closing section becomes empty after that deduplication, delete the heading instead of leaving an empty or mechanically duplicated block.
-- Prefer the touched notes over loosely related older links when the closing section becomes too long.
-- After concept titles are finalized, run one more exact-title sweep through the source-derived note and convert remaining plain-text or inline-code mentions of those touched concepts into wikilinks.
-- After the exact-title sweep, run one more semantic-alias sweep for touched concepts whose canonical title differs from the wording that naturally appears in the prose.
-- Keep both sweeps constrained to touched concepts and shortlisted indexed candidates; do not trigger a broad vault scan just to hunt for more possible links.
+- Rank links by concrete reader benefit, not by whether the target was touched in this run. A useful link to an existing concept does not require changing the concept.
+- After concept titles are finalized, run one more exact-title sweep through the source-derived note and convert remaining substantive plain-text or inline-code mentions of selected notes into wikilinks.
+- After the exact-title sweep, run one more semantic-alias sweep for selected notes whose canonical title differs from the wording that naturally appears in the prose.
+- Use the indexed candidate pool expanded by semantic link coverage, not only touched concepts or the initial shortlist. Do not trigger a broad vault scan or invent source-derived claims to justify a link.
 - Use that sweep for source terms, abbreviations, English labels, shortened metric names, or compact phrases that should stay visible in the text but now point at a broader canonical concept title.
 - When the visible wording should stay shorter than the canonical title, use an Obsidian alias instead of leaving the mention as plain text.
 

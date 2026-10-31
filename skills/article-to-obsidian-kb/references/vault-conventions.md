@@ -73,9 +73,16 @@ date: <year>
 ---
 ```
 
-- For single-source source-derived notes, set `date` to the publication year of that source.
-- For multi-source source-derived notes, set `date` to the year of the newest source that materially contributes to the saved note.
+- For single-source source-derived notes, set `date` to the year resolved under Source Date Resolution below.
+- For multi-source source-derived notes, set `date` to the year of the newest resolved date among materially contributing sources.
 - Do not use `date` as a last-edited marker for the agent run itself; chronology of later reinforcement belongs in schema-defined dated sections such as `headings.evidence` or `headings.additional_insights`.
+
+### Source Date Resolution
+
+- Check the source content, page, and available publication metadata. Use the verified publication date; if unavailable after these checks, use the actual save date in the user's timezone.
+- Use `YYYY-MM-DD`, or `YYYY-MM` when only the publication month is reliable.
+- Record each source's resolved date and its basis in the scratch source-date map. Briefly report fallback use.
+- If saving occurs on a different local date than staging, refresh new fallback dates and rerun final checks. Do not reset existing fallback dates during routine edits.
 
 ### Concept notes
 
@@ -267,13 +274,10 @@ Frontmatter is part of the note schema, not optional decoration.
 - When indexed retrieval is configured, run that canonical concept check through the shared `kb-index` shortlist first and read only the strongest returned notes before deciding that the concept is new.
 - Do not let a nicer title, a translation, or a local wording variant justify a duplicate concept node when the durable idea is already present.
 - Apply the source-supported practicality gate below for `general` note examples, practice sections, and checklist decisions.
-- Treat schema-defined dated log sections such as `headings.additional_insights`, `headings.evidence`, and `headings.observed_practices` as chronological append-only logs by default.
+- Date source-derived entries in `headings.additional_insights`, `headings.evidence`, and `headings.observed_practices` using [Source Date Resolution](#source-date-resolution).
 - Keep dated bullets in ascending chronological order unless the user explicitly asks for latest-first ordering.
-- Insert a new dated bullet after the last existing dated bullet in that section and before the next heading or end-of-file.
-- Do not prepend a new dated bullet to the top of a log section unless latest-first ordering was explicitly requested.
+- Insert each new entry at its chronological position, following [update-patterns.md](update-patterns.md); an older source processed later belongs before later publications.
 - In multi-source source-derived notes, make every bullet under `headings.evidence` explicitly dated.
-- Use `YYYY-MM-DD` when the source date is known precisely and `YYYY-MM` when only the month is reliable.
-- Treat this as mandatory whenever the note frontmatter contains two or more `source` entries and the note keeps a `headings.evidence` section.
 - Add `headings.tools_frameworks` only when it contributes a clearly separate layer of knowledge beyond `headings.practice`.
 - Add `headings.pitfalls` only when the source discusses distinct mistakes with their own consequences; do not use it for negative rewrites of recommendations.
 - Omit `headings.apply_immediately` when it would only repeat the same actions from `headings.practice`.
@@ -432,15 +436,27 @@ If the gate cannot produce more practical material without unsupported invention
 - Use the closing section for net-new navigation links, not as a duplicate dump of all inline references.
 - Before creating or keeping `headings.related_notes`, first try to place strong related-note links inline where the stable body already uses the related concept, method, metric, risk, or source-derived topic. Use aliases when the visible phrase should stay grammatical or shorter than the target title. Link only natural, substantive mentions; do not force links into generic words or loosely thematic phrases.
 
+### Semantic Link Coverage
+
+- After the de-meta pass, review the draft's substantial mechanisms, including those expressed without canonical titles in tables and examples. Reviewing a section does not require a query, candidate, or link for that section.
+- Reuse the indexed candidate pool first. When a concrete mechanism is not covered and likely has an existing counterpart, run a targeted index query and read the strongest candidate to verify its meaning. Do not expand into a broad vault scan.
+- Select a link only when the target addresses the same problem, mechanism, and applicable scope, and helps the reader understand or apply the specific claim. Shared vocabulary, a broad domain, or a familiar node is insufficient.
+- Keep relation quality separate from alias quality. For a strong relation, make the visible anchor name the relevant mechanism clearly and naturally. A precise alias does not rescue a weak relation.
+- Do not change source-derived claims or invent supporting claims to make a link fit. Linking an existing concept does not require updating that concept.
+- For comparative navigation, identify the concrete comparison or additional example the reader gains. Reject links without that benefit rather than moving weak candidates into the closing section.
+- Keep a compact working map in scratch for selected and contested links: draft fragment → mechanism → candidate → reader benefit → decision. Include rejection reasons for contested cases; do not require an entry for every paragraph or explanations in the saved closing block.
+- Stop once substantial mechanisms and plausible contested candidates have been considered. There is no link quota; zero new links and no closing section are valid outcomes.
+
 ### Inline Wikilink Audit
 
-- Run this pass after the de-meta pass and before closing-section deduplication.
+- Run this pass after semantic link coverage and before closing-section deduplication.
 - Source-derived notes must link important existing notes at the point where the idea is used in the stable body.
 - The audit set includes:
   - concepts created in the current run
   - existing concepts updated in the current run
   - high-confidence existing concepts or source-derived notes that are explicitly used in the body
   - existing metric, framework, method, or operating-model notes whose titles are mentioned in the body
+  - strong existing matches selected through semantic link coverage, even when the draft never names their canonical title
 - If an audit-set term appears in stable body sections, convert the first substantive mention into an inline wikilink.
 - Use Obsidian aliases when the visible wording should stay lowercase, inflected, abbreviated, or otherwise different from the note title.
 - Do not use inline code to preserve a concept title when a wikilink is the correct graph edge.
@@ -452,8 +468,8 @@ If the gate cannot produce more practical material without unsupported invention
 - End the note with `headings.related_notes` only when at least one net-new navigation link remains after final deduplication.
 - Closing links are secondary navigation. They must not be used as a substitute for inline links where a concept is actually used in the body.
 - Remove the closing heading entirely when deduplication leaves it empty.
-- Add 3-10 wikilinks when that many net-new relevant notes exist.
-- Prefer links to touched concept notes, source-derived notes, and the closest existing concepts in the vault.
+- Keep only links that pass semantic link coverage; whether a note was touched in this run does not establish its relevance. Do not target a link count.
+- Each nonblank line must contain one bare wikilink, with an optional alias. Do not add list markers, explanations, annotations, or subheadings. Keep selection rationale in scratch only.
 - When indexed retrieval is configured, discover those closest existing notes through the shared `kb-index` shortlist first instead of scanning the vault broadly.
 - Remove from the closing section any note that was already linked inline in the body, unless there is a deliberate reason to highlight that one hub note twice.
 - Do not add weak or merely thematic filler links just to satisfy a target count.

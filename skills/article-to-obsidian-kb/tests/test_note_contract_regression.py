@@ -25,6 +25,104 @@ CONCEPT_COMPARE_HEADING = MODULE.heading("concept_compare")
 
 
 class CheckNoteContractTests(unittest.TestCase):
+    def test_related_section_rejects_annotations_and_prose(self) -> None:
+        fixture = Path(__file__).parent / "fixtures" / "clean-general-note.md"
+        prefix = fixture.read_text(encoding="utf-8").split(
+            RELATED_NOTES_HEADING, 1
+        )[0]
+        for invalid_line in (
+            "[[Первая заметка]] — пояснение",
+            "Пояснение отдельной строкой.",
+            "Пояснение перед [[Вторая заметка]]",
+            "[[Вторая заметка]] пояснение [[Третья заметка]]",
+            "- [[Вторая заметка]]",
+            "## Дополнительное пояснение",
+        ):
+            with self.subTest(line=invalid_line):
+                content = (
+                    prefix + RELATED_NOTES_HEADING
+                    + "\n[[Первая заметка]]\n" + invalid_line + "\n"
+                )
+                violations = MODULE.collect_violations_from_text(
+                    content, expect="source"
+                )
+                matches = [
+                    v for v in violations
+                    if v.code == "closing.non-link-content"
+                ]
+                self.assertEqual(1, len(matches))
+
+    def test_related_section_accepts_only_bare_or_aliased_links(self) -> None:
+        fixture = Path(__file__).parent / "fixtures" / "clean-general-note.md"
+        prefix = fixture.read_text(encoding="utf-8").split(
+            RELATED_NOTES_HEADING, 1
+        )[0]
+        for tail in (
+            "[[Первая заметка]]",
+            "[[Первая заметка]]\n[[Вторая заметка|Видимое название]]",
+        ):
+            with self.subTest(tail=tail):
+                violations = MODULE.collect_violations_from_text(
+                    prefix + RELATED_NOTES_HEADING + "\n" + tail + "\n",
+                    expect="source",
+                )
+                self.assertEqual([], violations)
+
+    def test_nonfinal_related_section_respects_caller_option(self) -> None:
+        fixture = Path(__file__).parent / "fixtures" / "clean-general-note.md"
+        content = fixture.read_text(encoding="utf-8") + (
+            "# Следующий раздел\nОбычный текст следующего раздела.\n"
+        )
+        for require_final in (False, True):
+            with self.subTest(require_final=require_final):
+                violations = MODULE.collect_violations_from_text(
+                    content,
+                    expect="source",
+                    require_related_section_final=require_final,
+                )
+                if require_final:
+                    self.assertIn(
+                        "closing.related-section-not-final",
+                        {v.code for v in violations},
+                    )
+                else:
+                    self.assertEqual([], violations)
+
+    def test_nonfinal_related_section_still_rejects_own_non_link_content(self) -> None:
+        fixture = Path(__file__).parent / "fixtures" / "clean-general-note.md"
+        prefix = fixture.read_text(encoding="utf-8").split(
+            RELATED_NOTES_HEADING, 1
+        )[0]
+        for invalid_line in (
+            "Пояснение внутри раздела ссылок.",
+            "[[Первая заметка]] — пояснение",
+            "## Вложенный подраздел",
+        ):
+            with self.subTest(line=invalid_line):
+                content = (
+                    prefix + RELATED_NOTES_HEADING
+                    + "\n[[Первая заметка]]\n" + invalid_line
+                    + "\n# Следующий раздел\nОбычный текст.\n"
+                )
+                violations = MODULE.collect_violations_from_text(
+                    content,
+                    expect="source",
+                    require_related_section_final=False,
+                )
+                self.assertEqual(
+                    ["closing.non-link-content"],
+                    [v.code for v in violations],
+                )
+
+    def test_note_without_related_section_is_valid(self) -> None:
+        fixture = Path(__file__).parent / "fixtures" / "clean-general-note.md"
+        content = fixture.read_text(encoding="utf-8").split(
+            RELATED_NOTES_HEADING, 1
+        )[0]
+        self.assertEqual(
+            [], MODULE.collect_violations_from_text(content, expect="source")
+        )
+
     def test_source_note_intro_must_not_start_with_source_artifact_reporting(self) -> None:
         content = f"""---
 title: Тест de-meta intro
