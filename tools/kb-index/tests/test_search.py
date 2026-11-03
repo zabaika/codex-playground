@@ -64,7 +64,7 @@ class SearchTests(unittest.TestCase):
             )
             db_path = root / "index.sqlite"
             state_path = root / "state.json"
-            scope = IndexScope(include_roots=['Ideas'], exclude_roots=['Templates'], exclude_globs=[])
+            scope = IndexScope(include_roots=['Ideas'], exclude_roots=['Templates'], exclude_globs=[], file_extensions=['.md'])
             build_or_update_index(root, db_path, state_path, scope)
             results = search_index(
                 db_path,
@@ -100,7 +100,7 @@ class SearchTests(unittest.TestCase):
             )
             db_path = root / "index.sqlite"
             state_path = root / "state.json"
-            scope = IndexScope(include_roots=['Ideas'], exclude_roots=['Templates'], exclude_globs=[])
+            scope = IndexScope(include_roots=['Ideas'], exclude_roots=['Templates'], exclude_globs=[], file_extensions=['.md'])
             build_or_update_index(root, db_path, state_path, scope)
             results = search_index(
                 db_path,
@@ -135,7 +135,7 @@ class SearchTests(unittest.TestCase):
             )
             db_path = root / "index.sqlite"
             state_path = root / "state.json"
-            scope = IndexScope(include_roots=['Ideas'], exclude_roots=['Templates'], exclude_globs=[])
+            scope = IndexScope(include_roots=['Ideas'], exclude_roots=['Templates'], exclude_globs=[], file_extensions=['.md'])
             build_or_update_index(root, db_path, state_path, scope)
             results = search_index(
                 db_path,
@@ -177,7 +177,7 @@ class SearchTests(unittest.TestCase):
             )
             db_path = root / "index.sqlite"
             state_path = root / "state.json"
-            scope = IndexScope(include_roots=['Ideas'], exclude_roots=['Templates'], exclude_globs=[])
+            scope = IndexScope(include_roots=['Ideas'], exclude_roots=['Templates'], exclude_globs=[], file_extensions=['.md'])
             build_or_update_index(root, db_path, state_path, scope)
             results = search_index(
                 db_path,

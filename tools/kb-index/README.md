@@ -83,7 +83,7 @@ The CLI reads `config/runtime.local.toml` first. Explicit CLI arguments may over
 
 Main config areas:
 
-- vault scope through `include_roots`, `exclude_roots`, and `exclude_globs`
+- vault scope through `file_extensions`, `include_roots`, `exclude_roots`, and `exclude_globs`
 - retrieval defaults and ranking weights
 - note-type weights and exact-title bonuses
 - scheduled auto-update under `[auto_update]`
@@ -156,9 +156,12 @@ Use it when you need to:
 
 The indexing corpus is defined in `config/runtime.local.toml` through:
 
+- `file_extensions`
 - `include_roots`
 - `exclude_roots`
 - `exclude_globs`
+
+Only configured extensions are scanned. Files are parsed as UTF-8 text with Markdown metadata; adding an extension does not add a converter for that format. An empty extension list selects no files.
 
 Auto-update scheduling is also configured in `config/runtime.local.toml` under `[auto_update]`.
 

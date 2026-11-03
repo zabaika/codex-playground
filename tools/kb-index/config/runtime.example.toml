@@ -36,9 +36,14 @@ term_signal = 'TERM'
 kill_signal = 'KILL'
 
 [scope]
+# Any UTF-8 text file extension, e.g. '.md', '.markdown', '.txt'; case-sensitive.
+file_extensions = ['.md']
+# Recursively scan only these vault-relative folders.
 include_roots = ['Ideas', 'Daily notes']
+# Skip these paths and all their descendants within the included roots.
 exclude_roots = ['.obsidian', 'Templates', 'Ideas/attachments']
-exclude_globs = ['*.canvas', '*.png', '*.jpg', '*.jpeg', '*.gif', '*.pdf', '*.webp', '*.csv', '*.xlsx']
+# Skip files matching glob patterns, e.g. ['draft-*.md', '*.private.md'].
+exclude_globs = []
 
 [retrieval]
 # Default number of note candidates returned when --limit is not provided.

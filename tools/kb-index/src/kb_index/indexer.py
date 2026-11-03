@@ -19,7 +19,9 @@ def iter_note_paths(vault_root: Path, scope: IndexScope) -> list[Path]:
         root = vault_root / directory
         if not root.exists():
             continue
-        for path in root.rglob('*.md'):
+        for path in root.rglob('*'):
+            if path.suffix not in scope.file_extensions or not path.is_file():
+                continue
             rel = path.relative_to(vault_root)
             if any(rel == excluded or excluded in rel.parents for excluded in exclude_roots):
                 continue
@@ -92,6 +94,7 @@ def build_or_update_index(vault_root: Path, db_path: Path, state_path: Path, sco
                 'include_roots': scope.include_roots,
                 'exclude_roots': scope.exclude_roots,
                 'exclude_globs': scope.exclude_globs,
+                'file_extensions': scope.file_extensions,
             },
             'last_error': None,
         }
@@ -112,6 +115,7 @@ def build_or_update_index(vault_root: Path, db_path: Path, state_path: Path, sco
                 'include_roots': scope.include_roots,
                 'exclude_roots': scope.exclude_roots,
                 'exclude_globs': scope.exclude_globs,
+                'file_extensions': scope.file_extensions,
             },
             'last_error': str(exc),
         }

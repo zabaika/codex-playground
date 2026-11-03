@@ -71,6 +71,7 @@ def cmd_status(args: argparse.Namespace) -> int:
         'include_roots': scope.include_roots,
         'exclude_roots': scope.exclude_roots,
         'exclude_globs': scope.exclude_globs,
+        'file_extensions': scope.file_extensions,
     }
     payload['configured_ranking'] = {
         'weights': ranking.weights,

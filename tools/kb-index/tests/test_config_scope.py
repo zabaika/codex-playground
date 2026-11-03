@@ -4,11 +4,51 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
 
-from kb_index.config import load_runtime_config
-from kb_index.indexer import iter_note_paths
+from kb_index.config import IndexScope, load_runtime_config
+from kb_index.indexer import build_or_update_index, iter_note_paths
 
 
 class ConfigScopeTests(unittest.TestCase):
+    def test_file_extensions_and_exclusions(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            (root / 'Ideas').mkdir()
+            (root / 'Ideas' / 'Nested').mkdir()
+            (root / 'Ideas' / 'Directory.md').mkdir()
+            for name in ('One.md', 'Nested/Two.txt', 'draft-three.txt', 'Skip.csv', 'Upper.MD'):
+                (root / 'Ideas' / name).write_text('Text', encoding='utf-8')
+            scope = IndexScope(
+                include_roots=['Ideas'], exclude_roots=[],
+                exclude_globs=['draft-*.txt'], file_extensions=['.md', '.txt'],
+            )
+            paths = iter_note_paths(root, scope)
+            self.assertEqual(
+                [str(path.relative_to(root)) for path in paths],
+                ['Ideas/Nested/Two.txt', 'Ideas/One.md'],
+            )
+            db_path = root / 'index.sqlite'
+            state_path = root / 'state.json'
+            result = build_or_update_index(root, db_path, state_path, scope)
+            self.assertEqual(result['updated_notes_count'], 2)
+            self.assertEqual(result['scope']['file_extensions'], ['.md', '.txt'])
+            scope.file_extensions = ['.txt']
+            result = build_or_update_index(root, db_path, state_path, scope)
+            self.assertEqual(result['scanned_notes_count'], 1)
+            self.assertEqual(result['deleted_notes_count'], 1)
+            scope.file_extensions = []
+            self.assertEqual(iter_note_paths(root, scope), [])
+
+    def test_file_extensions_is_required(self) -> None:
+        example = Path(__file__).resolve().parents[1] / 'config/runtime.example.toml'
+        with TemporaryDirectory() as tmp_dir:
+            config_path = Path(tmp_dir) / 'runtime.toml'
+            config_path.write_text(
+                example.read_text().replace("file_extensions = ['.md']\n", ''),
+                encoding='utf-8',
+            )
+            with self.assertRaisesRegex(KeyError, 'file_extensions'):
+                load_runtime_config(config_path)
+
     def test_scope_is_loaded_from_config(self) -> None:
         with TemporaryDirectory() as tmp_dir:
             root = Path(tmp_dir)
@@ -30,6 +70,7 @@ class ConfigScopeTests(unittest.TestCase):
                 "term_signal = 'TERM'\n"
                 "kill_signal = 'KILL'\n\n"
                 "[scope]\n"
+                "file_extensions = ['.md']\n"
                 "include_roots = ['A', 'B']\n"
                 "exclude_roots = ['Templates', 'Ideas/attachments']\n"
                 "exclude_globs = ['*.canvas']\n\n"
@@ -64,6 +105,7 @@ class ConfigScopeTests(unittest.TestCase):
                 encoding='utf-8',
             )
             config = load_runtime_config(config_path)
+            self.assertEqual(config.scope.file_extensions, ['.md'])
             self.assertEqual(config.scope.include_roots, ['A', 'B'])
             self.assertEqual(config.scope.exclude_roots, ['Templates', 'Ideas/attachments'])
             self.assertEqual(config.scope.exclude_globs, ['*.canvas'])
@@ -125,6 +167,7 @@ class ConfigScopeTests(unittest.TestCase):
                 "term_signal = 'TERM'\n"
                 "kill_signal = 'KILL'\n\n"
                 "[scope]\n"
+                "file_extensions = ['.md']\n"
                 "include_roots = ['Ideas']\n"
                 "exclude_roots = ['Templates', 'Ideas/attachments']\n"
                 "exclude_globs = []\n\n"

@@ -18,7 +18,7 @@ class StateTests(unittest.TestCase):
             (root / 'Ideas' / 'Alpha.md').write_text('Alpha body\n', encoding='utf-8')
             db_path = root / 'index.sqlite'
             state_path = root / 'state.json'
-            scope = IndexScope(include_roots=['Ideas'], exclude_roots=['Templates'], exclude_globs=[])
+            scope = IndexScope(include_roots=['Ideas'], exclude_roots=['Templates'], exclude_globs=[], file_extensions=['.md'])
 
             payload = build_or_update_index(root, db_path, state_path, scope)
             state = json.loads(state_path.read_text(encoding='utf-8'))
@@ -35,7 +35,7 @@ class StateTests(unittest.TestCase):
             note_path.write_text('Alpha body\n', encoding='utf-8')
             db_path = root / 'index.sqlite'
             state_path = root / 'state.json'
-            scope = IndexScope(include_roots=['Ideas'], exclude_roots=['Templates'], exclude_globs=[])
+            scope = IndexScope(include_roots=['Ideas'], exclude_roots=['Templates'], exclude_globs=[], file_extensions=['.md'])
 
             first_state = build_or_update_index(root, db_path, state_path, scope)
 

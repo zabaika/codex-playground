@@ -13,6 +13,7 @@ class IndexScope:
     include_roots: list[str]
     exclude_roots: list[str]
     exclude_globs: list[str]
+    file_extensions: list[str]
 
 
 @dataclass(slots=True)
@@ -108,6 +109,7 @@ def load_runtime_config(config_path: Path | None = None) -> RuntimeConfig:
         include_roots=_as_list(_require_value(scope_data, 'include_roots')),
         exclude_roots=_as_list(_require_value(scope_data, 'exclude_roots')),
         exclude_globs=_as_list(_require_value(scope_data, 'exclude_globs')),
+        file_extensions=_as_list(_require_value(scope_data, 'file_extensions')),
     )
     ranking_data = _require_mapping(data, 'ranking')
     ranking = RankingConfig(

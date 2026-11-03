@@ -33,7 +33,7 @@ class TagLookupTests(unittest.TestCase):
             )
             db_path = root / 'index.sqlite'
             state_path = root / 'state.json'
-            scope = IndexScope(include_roots=['Ideas'], exclude_roots=['Templates'], exclude_globs=[])
+            scope = IndexScope(include_roots=['Ideas'], exclude_roots=['Templates'], exclude_globs=[], file_extensions=['.md'])
             build_or_update_index(root, db_path, state_path, scope)
 
             results = list_tags_index(db_path)
@@ -55,7 +55,7 @@ class TagLookupTests(unittest.TestCase):
             )
             db_path = root / 'index.sqlite'
             state_path = root / 'state.json'
-            scope = IndexScope(include_roots=['Ideas'], exclude_roots=['Templates'], exclude_globs=[])
+            scope = IndexScope(include_roots=['Ideas'], exclude_roots=['Templates'], exclude_globs=[], file_extensions=['.md'])
             build_or_update_index(root, db_path, state_path, scope)
 
             results = list_tags_index(db_path, tag='ai-governance')
@@ -80,7 +80,7 @@ class TagLookupTests(unittest.TestCase):
             )
             db_path = root / 'index.sqlite'
             state_path = root / 'state.json'
-            scope = IndexScope(include_roots=['Ideas'], exclude_roots=['Templates'], exclude_globs=[])
+            scope = IndexScope(include_roots=['Ideas'], exclude_roots=['Templates'], exclude_globs=[], file_extensions=['.md'])
             build_or_update_index(root, db_path, state_path, scope)
 
             results = list_tags_index(db_path, prefix='developer-')
