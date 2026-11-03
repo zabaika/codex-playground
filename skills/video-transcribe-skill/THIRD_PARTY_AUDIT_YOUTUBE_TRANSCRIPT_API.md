@@ -54,6 +54,55 @@ and [wheel compatibility tags](https://packaging.python.org/en/latest/specificat
 Installation and runtime compatibility are checked separately by the local
 install-contract and runner regression suites.
 
+## charset-normalizer native wheel revision (2026-11-03)
+
+Replaces the previous pure-Python `charset-normalizer==3.4.6` wheel with the
+unmodified official `charset-normalizer==3.5.2` wheel. This revision was verified
+in an isolated installation, then installed into the working Codex runtime
+through the canonical installer on 2026-11-03. Actual-runtime checks confirm the
+version, native imports, decoding and fixture transcript parsing. Configuration,
+existing data and source/install parity were verified after installation.
+
+- Wheel: `charset_normalizer-3.5.2-cp315-cp315-macosx_10_15_universal2.whl`.
+- Wheel SHA256:
+  `87475fabc8d9996fd9c27debb395e642e8c838d78a00b6e932227a0e06b81e26`.
+- Official source archive SHA256:
+  `39de2a259fc954455c57274dc94c79d5842774e1247a016aff30bc0efed0f4ef`.
+- PyPI metadata permits Python `>=3.7`; the selected wheel specifically requires
+  CPython 3.15, its regular ABI, and macOS 10.15+ universal2. It is not an
+  arbitrary-platform or free-threaded wheel.
+- Verified every wheel RECORD hash and size, and byte identity of all packaged
+  Python sources against the official source archive.
+- Reviewed release notes, public import surface, codec loading and source-diff
+  imports. Version 3.5 changes detection heuristics, caches and optional native
+  compilation from mypyc to Cython; it is not merely a packaging substitution.
+- Both `md` and `cd` native modules contain ARM64 and x86_64 slices. Their Mach-O
+  dependencies reference only the system `libSystem.B.dylib`. Native binary
+  correctness is assessed through provenance and execution, not a binary audit.
+- Six other wheels retain their exact previous bytes, including the locally
+  identified transcript API metadata patch below.
+- The new archive is named separately; the previous audited archive remains
+  available. Manifest and lockfile identify the new archive and wheel hashes.
+  Normal installation remains offline and requires hashes.
+
+Verification on ARM64 CPython 3.15.2:
+
+- 300 upstream tests passed against the extracted official native wheel.
+- 24 skill regression tests passed, including offline bootstrap, dependency
+  preflight, rollback, fixture transcript parsing, runner and path behavior.
+- 8 video-to-Obsidian wrapper tests passed; skill frontmatter validation passed.
+- A separate canonical installer run prepared an isolated Codex installation.
+  Both compiled modules load from that installation. UTF-8, UTF-16 and CP1251
+  round-trip detection and Requests decoding pass. Explicit CP1252 decoding
+  passes; unknown-encoding detection remains heuristic.
+- A short Spanish CP1252 probe is misdetected as CP1250 by both 3.4.6 and 3.5.2,
+  changing `ñ` to `ń`. This is a reproduced baseline limitation, not evidence of
+  a new regression. Perfect encoding detection and performance parity are not
+  claimed. No real video-host or browser-cookie request was used.
+
+Sources: [official release files](https://pypi.org/project/charset-normalizer/3.5.2/#files)
+and the `CHANGELOG.md` included in the official source archive.
+
 ### Locally identified youtube-transcript-api metadata patch
 
 The latest official `youtube-transcript-api==1.2.4` declares

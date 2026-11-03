@@ -39,9 +39,9 @@ primary_package = "youtube-transcript-api"
 primary_version = "1.2.4+py315"
 # Reviewed build provenance only; compatibility is checked from locked wheels.
 build_python = "3.15"
-platform = "any"
-archive = "video-transcribe-skill/youtube-transcript-api-wheels-py315-any.tar.gz"
-sha256 = "05b2b92be177205a11218908f49e9338061ccb73e40b78c8b5f634cba5963684"
+platform = "macosx_10_15_universal2"
+archive = "video-transcribe-skill/youtube-transcript-api-wheels-py315-macos-universal2-cn352.tar.gz"
+sha256 = "d8d03dad400d41667105faa15a8460dc4b88edcb4274db24eefbbd0bdd55a0dc"
 install_subdir = "vendor/youtube-transcript-api/wheels"
 audit_doc = "THIRD_PARTY_AUDIT_YOUTUBE_TRANSCRIPT_API.md"
 local_modifications = true
@@ -67,7 +67,7 @@ version = "2026.2.25"
 
 [[vendor.youtube_transcript_api_wheels.packages]]
 name = "charset-normalizer"
-version = "3.4.6"
+version = "3.5.2"
 
 [[vendor.youtube_transcript_api_wheels.packages]]
 name = "idna"

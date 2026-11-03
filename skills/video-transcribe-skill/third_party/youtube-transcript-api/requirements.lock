@@ -1,7 +1,7 @@
 certifi==2026.2.25 \
   --hash=sha256:027692e4402ad994f1c42e52a4997a9763c646b73e4096e4d5d6db8af1d6f0fa
-charset-normalizer==3.4.6 \
-  --hash=sha256:947cf925bc916d90adba35a64c82aace04fa39b46b52d4630ece166655905a69
+charset-normalizer==3.5.2 \
+  --hash=sha256:87475fabc8d9996fd9c27debb395e642e8c838d78a00b6e932227a0e06b81e26
 defusedxml==0.7.1 \
   --hash=sha256:a352e7e428770286cc899e2542b6cdaedb2b4953ff269a210103ec58f6198a61
 idna==3.11 \

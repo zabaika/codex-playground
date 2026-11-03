@@ -60,8 +60,10 @@ The installer:
 - includes the common runtime bundle and records its validated interpreter
   identity in the generated `.python-runtime.json`
 
-The reviewed wheel set uses pure-Python distributions. Python compatibility
-comes from their metadata, not the manifest's `build_python` provenance field.
+The reviewed wheel set includes official native charset-normalizer extensions
+for CPython on macOS universal2 (ARM64 and x86_64). Other distributions remain
+pure Python. Compatibility comes from wheel tags and metadata, not the
+manifest's `build_python` provenance field.
 Exact reviewed distributions, local modifications and provenance are documented in
 `THIRD_PARTY_AUDIT_YOUTUBE_TRANSCRIPT_API.md` and the lockfile. A new installed
 Python may still require a separately reviewed wheel-set update.
