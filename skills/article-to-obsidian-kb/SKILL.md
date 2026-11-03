@@ -73,6 +73,7 @@ When `structured` mode is explicitly selected, route by [references/structured-n
    - concrete details worth preserving, such as team scope, owned systems, partner functions, named metrics, examples, AI rollout mechanics, build-vs-buy constraints, recommendations, and anti-patterns
    - useful concrete examples, mini-cases, scenarios, before/after transitions, or worked illustrations from the source
    - for each such example, whether it materially improves understanding of a claim, recommendation, anti-pattern, or metric and therefore should survive into the saved note
+   - keep the practical extraction in the shared [coverage record](references/vault-conventions.md#practical-coverage-record), completing its destinations after drafting
 5. Search the configured note roots before drafting any file.
    - If `paths.kb_index_config` is present and the index is healthy, use indexed retrieval first through the canonical external CLI.
    - Derive `KB_INDEX_ROOT` as the parent directory of the directory that contains `paths.kb_index_config`.
@@ -376,9 +377,8 @@ PYTHONPATH=skills/article-to-obsidian-kb/scripts python3 -m unittest discover -s
   - if the draft already has more than `5` body sections, challenge whether every section is earned and distinct before keeping that structure
   - treat this as an early synthesis guardrail, not only as a late cleanup step
 - Before final body-normalization for source-derived notes, and before final compliance for applied concept notes, run the source-supported practicality gate from [references/vault-conventions.md](references/vault-conventions.md).
-  - If source-supported practical signal was flattened or dropped, rewrite before continuing.
-  - If the source lacks enough practical signal, keep the note source-bounded instead of inventing checklists, examples, or implementation steps.
-  - If a late edit changes stable body sections, rerun this gate before the final regression sweep.
+  - Complete its full source-to-note comparison and resolve material losses before showing a preview or diff.
+  - For late edits and final passes, follow the [coverage record's reuse rules](references/vault-conventions.md#practical-coverage-record).
 - Before saving any source-derived note, run the final body-normalization sequence in this order:
   1. apply the de-meta pass from [references/vault-conventions.md](references/vault-conventions.md)
   2. apply semantic link coverage from [references/vault-conventions.md](references/vault-conventions.md), using its relevance and stopping criteria rather than a link-count target
@@ -398,7 +398,7 @@ PYTHONPATH=skills/article-to-obsidian-kb/scripts python3 -m unittest discover -s
   - if the note was manually rewritten, merged, or changed late in the run, re-run the full contract after that late edit
   - if you updated an existing note, run this pass against the whole merged note rather than only the latest fragment
   - re-check the prose for metaphorical or fashionable jargon and prefer literal operational wording; when a term does not name a concrete role, artifact, step, criterion, mechanism, or constraint, rewrite it into one that does
-  - re-run the source-supported practicality gate from [references/vault-conventions.md](references/vault-conventions.md) against the final saved body
+  - verify the [practical coverage record](references/vault-conventions.md#practical-coverage-record) against the whole final saved body, applying its change-scoped source checks
   - run the knowledge-relevance and material-qualification pass from [references/vault-conventions.md](references/vault-conventions.md) across all sections, including dated provenance logs
   - for any non-`concept` note, re-run the section-role pass against the final structure and remove any block that now mostly repeats another section after late rewrites
   - compare `headings.key_theses`, `headings.practice`, and `headings.pitfalls` for cross-section duplication; if an anti-pattern only mirrors an earlier recommendation, rewrite it into a concrete failure mode or remove it

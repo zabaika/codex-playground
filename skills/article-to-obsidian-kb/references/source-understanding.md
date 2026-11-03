@@ -14,7 +14,7 @@ Use this reference before choosing `engineering` or `general`. This pass is rout
   - expert commentary
   - research or article synthesis
 - **Practical signal level.** Classify as `high`, `medium`, or `low` using the source-supported practicality gate in [vault-conventions.md](vault-conventions.md).
-- **Concrete practical anchors to preserve.** Extract actions, checklists, examples, numbers, decision criteria, failure modes, facilitation moves, workflows, constraints, and before/after transitions.
+- **Concrete practical anchors to preserve.** Extract actions, checklists, examples, numbers, decision criteria, failure modes, facilitation moves, workflows, constraints, and before/after transitions into the shared [practical coverage record](vault-conventions.md#practical-coverage-record).
 - **Engineering-term role.** State whether engineering terms are:
   - the core subject
   - examples inside another method

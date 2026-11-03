@@ -41,6 +41,7 @@ Treat the repository copy of `config/runtime.local.toml` as the single editable 
 - uses separate note roots for source-derived notes and concept notes
 - can resolve dedicated structured note roots when `structured` mode is explicitly selected
 - resolves staging and temporary files through `paths.scratch_root`, defaulting to `<project_root>/scratch/article-to-obsidian-kb`
+- keeps a compact scratch [practical coverage record](references/vault-conventions.md#practical-coverage-record) for source-to-note review; the note-contract checker validates formatting and selected literal examples, not semantic completeness
 - can use `paths.project_root` or `CODEX_PLAYGROUND_PROJECT_ROOT` to keep project-local `source` paths relative even when the skill runs from an installed copy under `~/.codex`
 - uses `paths.kb_index_config` as the canonical entry point to `kb-index` when configured
 - never resolves project-local relative paths from the shell cwd
@@ -54,6 +55,7 @@ Treat the repository copy of `config/runtime.local.toml` as the single editable 
 - `scripts/note_schema.py`: shared schema accessor for local Python consumers
 - `scripts/language_terms.py`: shared language-term registry accessor for local Python consumers
 - `scripts/check_note_contract.py`: mechanical note-contract checker
+- `tests/editorial/practicality_cases.md`: source/draft cases for behavioral validation of practical-content preservation and review reuse
 - `scripts/detect_source_route.py`: diagnostic or fallback helper for route checks, not the normal workflow owner
 - `scripts/write_structured_note.py`: explicit structured-note writer for non-source payloads such as `council-verdict`
 - `templates/council-verdict.md.tmpl`: mechanical render-layout for the `council-verdict` structured note

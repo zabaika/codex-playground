@@ -315,7 +315,7 @@ Frontmatter is part of the note schema, not optional decoration.
 
 ## Source-Supported Practicality Gate
 
-Run this pass before final body-normalization for source-derived notes and before final compliance for applied concept notes.
+Apply this gate during extraction and before final body-normalization for source-derived notes or final compliance for applied concept updates. The coverage record below carries its result into the final whole-note passes.
 
 This gate has two obligations in order:
 
@@ -363,6 +363,19 @@ For `low` practical-signal sources:
 For every practical-signal level:
 - Preserve concrete anchors that change how the reader would act, decide, estimate, diagnose, or scope the problem.
 - Do not add decorative detail that does not improve practical understanding.
+
+### Practical Coverage Record
+
+- Keep the practical part of the existing extraction as one compact working record per processed source in scratch, started before drafting and shared across notes touched for that source. Reuse it rather than creating separate extraction, preservation, and completeness summaries. Synthesis or concept-count guidance does not limit useful material extracted from the source.
+- Link each useful action or mechanism to a source locator and, after drafting, its destination passage or a justified exclusion. Carry material conditions, alternatives, example details, and number bases with that action when the source supplies them. A short table such as `source locator → useful detail → destination / exclusion` is sufficient; do not require empty fields or copy source paragraphs.
+- Keep locators tied to the reviewed source and current draft. Reuse the run's existing ledger or fingerprints when available. A line range or short unambiguous anchor is enough for a destination; long headings need not be repeated in each entry.
+- Group repeated stories when they teach the same move. Different decisions, constraints, alternatives, or number bases still need consideration. A detailed table or algorithm can be checked as a group if its distinct actions and conditions are actually compared; a generic assertion that the table survived is insufficient.
+- Obvious filler and repetitions without useful content may be excluded together. Record reasons for substantive or contested exclusions, including unsupported claims and explicit user removals. Do not restore material the user deliberately removed or discard independent useful detail merely to shorten the note.
+- Once the draft exists, compare the whole available source with it before showing any preview or diff. Include endings, questions, tables, examples, and later corrections. Use the source itself, including complete text already in context, rather than checking only the initial record. Add newly discovered material to the same record and repair losses before approval.
+- Judge preservation by function: the destination must retain the useful action, mechanism, application condition, or interpretation of the example or number. A topic name, source citation, or matching word alone does not establish this. An already complete note needs no additions; a source without practical moves needs no invented procedure. Record the review's source scope and any unavailable portions briefly, not per utterance.
+- Perform one full source-to-note comparison for an unchanged source and draft. The note-compliance and regression-sweep passes still review the whole final note, using this record to check retained meaning and current destinations; they do not independently restart the full source comparison.
+- After a meaningful late edit, update affected entries and check their source passages and dependent claims. A punctuation, title, or exact-link correction needs only its applicable checks when meaning is unchanged. Repeat the full comparison when the source changes, review evidence is lost, or a broad rewrite makes the affected scope unreliable. Do not reuse a stale record just because the path stayed the same.
+- An identical destination read-back preserves the source comparison result. Apply the normal saved-note checks without re-extracting the source solely because the artifact was copied. Finish only after known material losses are resolved and substantive exclusions are accounted for; entry counts or mechanical checker success do not prove semantic completeness.
 
 For `general` notes:
 - Fold source-supported examples and cases into the relevant recommendation inside `headings.practice` instead of giving them a standalone dump section.
