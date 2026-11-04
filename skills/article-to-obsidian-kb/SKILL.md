@@ -14,7 +14,7 @@ Turn a source article, transcript, or other long-form text into compact, Russian
 | File | Canonical responsibility |
 | --- | --- |
 | [SKILL.md](SKILL.md) | Workflow entrypoint: load config, understand the source, search vault, decide `update vs create`, choose final route/output shape, apply canonical contracts, run final passes, and format the final user-facing report. |
-| [config/note_schema.yaml](config/note_schema.yaml) | Single source of truth for canonical section-heading strings and note-shape heading identifiers used by the checker, writer, tests, and docs. |
+| [config/note_schema.yaml](config/note_schema.yaml) | Single source of truth for canonical headings, shared note-shape labels, and note-shape heading identifiers used by the checker, writer, tests, and docs. |
 | [references/vault-conventions.md](references/vault-conventions.md) | Single source of truth for final note contract: frontmatter, titles, tags, language, links, spacing, closing section, and final note-shape rules. |
 | [references/update-patterns.md](references/update-patterns.md) | Single source of truth for update behavior: `update vs create`, merge rules, chronology, dated logs, and provenance preservation during rewrites. |
 | [references/source-understanding.md](references/source-understanding.md) | Route-agnostic source-understanding pass used before vault search and final route/output-shape decisions. |

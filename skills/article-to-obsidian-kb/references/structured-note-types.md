@@ -48,7 +48,7 @@ Instead:
 Treat the following section order as the canonical human-readable structure for the final `council-verdict` note:
 
 1. frontmatter
-2. `Разбор решения`
+2. original question introduced by `labels.council_original_question`
 3. optional degraded-run status block
 4. `headings.council_question`
 5. `headings.council_verdict`
@@ -58,8 +58,9 @@ Treat the following section order as the canonical human-readable structure for 
 
 More specific rules:
 
-- `Разбор решения` must preserve the original user question as a fenced `text` block, not as an inline paragraph.
+- The block introduced by `labels.council_original_question` must preserve the original user question as a fenced `text` block, not as an inline paragraph.
 - Show the degraded-run status block only when `run_status.status = degraded`.
+- Use `labels.council_degraded_run` as its marker, followed by the payload's explanation.
 - Keep the verdict section split into these stable subsections:
   - `headings.council_agree`
   - `headings.council_clashes`
@@ -68,8 +69,8 @@ More specific rules:
   - `headings.council_first_step`
 - Render advisor entries under `headings.council_advisor_positions` in a stable per-advisor pattern:
   - `### <Advisor Name>`
-  - `- **Позиция:** ...`
-  - `- **Ключевой вывод:** ...`
+  - a bullet with the bold label `labels.council_advisor_stance`, a colon, and the payload stance
+  - a bullet with the bold label `labels.council_advisor_headline`, a colon, and the payload headline
   - full advisor response body
 - Render peer review under `headings.council_peer_review` as one block per reviewer in stable order.
 - Do not add an extra H1 heading in the note body when the title already exists in frontmatter.

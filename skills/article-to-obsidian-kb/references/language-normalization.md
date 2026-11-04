@@ -5,6 +5,7 @@
 - Notes must read like natural Russian technical prose, not like Russian sentences with random English nouns inserted into them.
 - English is allowed only where it improves precision, searchability, or matches an industry-standard name.
 - Decide whether to keep an English term by semantic class, not by visual appearance alone.
+- Keep skill instructions and template notation in English; English examples do not override the Russian-language requirement for completed notes.
 
 ## Graph Identity Before Language Cleanup
 

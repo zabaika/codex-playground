@@ -331,13 +331,14 @@ code
         self.assertNotIn("Response A", markdown)
 
     def test_report_adds_status_section_for_degraded_runs(self):
+        article_writer = report_renderer.load_article_writer_module()
         with tempfile.TemporaryDirectory() as tmp:
             payload_path = write_temp_payload(Path(tmp), "degraded_payload.json")
             payload = report_renderer.load_payload(payload_path)
             markdown = report_renderer.build_markdown(payload)
 
-        self.assertIn("## Статус прогона", markdown)
-        self.assertIn("Этот прогон был деградированным", markdown)
+        self.assertIn(article_writer.heading("run_status"), markdown)
+        self.assertIn(article_writer.label("council_degraded_run"), markdown)
         self.assertIn("Один советник упал дважды", markdown)
 
     def test_report_rejects_unknown_advisor_in_anonymization_mapping(self):
@@ -488,8 +489,8 @@ code
             self.assertTrue(output_path.exists())
             text = output_path.read_text(encoding="utf-8")
             self.assertIn(str(canonical_payload_path.resolve(strict=False)), text)
-            self.assertIn("## Вердикт совета", text)
-            self.assertIn("## Позиции советников", text)
+            self.assertIn(article_writer.heading("council_verdict"), text)
+            self.assertIn(article_writer.heading("council_advisor_positions"), text)
             self.assertIn("[[#Executor|Executor]]", text)
             self.assertNotIn("**Не режь полезный inbound**", text)
             self.assertNotIn("`Keep bilingual`", text)

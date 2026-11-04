@@ -1,6 +1,7 @@
 import importlib.util
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -36,6 +37,82 @@ class StructuredNoteWriterTests(unittest.TestCase):
     def _valid_council_markdown(self) -> str:
         payload = WRITER.load_payload(FIXTURE_PAYLOAD)
         return WRITER.build_markdown(payload)
+
+    def test_rendering_preserves_payload_prose_and_advisor_names(self) -> None:
+        payload = WRITER.load_payload(FIXTURE_PAYLOAD)
+        before = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+        markdown = WRITER.build_markdown(payload)
+        self.assertIn(f"```text\n{payload['question']}\n```", markdown)
+        self.assertIn(payload["framed_question"], markdown)
+        for advisor in payload["advisors"]:
+            with self.subTest(advisor=advisor["name"]):
+                self.assertIn(f"### {advisor['name']}\n", markdown)
+                self.assertIn(advisor["stance"], markdown)
+                self.assertIn(advisor["headline"], markdown)
+                self.assertIn(advisor["response"], markdown)
+        for target in payload["related_notes"]:
+            self.assertIn(f"[[{target}]]", markdown)
+        self.assertEqual(before, json.dumps(payload, ensure_ascii=False, sort_keys=True))
+
+    def test_schema_overrides_reach_writer_and_checker_without_consumer_edits(self) -> None:
+        payload = WRITER.load_payload(FIXTURE_PAYLOAD)
+        payload["run_status"] = {
+            "status": "degraded", "details": "Проверка владельца подписей."
+        }
+        with tempfile.TemporaryDirectory() as tmpdir:
+            isolated = Path(tmpdir) / "skill"
+            for directory in ("config", "scripts", "templates"):
+                shutil.copytree(
+                    SKILL_DIR / directory, isolated / directory,
+                    ignore=shutil.ignore_patterns("__pycache__", "runtime.local.toml"),
+                )
+            schema_path = isolated / "config" / "note_schema.yaml"
+            schema = json.loads(schema_path.read_text(encoding="utf-8"))
+            schema["headings"]["council_question"] += " — вариант схемы"
+            for key in schema["labels"]:
+                schema["labels"][key] = f"Текст из схемы {key}"
+            schema_path.write_text(json.dumps(schema, ensure_ascii=False), encoding="utf-8")
+            payload_path = isolated / "payload.json"
+            payload_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+            probe = """
+import json
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(sys.argv[1]) / 'scripts'))
+import write_structured_note as writer
+from check_note_contract import collect_violations_from_text
+from note_schema import label
+payload = json.loads(Path(sys.argv[2]).read_text(encoding='utf-8'))
+markdown = writer.build_markdown(payload)
+def codes(text):
+    return [v.code for v in collect_violations_from_text(
+        text, expect='structured-council-verdict',
+        require_intro_before_first_heading=False, check_title_matches_filename=False)]
+invalid = {}
+for key, code in (
+    ('council_original_question', 'structure.invalid-council-opening'),
+    ('council_advisor_stance', 'structure.invalid-advisor-stance-line'),
+    ('council_advisor_headline', 'structure.invalid-advisor-headline-line'),
+):
+    invalid[code] = codes(markdown.replace(label(key), 'Неверная подпись', 1))
+invalid['structure.invalid-degraded-status-marker'] = codes(
+    markdown.replace(label('council_degraded_run'), 'Неверный статус', 1))
+print(json.dumps({
+    'markdown': markdown, 'codes': codes(markdown), 'invalid': invalid,
+}, ensure_ascii=False))
+"""
+            result = subprocess.run(
+                [sys.executable, "-B", "-c", probe, str(isolated), str(payload_path)],
+                capture_output=True, text=True, check=False,
+            )
+            self.assertEqual(0, result.returncode, result.stderr)
+            observed = json.loads(result.stdout)
+            self.assertEqual([], observed["codes"])
+            self.assertIn(schema["headings"]["council_question"], observed["markdown"])
+            for value in schema["labels"].values():
+                self.assertIn(value, observed["markdown"])
+            for expected, findings in observed["invalid"].items():
+                self.assertIn(expected, findings)
 
     def test_writer_requires_explicit_structured_mode(self) -> None:
         result = subprocess.run(
@@ -217,7 +294,7 @@ class StructuredNoteWriterTests(unittest.TestCase):
 
     def test_checker_rejects_broken_advisor_block_shape(self) -> None:
         markdown = self._valid_council_markdown().replace(
-            "- **Позиция:** Keep bilingual\n",
+            f"{CHECKER.COUNCIL_ADVISOR_STANCE_PREFIX}Keep bilingual\n",
             "",
             1,
         )
@@ -257,8 +334,8 @@ class StructuredNoteWriterTests(unittest.TestCase):
             "details": "Короткая причина деградации.",
         }
         markdown = WRITER.build_markdown(payload).replace(
-            "Этот прогон был деградированным.\nКороткая причина деградации.\n",
-            "Этот прогон был деградированным.\n",
+            f"{CHECKER.COUNCIL_DEGRADED_RUN_MESSAGE}\nКороткая причина деградации.\n",
+            f"{CHECKER.COUNCIL_DEGRADED_RUN_MESSAGE}\n",
             1,
         )
         violations = CHECKER.collect_violations_from_text(

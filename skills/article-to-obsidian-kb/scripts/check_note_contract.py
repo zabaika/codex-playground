@@ -24,7 +24,7 @@ from language_terms import (
     named_entity_single_terms,
     role_label_phrases,
 )
-from note_schema import heading, heading_values
+from note_schema import heading, heading_values, label
 
 
 SOURCE_NOTE_TYPES = {"lessons", "general", "operating-model"}
@@ -62,6 +62,10 @@ COUNCIL_RECOMMENDATION_HEADING = heading("council_recommendation")
 COUNCIL_FIRST_STEP_HEADING = heading("council_first_step")
 COUNCIL_ADVISOR_POSITIONS_HEADING = heading("council_advisor_positions")
 COUNCIL_PEER_REVIEW_HEADING = heading("council_peer_review")
+COUNCIL_ORIGINAL_QUESTION_LABEL = label("council_original_question")
+COUNCIL_ADVISOR_STANCE_PREFIX = f"- **{label('council_advisor_stance')}:** "
+COUNCIL_ADVISOR_HEADLINE_PREFIX = f"- **{label('council_advisor_headline')}:** "
+COUNCIL_DEGRADED_RUN_MESSAGE = label("council_degraded_run")
 CANONICAL_HEADINGS = heading_values()
 CANONICAL_LATIN_SINGLE_TERMS = canonical_single_terms() | named_entity_single_terms()
 CANONICAL_LATIN_PHRASES = (
@@ -556,11 +560,11 @@ def _check_council_verdict_shape(body: str) -> list[Violation]:
     ]
     violations.extend(_check_required_headings(body, required_headings))
 
-    if not normalized_body.startswith("Разбор решения:\n```text\n"):
+    if not normalized_body.startswith(f"{COUNCIL_ORIGINAL_QUESTION_LABEL}:\n```text\n"):
         violations.append(
             Violation(
                 "structure.invalid-council-opening",
-                "Council verdict note должен начинаться с `Разбор решения:` и fenced `text` block.",
+                f"Council verdict note должен начинаться с `{COUNCIL_ORIGINAL_QUESTION_LABEL}:` и fenced `text` block.",
                 1,
             )
         )
@@ -568,7 +572,7 @@ def _check_council_verdict_shape(body: str) -> list[Violation]:
         violations.append(
             Violation(
                 "structure.missing-question-code-fence-close",
-                "После блока `Разбор решения` должен быть закрывающий fenced block.",
+                f"После блока `{COUNCIL_ORIGINAL_QUESTION_LABEL}` должен быть закрывающий fenced block.",
                 1,
             )
         )
@@ -678,11 +682,11 @@ def _check_council_verdict_degraded_status_block(body: str) -> list[Violation]:
         )
         return violations
     marker_line_no, marker_text = non_empty[0]
-    if marker_text.strip() != "Этот прогон был деградированным.":
+    if marker_text.strip() != COUNCIL_DEGRADED_RUN_MESSAGE:
         violations.append(
             Violation(
                 "structure.invalid-degraded-status-marker",
-                "Первой строкой degraded-status блока должна быть `Этот прогон был деградированным.`",
+                f"Первой строкой degraded-status блока должна быть `{COUNCIL_DEGRADED_RUN_MESSAGE}`",
                 marker_line_no,
             )
         )
@@ -725,20 +729,26 @@ def _check_council_verdict_advisor_blocks(body: str) -> list[Violation]:
             )
             return violations
         found_block = True
-        if idx + 1 >= len(section_lines) or not section_lines[idx + 1].startswith("- **Позиция:** "):
+        if (
+            idx + 1 >= len(section_lines)
+            or not section_lines[idx + 1].startswith(COUNCIL_ADVISOR_STANCE_PREFIX)
+        ):
             violations.append(
                 Violation(
                     "structure.invalid-advisor-stance-line",
-                    "После advisor heading должна идти строка `- **Позиция:** ...`.",
+                    f"После advisor heading должна идти строка `{COUNCIL_ADVISOR_STANCE_PREFIX}...`.",
                     absolute_line + 1,
                 )
             )
             return violations
-        if idx + 2 >= len(section_lines) or not section_lines[idx + 2].startswith("- **Ключевой вывод:** "):
+        if (
+            idx + 2 >= len(section_lines)
+            or not section_lines[idx + 2].startswith(COUNCIL_ADVISOR_HEADLINE_PREFIX)
+        ):
             violations.append(
                 Violation(
                     "structure.invalid-advisor-headline-line",
-                    "После строки позиции должна идти строка `- **Ключевой вывод:** ...`.",
+                    f"После строки позиции должна идти строка `{COUNCIL_ADVISOR_HEADLINE_PREFIX}...`.",
                     absolute_line + 2,
                 )
             )

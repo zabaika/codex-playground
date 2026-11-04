@@ -20,7 +20,7 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 from check_note_contract import collect_violations, collect_violations_from_text
-from note_schema import heading
+from note_schema import heading, label
 from runtime_paths import load_toml, resolve_project_root as resolve_project_root_path
 
 
@@ -35,6 +35,10 @@ COUNCIL_RECOMMENDATION_HEADING = heading("council_recommendation")
 COUNCIL_FIRST_STEP_HEADING = heading("council_first_step")
 COUNCIL_ADVISOR_POSITIONS_HEADING = heading("council_advisor_positions")
 COUNCIL_PEER_REVIEW_HEADING = heading("council_peer_review")
+COUNCIL_ORIGINAL_QUESTION_LABEL = label("council_original_question")
+COUNCIL_ADVISOR_STANCE_LABEL = label("council_advisor_stance")
+COUNCIL_ADVISOR_HEADLINE_LABEL = label("council_advisor_headline")
+COUNCIL_DEGRADED_RUN_MESSAGE = label("council_degraded_run")
 
 
 def resolve_council_payload_schema_script() -> Path:
@@ -189,7 +193,7 @@ def render_run_status_block(payload: dict[str, object]) -> str:
     if run_status["status"] != "degraded":
         return ""
     details = text_block(run_status["details"]) if run_status["details"] else ""
-    lines = [RUN_STATUS_HEADING, "Этот прогон был деградированным."]
+    lines = [RUN_STATUS_HEADING, COUNCIL_DEGRADED_RUN_MESSAGE]
     if details:
         lines.append(details)
     return "\n".join(lines)
@@ -199,8 +203,8 @@ def render_advisor_blocks(payload: dict[str, object]) -> str:
     lines: list[str] = []
     for advisor in payload["advisors"]:
         lines.append(f"### {advisor['name']}")
-        lines.append(f"- **Позиция:** {advisor['stance']}")
-        lines.append(f"- **Ключевой вывод:** {advisor['headline']}")
+        lines.append(f"- **{COUNCIL_ADVISOR_STANCE_LABEL}:** {advisor['stance']}")
+        lines.append(f"- **{COUNCIL_ADVISOR_HEADLINE_LABEL}:** {advisor['headline']}")
         lines.extend(text_block(advisor["response"]).splitlines())
         lines.append("")
     if lines and lines[-1] == "":
@@ -211,7 +215,7 @@ def render_advisor_blocks(payload: dict[str, object]) -> str:
 def render_peer_review_blocks(payload: dict[str, object]) -> str:
     reviews = payload["peer_reviews"]
     if not reviews:
-        return "Секция peer review не была сохранена отдельно."
+        return "Раздел взаимной проверки не был сохранён отдельно."
     lines: list[str] = []
     for review in reviews:
         lines.append(f"### {review['reviewer']}")
@@ -245,6 +249,7 @@ def build_markdown(payload: dict[str, object], config: dict[str, object] | None 
     template = (TEMPLATE_DIR / "council-verdict.md.tmpl").read_text(encoding="utf-8")
     rendered = template.format(
         frontmatter=render_frontmatter(payload, config=config),
+        original_question_label=COUNCIL_ORIGINAL_QUESTION_LABEL,
         council_question_heading=COUNCIL_QUESTION_HEADING,
         council_verdict_heading=COUNCIL_VERDICT_HEADING,
         council_agree_heading=COUNCIL_AGREE_HEADING,

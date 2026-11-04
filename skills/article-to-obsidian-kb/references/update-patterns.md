@@ -50,7 +50,7 @@ Canonical section-heading strings live in [config/note_schema.yaml](../config/no
 - For evidence-only reinforcement, do not add the new source URL to the existing note's frontmatter `source`.
 - Keep the new source URL in the new source-derived note that was created from that material.
 - In the existing note's dated log bullet, preserve provenance by linking to that source-derived note. The provenance chain should be: existing note -> dated log bullet -> source-derived note -> source-derived note frontmatter `source`.
-- A retained dated entry may also link relevant concept notes under [semantic link coverage](vault-conventions.md#semantic-link-coverage). Concept links supplement the source link; they do not replace it or require updating those concepts. The examples below show an optional `see also` clause: omit the whole clause when no useful concept link remains. There is no concept-link quota.
+- A retained dated entry may also link relevant concept notes under [semantic link coverage](vault-conventions.md#semantic-link-coverage). Concept links supplement the source link; they do not replace it or require updating those concepts. The examples below show an optional `см. также` clause: omit the whole clause when no useful concept link remains. There is no concept-link quota.
 - Extend an existing note's frontmatter `source` only when the new source becomes part of that note's primary identity: for example, when the note itself is being rewritten as a source-derived artifact, when it absorbs or replaces another source-derived note, or when a structural merge makes the source materially responsible for the stable body rather than just a later confirmation.
 
 ## Lessons Notes
@@ -63,7 +63,7 @@ Canonical section-heading strings live in [config/note_schema.yaml](../config/no
 Bullet format:
 
 ```markdown
-- YYYY-MM-DD: <concrete new observation, case, measurement, or changed condition>; [[<source-derived note title>]]; see also [[Concept A]], [[Concept B]].
+- YYYY-MM-DD: <concrete new observation, case, measurement, or changed condition>; [[<source-derived note title>]]; см. также [[Concept A]], [[Concept B]].
 ```
 
 ## General Notes
@@ -77,7 +77,7 @@ Bullet format:
 Bullet format:
 
 ```markdown
-- YYYY-MM-DD: <useful dated observation not already clear from the stable body>; [[<source-derived note title>]]; see also [[Concept A]], [[Concept B]].
+- YYYY-MM-DD: <useful dated observation not already clear from the stable body>; [[<source-derived note title>]]; см. также [[Concept A]], [[Concept B]].
 ```
 
 ## Operating-Model Notes
@@ -92,7 +92,7 @@ Bullet format:
 Bullet format:
 
 ```markdown
-- YYYY-MM-DD: <concrete operating observation, case, or changed condition>; [[<source-derived note title>]]; see also [[Concept A]], [[Concept B]].
+- YYYY-MM-DD: <concrete operating observation, case, or changed condition>; [[<source-derived note title>]]; см. также [[Concept A]], [[Concept B]].
 ```
 
 ## Concept Notes
@@ -112,7 +112,7 @@ Bullet format:
 Bullet format:
 
 ```markdown
-- YYYY-MM-DD: confirmed in [[<article note title>]]; see also [[Concept A]], [[Concept B]].
+- YYYY-MM-DD: <useful new observation>; [[<source-derived note title>]]; см. также [[Concept A]], [[Concept B]].
 ```
 
 ## Link Hygiene

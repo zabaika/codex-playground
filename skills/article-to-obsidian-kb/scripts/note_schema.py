@@ -18,6 +18,7 @@ def load_note_schema() -> dict[str, object]:
 
 SCHEMA = load_note_schema()
 HEADINGS = SCHEMA["headings"]
+LABELS = SCHEMA["labels"]
 NOTE_SHAPES = SCHEMA["note_shapes"]
 
 
@@ -25,6 +26,13 @@ def heading(key: str) -> str:
     value = HEADINGS.get(key)
     if not isinstance(value, str) or not value.strip():
         raise KeyError(f"Unknown note-schema heading key: {key}")
+    return value
+
+
+def label(key: str) -> str:
+    value = LABELS.get(key)
+    if not isinstance(value, str) or not value.strip():
+        raise KeyError(f"Unknown note-schema label key: {key}")
     return value
 
 

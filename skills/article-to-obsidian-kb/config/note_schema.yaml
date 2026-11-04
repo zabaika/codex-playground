@@ -28,6 +28,12 @@
     "council_advisor_positions": "## Позиции советников",
     "council_peer_review": "## Взаимная проверка"
   },
+  "labels": {
+    "council_original_question": "Разбор решения",
+    "council_advisor_stance": "Позиция",
+    "council_advisor_headline": "Ключевой вывод",
+    "council_degraded_run": "Этот прогон был деградированным."
+  },
   "note_shapes": {
     "concept": {
       "compact": [

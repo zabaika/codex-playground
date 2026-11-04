@@ -50,7 +50,7 @@ Treat the repository copy of `config/runtime.local.toml` as the single editable 
 ## Main Files
 
 - `SKILL.md`: runtime workflow entrypoint
-- `config/note_schema.yaml`: single source of truth for canonical section headings used by the note contract
+- `config/note_schema.yaml`: single source of truth for canonical section headings and shared note-shape labels used by the note contract
 - `config/language_terms.yaml`: curated registry for canonical English terms, role labels, named entities, and discouraged English prose shorthand used by language checks
 - `scripts/note_schema.py`: shared schema accessor for local Python consumers
 - `scripts/language_terms.py`: shared language-term registry accessor for local Python consumers
@@ -75,5 +75,5 @@ Treat the repository copy of `config/runtime.local.toml` as the single editable 
 
 - Keep this README operator-facing and brief.
 - Keep detailed workflow and note-contract rules in `SKILL.md` and canonical reference files.
-- Treat `config/note_schema.yaml` as the canonical owner for schema-defined headings. Do not translate or locally rename those headings in individual notes; change the schema first and migrate consumers together.
+- Treat `config/note_schema.yaml` as the canonical owner for schema-defined headings and shared note-shape labels. Do not translate or locally rename those values in consumers; change the schema first and migrate consumers together.
 - Treat `config/language_terms.yaml` as the owner for disputed or high-value English-term classes that need mechanical handling. It is still not a complete dictionary of all allowed English vocabulary; the broader semantic rules and guidance examples live in the reference docs.
