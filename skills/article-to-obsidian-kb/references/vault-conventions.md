@@ -218,7 +218,12 @@ Frontmatter is part of the note schema, not optional decoration.
 - Store durable subject knowledge in the note, including dated logs. Keep extraction diagnostics, recognition problems, omitted uncertain names, and inventories of missing source details in scratch artifacts or, when they affect the user's next action, in the processing report.
 - Keep a qualification only when removing it would change the claim's meaning, the interpretation of a number, or the conditions for applying a recommendation. Place the shortest necessary qualification next to that claim; prefer an explicit scope or status over a separate defensive disclaimer. Preserve distinctions such as a pilot versus an implemented process, a target versus an achieved result, and a change in throughput versus a change in business value.
 - Do not add general assurances against hypothetical overinterpretation or list absent measurements that the retained claims do not require. If a claim depends on missing or uncertain information, narrow or omit the claim rather than keeping a confident assertion with a generic disclaimer.
-- During final editorial review, apply a knowledge-relevance and material-qualification pass to every note section: ask what knowledge, decision criterion, or necessary attribution the reader would lose if each sentence were removed. Remove sentences that add none of these. This semantic pass is mandatory; mechanical checker success does not establish it.
+- During final editorial review, apply a knowledge-relevance and material-qualification pass to every note section: ask what knowledge, decision criterion, or necessary attribution the reader would lose if each sentence were removed. Remove sentences that add none of these. Within this existing pass:
+  - Delete a warning that only repeats a nearby recommendation.
+  - If a warning contains a useful action, condition, or example, integrate that detail into the relevant recommendation or table row instead of keeping a separate general assurance.
+  - Retain material qualifications under the preceding rule, next to the claim they constrain.
+  - Preserve explanatory distinctions when the source explains a concept; do not invent actions to replace them.
+  - Judge the sentence's function, not the presence of negative words. This semantic pass is mandatory; mechanical checker success does not establish it. It does not require another full source review.
 - Before saving any non-`concept` note, check that each section has a distinct informational role; if two sections mostly carry the same signal, merge them or delete the weaker one.
 - Do not create a section only because the schema supports that section family; include it only when the source gives enough independent material for it.
 - Use schema-owned section families when they fit the source cleanly:
@@ -247,7 +252,7 @@ Frontmatter is part of the note schema, not optional decoration.
   - `headings.practice` should contain actions, documents, criteria, algorithms, and source-supported operational choices
   - nested checklist or algorithm blocks under `headings.practice` should be short final checks or route-selection steps, not a second explanation of the surrounding practice bullets
   - `headings.pitfalls` should name failure modes, false shortcuts, and consequences, not repeat practice bullets in negative form
-  - `headings.evidence` should record the dated source of the signal, not retell the stable-body conclusions
+  - `headings.evidence` follows [Evidence Content](#content-of-evidence); do not use it as a bibliography or retell the stable body
 - When a nested checklist or algorithm block is warranted, every bullet in that block must start with a short bold lead-in in the form `- **Short label.** Action or criterion.`
 - If a nested checklist or algorithm repeats the surrounding practice section, keep the concise check in the nested block and move the explanation, caveat, or example into the surrounding practice bullet.
 - In `lessons` notes, merge overlapping lessons instead of keeping two nearby principles with different wording.
@@ -296,7 +301,7 @@ Frontmatter is part of the note schema, not optional decoration.
 - This includes phrases such as `источник показывает`, `автор выделяет`, or `в транскрипте` when they can be rewritten as direct knowledge.
 - Do not replace source-first phrasing with empty discourse placeholders such as `здесь`, `тут`, `в этом`, or similar stand-ins when they no longer point to a real object; rewrite the sentence so the real subject is named directly.
 - Keep provenance in frontmatter and use source mentions in the body only when the source itself is a useful case, scenario, or comparison rather than a process footnote.
-- In schema-defined dated log sections such as `headings.evidence`, `headings.additional_insights`, and `headings.observed_practices`, keep source-type labels such as `статья`, `подкаст`, or `выпуск` when needed for provenance. These sections still require the knowledge-relevance and material-qualification pass above.
+- Dated log sections remain subject to the knowledge-relevance and material-qualification pass above. Source labels, titles, authors, and processing phrases do not constitute an observation; retain attribution only when it changes interpretation of a useful claim.
 - Before finalizing a source-derived note, apply the source-supported practicality gate below and check whether the draft has flattened the source into generic statements.
 - Keep `headings.key_theses`, `headings.practice`, and `headings.pitfalls` functionally distinct.
 - `headings.key_theses` should carry the main ideas, distinctions, and decision logic.
@@ -312,6 +317,15 @@ Frontmatter is part of the note schema, not optional decoration.
 - Do not rewrite several concrete observations into one abstract sentence if that would hide how the system actually operates.
 - For source-derived notes, prefer short sections with 2-4 bullets when the source provides multiple concrete points for the same topic.
 - Prefer Russian lesson headings and Russian section bullets unless the English wording is the canonical name of a framework, metric, tool, or code-level term.
+
+## Content Of Evidence
+
+- Use `headings.evidence` for substantive dated observations: a concrete case, measurement, confirmation with new detail, changed condition, or contradiction that adds knowledge beyond the stable body.
+- Do not create an entry merely because a source was processed. A title, author list, source description, or phrase such as "confirmed by an article" is insufficient.
+- In a new single-source note, omit the section when all useful material is already in the body. Remove the heading when no useful entry remains; do not invent content to keep it.
+- Keep primary source URLs in frontmatter. Do not place external links or URLs in `headings.evidence`, including scheme-relative destinations such as `//host/path`; source-note wikilinks and optional concept links follow [Dated-Log Reinforcement Updates](update-patterns.md#dated-log-reinforcement-updates).
+- Before removing a legacy provenance-only entry, preserve its source in frontmatter or a linked source-derived note. Respect user removals and retain useful dated observations.
+- Date retained entries under Source Date Resolution and keep the existing chronology and multi-source date checks. Do not replace an existing dated observation with a bibliography or duplicate stable-body content to satisfy a logging quota.
 
 ## Source-Supported Practicality Gate
 
@@ -428,8 +442,12 @@ If the gate cannot produce more practical material without unsupported invention
 
 ## Spacing Rules
 
-- Do not leave an empty line after headings.
-- Do not leave an empty line before lists.
+- Do not add a blank line before a top-level ATX heading solely for visual spacing. This applies after ordinary prose, a list, a table, a closed code fence, or another heading; keep block delimiters intact. Obsidian controls heading spacing through the theme.
+- Separate a pipe table from preceding content with one blank line. No extra blank line is required at the start of the document.
+- After a table, separate following content with one blank line, except that an ATX heading (`#` through `######`) may follow directly. A blank line before that heading remains optional; none is required at the end of the document.
+- A table starts with a header and delimiter row; a pipe in ordinary prose or a fenced code example does not create a table for these checks.
+- Do not leave an empty line after headings, except directly before a table.
+- Do not leave an empty line before lists, except directly after a table.
 - Do not leave empty lines between list items.
 - Do not use double blank lines.
 - Use at most one blank line between major sections.

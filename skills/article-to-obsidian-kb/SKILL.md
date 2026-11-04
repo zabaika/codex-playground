@@ -400,6 +400,7 @@ PYTHONPATH=skills/article-to-obsidian-kb/scripts python3 -m unittest discover -s
   - re-check the prose for metaphorical or fashionable jargon and prefer literal operational wording; when a term does not name a concrete role, artifact, step, criterion, mechanism, or constraint, rewrite it into one that does
   - verify the [practical coverage record](references/vault-conventions.md#practical-coverage-record) against the whole final saved body, applying its change-scoped source checks
   - run the knowledge-relevance and material-qualification pass from [references/vault-conventions.md](references/vault-conventions.md) across all sections, including dated provenance logs
+  - apply [Evidence Content](references/vault-conventions.md#content-of-evidence): omit bibliography-only entries while preserving useful dated observations and source provenance
   - for any non-`concept` note, re-run the section-role pass against the final structure and remove any block that now mostly repeats another section after late rewrites
   - compare `headings.key_theses`, `headings.practice`, and `headings.pitfalls` for cross-section duplication; if an anti-pattern only mirrors an earlier recommendation, rewrite it into a concrete failure mode or remove it
   - verify that nested checklist or algorithm bullets use bold lead-ins and do not duplicate surrounding practice bullets

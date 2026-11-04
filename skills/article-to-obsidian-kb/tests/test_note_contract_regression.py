@@ -25,6 +25,158 @@ CONCEPT_COMPARE_HEADING = MODULE.heading("concept_compare")
 
 
 class CheckNoteContractTests(unittest.TestCase):
+    def _spacing_findings(self, body: str) -> list:
+        return [
+            violation
+            for violation in MODULE.collect_violations_from_text(
+                body, expect="source", require_intro_before_first_heading=False
+            )
+            if violation.code.startswith("spacing.")
+        ]
+
+    def test_missing_table_padding_is_reported_for_text_and_lists(self) -> None:
+        table = "| Поле | Значение |\n| --- | --- |\n| А | Б |"
+        for before in ("Текст.", PRACTICE_HEADING):
+            for after in ("Продолжение.", "- Пункт."):
+                with self.subTest(before=before, after=after):
+                    findings = self._spacing_findings(
+                        before + "\n" + table + "\n" + after
+                    )
+                    self.assertEqual(
+                        {
+                            "spacing.missing-blank-before-table",
+                            "spacing.missing-blank-after-table",
+                        },
+                        {item.code for item in findings},
+                    )
+                    self.assertEqual([2, 5], [v.line for v in findings])
+
+    def test_table_before_heading_accepts_optional_blank_line(self) -> None:
+        table = "| Поле | Значение |\n| --- | --- |\n| А | Б |\n"
+        for level in range(1, 7):
+            for indent in ("", "   "):
+                for blank in ("", "\n"):
+                    with self.subTest(level=level, indent=indent, blank=blank):
+                        body = (
+                            "Текст.\n\n" + table + blank
+                            + indent + "#" * level + " Раздел\nСодержимое."
+                        )
+                        self.assertEqual([], self._spacing_findings(body))
+
+    def test_heading_like_text_after_table_still_requires_padding(self) -> None:
+        table = "| Поле | Значение |\n| --- | --- |\n| А | Б |\n"
+        for after in ("#Текст", "####### Текст", "    ## Текст"):
+            with self.subTest(after=after):
+                findings = self._spacing_findings("Текст.\n\n" + table + after)
+                self.assertEqual(
+                    {"spacing.missing-blank-after-table"},
+                    {v.code for v in findings},
+                )
+
+    def test_padded_table_after_heading_and_before_list_passes(self) -> None:
+        body = (
+            PRACTICE_HEADING + "\n\n"
+            "| Поле | Значение |\n| --- | --- |\n| А | Б |\n\n"
+            "- **Действие.** Проверить результат.\n"
+        )
+        self.assertEqual([], self._spacing_findings(body))
+
+    def test_heading_needs_no_blank_before_it_after_other_blocks(self) -> None:
+        for preceding in (
+            "Обычный текст.\n",
+            "- Пункт списка.\n",
+            "1. Нумерованный пункт.\n",
+            KEY_THESES_HEADING + "\n",
+            "```text\nПример кода.\n```\n",
+        ):
+            with self.subTest(preceding=preceding):
+                body = preceding + PRACTICE_HEADING + "\nСодержимое раздела."
+                self.assertEqual([], self._spacing_findings(body))
+
+    def test_existing_blank_before_heading_after_prose_is_allowed(self) -> None:
+        body = "Обычный текст.\n\n" + PRACTICE_HEADING + "\nСодержимое."
+        self.assertEqual([], self._spacing_findings(body))
+
+    def test_ordinary_heading_and_list_spacing_rules_remain(self) -> None:
+        body = PRACTICE_HEADING + "\n\nТекст.\n\n- Пункт.\n"
+        self.assertEqual(
+            {
+                "spacing.blank-line-after-heading",
+                "spacing.blank-line-before-list",
+            },
+            {item.code for item in self._spacing_findings(body)},
+        )
+
+    def test_tables_need_no_padding_at_document_boundaries(self) -> None:
+        table = "| Поле |\n| --- |\n| Значение |"
+        for body in (table, table + "\n\nТекст.", "Текст.\n\n" + table):
+            with self.subTest(body=body):
+                self.assertEqual([], self._spacing_findings(body))
+
+    def test_table_detection_handles_optional_pipes_and_alignment(self) -> None:
+        body = (
+            "Текст.\n"
+            "Поле | Значение\n:-: | --:\nА | Б\n"
+            "Продолжение."
+        )
+        self.assertEqual(
+            {
+                "spacing.missing-blank-before-table",
+                "spacing.missing-blank-after-table",
+            },
+            {item.code for item in self._spacing_findings(body)},
+        )
+
+    def test_table_detection_handles_escaped_header_pipes(self) -> None:
+        for header in (
+            r"| А \| Б | В |",
+            r"| А \\| В |",
+            r"| А \\\| Б | В |",
+        ):
+            body = (
+                "Текст.\n" + header
+                + "\n| --- | --- |\n| Значение | Другое |\n"
+                "Продолжение."
+            )
+            with self.subTest(header=header):
+                self.assertEqual(
+                    {
+                        "spacing.missing-blank-before-table",
+                        "spacing.missing-blank-after-table",
+                    },
+                    {item.code for item in self._spacing_findings(body)},
+                )
+
+    def test_fenced_examples_and_ordinary_pipes_are_not_tables(self) -> None:
+        for fence in ("```markdown", "~~~markdown", "````markdown"):
+            close = fence.removesuffix("markdown")
+            body = (
+                "Текст.\n" + fence + "\n"
+                "| Поле | Значение |\n| --- | --- |\n| А | Б |\n"
+                + close + "\nПродолжение."
+            )
+            with self.subTest(fence=fence):
+                self.assertEqual([], self._spacing_findings(body))
+        for body in (
+            "Текст с A | B.\nЕщё текст.",
+            "`A | B`\nОбычная строка.",
+            "| А | Б |\n| --- |\nТекст.",
+            "    | А | Б |\n    | --- | --- |\n    | В | Г |",
+            PRACTICE_HEADING + " | Значение\n| --- | --- |\nТекст.",
+        ):
+            with self.subTest(body=body):
+                self.assertEqual([], self._spacing_findings(body))
+
+    def test_table_padding_does_not_allow_double_blank_lines(self) -> None:
+        body = (
+            "Текст.\n\n\n"
+            "| Поле | Значение |\n| --- | --- |\n| А | Б |"
+        )
+        self.assertEqual(
+            {"spacing.double-blank-line"},
+            {item.code for item in self._spacing_findings(body)},
+        )
+
     def test_related_section_rejects_annotations_and_prose(self) -> None:
         fixture = Path(__file__).parent / "fixtures" / "clean-general-note.md"
         prefix = fixture.read_text(encoding="utf-8").split(
@@ -1041,6 +1193,175 @@ date: 2026
             allow_latin_terms=ADDITIONAL_INSIGHTS_HEADING.removeprefix("## ").split() + ["AI", "DX", "DevEx"],
         )
         self.assertEqual([], violations)
+
+    def test_evidence_rejects_external_links_and_urls(self) -> None:
+        for link in (
+            "https://example.com/a",
+            "[Материал](https://example.com/a)",
+            "<https://example.com/a>",
+            "HTTP://example.com/a",
+            "[Материал](//192.0.2.1/)",
+            "//192.0.2.1/",
+            "[Материал][ref]",
+            "[ref][]",
+            "[ref]",
+        ):
+            with self.subTest(link=link):
+                body = (
+                    EVIDENCE_HEADING + "\n- 2026-11-03: " + link + "\n"
+                    + PRACTICE_HEADING + "\n"
+                    "[ref]: https://example.com/a\n"
+                )
+                findings = MODULE.collect_violations_from_text(
+                    body, expect="source",
+                    require_intro_before_first_heading=False,
+                )
+                matches = [
+                    v for v in findings if v.code == "evidence.external-link"
+                ]
+                self.assertEqual(1, len(matches))
+                self.assertEqual(2, matches[0].line)
+
+    def test_evidence_link_boundaries_allow_indented_atx_headings(self) -> None:
+        for indent in range(1, 4):
+            for level in (1, 2):
+                for title in (" Справка", ""):
+                    with self.subTest(indent=indent, level=level, title=title):
+                        body = (
+                            EVIDENCE_HEADING + "\n- 2026-11-03: Наблюдение.\n"
+                            + " " * indent + "#" * level + title + "\n"
+                            "https://example.com/help\n"
+                        )
+                        findings = MODULE.collect_violations_from_text(
+                            body, expect="source",
+                            require_intro_before_first_heading=False,
+                        )
+                        self.assertNotIn(
+                            "evidence.external-link", {v.code for v in findings}
+                        )
+
+    def test_evidence_indented_children_and_code_do_not_end_section(self) -> None:
+        for following in (" ### Подробности", "   ###", "    ## Код"):
+            with self.subTest(following=following):
+                body = (
+                    EVIDENCE_HEADING + "\n" + following
+                    + "\nhttps://example.com/a\n"
+                )
+                findings = MODULE.collect_violations_from_text(
+                    body, expect="source",
+                    require_intro_before_first_heading=False,
+                )
+                self.assertIn(
+                    "evidence.external-link", {v.code for v in findings}
+                )
+
+    def test_evidence_rejects_scheme_relative_reference_links(self) -> None:
+        for destination in ("//192.0.2.1/", "<//host/path>"):
+            for link in ("[Материал][network]", "[network][]", "[network]"):
+                with self.subTest(destination=destination, link=link):
+                    body = (
+                        EVIDENCE_HEADING + "\n- 2026-11-03: " + link + "\n"
+                        + PRACTICE_HEADING + "\n"
+                        "[network]: " + destination + "\n"
+                    )
+                    findings = MODULE.collect_violations_from_text(
+                        body, expect="source",
+                        require_intro_before_first_heading=False,
+                    )
+                    matches = [
+                        v for v in findings
+                        if v.code == "evidence.external-link"
+                    ]
+                    self.assertEqual(1, len(matches))
+                    self.assertEqual(2, matches[0].line)
+
+    def test_evidence_link_check_preserves_local_paths(self) -> None:
+        for text in (
+            "// comment", "src//cache", "../..//note.md",
+            "[Заметка](./note.md)",
+        ):
+            with self.subTest(text=text):
+                body = EVIDENCE_HEADING + "\n- 2026-11-03: " + text + "\n"
+                findings = MODULE.collect_violations_from_text(
+                    body, expect="source",
+                    require_intro_before_first_heading=False,
+                )
+                self.assertNotIn(
+                    "evidence.external-link", {v.code for v in findings}
+                )
+
+    def test_evidence_link_check_stops_at_next_same_level_heading(self) -> None:
+        body = (
+            EVIDENCE_HEADING + "\n"
+            "- 2026-11-03: В пилоте сократилось ожидание; [[Разбор пилота]].\n"
+            + PRACTICE_HEADING + "\n"
+            "Справка: https://example.com/help\n"
+            + RELATED_NOTES_HEADING + "\n[[Другая заметка]]\n"
+        )
+        findings = MODULE.collect_violations_from_text(
+            body, expect="source", require_intro_before_first_heading=False
+        )
+        self.assertNotIn("evidence.external-link", {v.code for v in findings})
+
+    def test_evidence_link_check_includes_child_subsections(self) -> None:
+        body = EVIDENCE_HEADING + "\n### Подробности\nhttps://example.com/a\n"
+        findings = MODULE.collect_violations_from_text(
+            body, expect="source", require_intro_before_first_heading=False
+        )
+        self.assertIn("evidence.external-link", {v.code for v in findings})
+
+    def test_evidence_wikilinks_are_not_external_reference_links(self) -> None:
+        body = (
+            EVIDENCE_HEADING + "\n"
+            "- 2026-11-03: Получен результат; [[ref|Разбор]].\n"
+            + PRACTICE_HEADING + "\n"
+            "[ref]: https://example.com/a\n"
+        )
+        findings = MODULE.collect_violations_from_text(
+            body, expect="source", require_intro_before_first_heading=False
+        )
+        self.assertNotIn("evidence.external-link", {v.code for v in findings})
+
+    def test_evidence_allows_source_and_optional_concept_links(self) -> None:
+        fixture = Path(__file__).parent / "fixtures" / "clean-general-note.md"
+        prefix = fixture.read_text(encoding="utf-8").split(
+            RELATED_NOTES_HEADING, 1
+        )[0]
+        for concepts in ("", "; см. также [[Измеренное значение и цель]]"):
+            with self.subTest(concepts=concepts):
+                content = (
+                    prefix + EVIDENCE_HEADING + "\n"
+                    "- 2026-11-03: В пилоте медиана ожидания сократилась "
+                    "с 12 до 8 рабочих часов; [[Разбор пилота]]"
+                    + concepts + ".\n"
+                    + RELATED_NOTES_HEADING + "\n[[Другая заметка]]\n"
+                )
+                self.assertEqual(
+                    [], MODULE.collect_violations_from_text(
+                        content, expect="source"
+                    )
+                )
+
+    def test_evidence_link_check_ignores_fenced_section_examples(self) -> None:
+        body = (
+            "```markdown\n" + EVIDENCE_HEADING + "\n"
+            "https://example.com/a\n[ref]: https://example.com/a\n```\n"
+            + EVIDENCE_HEADING + "\n"
+            "- 2026-11-03: Проверен показатель [ref].\n"
+        )
+        findings = MODULE.collect_violations_from_text(
+            body, expect="source", require_intro_before_first_heading=False
+        )
+        self.assertNotIn("evidence.external-link", {v.code for v in findings})
+
+    def test_source_note_without_evidence_keeps_frontmatter_source(self) -> None:
+        fixture = Path(__file__).parent / "fixtures" / "clean-general-note.md"
+        text = fixture.read_text(encoding="utf-8")
+        self.assertNotIn(EVIDENCE_HEADING, text)
+        self.assertIn("source:", text)
+        self.assertEqual(
+            [], MODULE.collect_violations_from_text(text, expect="source")
+        )
 
     def test_multisource_evidence_requires_dated_bullets(self) -> None:
         content = f"""---

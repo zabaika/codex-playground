@@ -38,6 +38,9 @@ LATIN_TOKEN_RE = re.compile(
 )
 DATED_BULLET_RE = re.compile(r"^-\s+(\d{4}-\d{2}-\d{2}):")
 PARTIAL_DATED_BULLET_RE = re.compile(r"^-\s+(\d{4}-\d{2}(?:-\d{2})?):")
+TABLE_BLOCK_BREAK_RE = re.compile(
+    r" {0,3}(?:#{1,6}(?:\s|$)|>|[-+*]\s|\d+[.)]\s)"
+)
 
 RELATED_NOTES_HEADING = heading("related_notes")
 KEY_THESES_HEADING = heading("key_theses")
@@ -934,11 +937,113 @@ def _check_forbidden_headings(body: str, forbidden_headings: list[str]) -> list[
     return violations
 
 
-def _check_blank_lines_after_headings(body: str) -> list[Violation]:
+def _fenced_code_lines(lines: list[str]) -> set[int]:
+    indexes: set[int] = set()
+    fence = ""
+    for idx, line in enumerate(lines):
+        if fence:
+            indexes.add(idx)
+            if re.fullmatch(
+                r" {0,3}" + re.escape(fence[0])
+                + "{" + str(len(fence)) + r",}\s*",
+                line,
+            ):
+                fence = ""
+        else:
+            match = re.match(r" {0,3}(`{3,}|~{3,})", line)
+            if match:
+                fence = match.group(1)
+                indexes.add(idx)
+    return indexes
+
+
+def _table_cells(line: str) -> list[str]:
+    line = line.strip()
+    cells: list[str] = []
+    start = 0
+    for match in re.finditer(r"(\\*)\|", line):
+        # Only an odd backslash count escapes a pipe.
+        if len(match.group(1)) % 2 == 0:
+            cells.append(line[start:match.end() - 1])
+            start = match.end()
+    cells.append(line[start:])
+    if cells and not cells[0]:
+        cells.pop(0)
+    if cells and not cells[-1]:
+        cells.pop()
+    return [cell.strip() for cell in cells]
+
+
+def _find_table_blocks(lines: list[str]) -> list[tuple[int, int]]:
+    code_lines = _fenced_code_lines(lines)
+    blocks: list[tuple[int, int]] = []
+    idx = 0
+    while idx + 1 < len(lines):
+        if (
+            idx in code_lines or idx + 1 in code_lines
+            or lines[idx].startswith(("    ", "\t"))
+            or lines[idx + 1].startswith(("    ", "\t"))
+            or TABLE_BLOCK_BREAK_RE.match(lines[idx])
+            or "|" not in lines[idx] + lines[idx + 1]
+        ):
+            idx += 1
+            continue
+        header = _table_cells(lines[idx])
+        delimiter = _table_cells(lines[idx + 1])
+        if not (
+            header and len(header) == len(delimiter)
+            and all(re.fullmatch(r":?-+:?", cell) for cell in delimiter)
+        ):
+            idx += 1
+            continue
+        end = idx + 1
+        while end + 1 < len(lines) and end + 1 not in code_lines:
+            row = lines[end + 1]
+            if (
+                "|" not in row or row.startswith(("    ", "\t"))
+                or TABLE_BLOCK_BREAK_RE.match(row)
+            ):
+                break
+            end += 1
+        blocks.append((idx, end))
+        idx = end + 1
+    return blocks
+
+
+def _check_table_spacing(
+    body: str, blocks: list[tuple[int, int]]
+) -> list[Violation]:
+    violations: list[Violation] = []
+    lines = body.splitlines()
+    for start, end in blocks:
+        if start > 0 and lines[start - 1].strip():
+            violations.append(Violation(
+                "spacing.missing-blank-before-table",
+                "Перед таблицей нужна пустая строка, в том числе после заголовка.",
+                start + 1,
+            ))
+        if (
+            end + 1 < len(lines) and lines[end + 1].strip()
+            and not re.match(r" {0,3}#{1,6}(?:[ \t]|$)", lines[end + 1])
+        ):
+            violations.append(Violation(
+                "spacing.missing-blank-after-table",
+                "После таблицы нужна пустая строка, если далее не заголовок.",
+                end + 2,
+            ))
+    return violations
+
+
+def _check_blank_lines_after_headings(
+    body: str, table_starts: set[int]
+) -> list[Violation]:
     violations: list[Violation] = []
     lines = body.splitlines()
     for idx, line in enumerate(lines[:-1]):
-        if line.startswith("#") and lines[idx + 1].strip() == "":
+        if (
+            line.startswith("#") and lines[idx + 1].strip() == ""
+            and idx + 2 not in table_starts
+        ):
             violations.append(
                 Violation(
                     "spacing.blank-line-after-heading",
@@ -949,11 +1054,16 @@ def _check_blank_lines_after_headings(body: str) -> list[Violation]:
     return violations
 
 
-def _check_blank_lines_before_lists(body: str) -> list[Violation]:
+def _check_blank_lines_before_lists(
+    body: str, table_ends: set[int]
+) -> list[Violation]:
     violations: list[Violation] = []
     lines = body.splitlines()
     for idx in range(1, len(lines)):
-        if lines[idx].startswith("- ") and lines[idx - 1].strip() == "":
+        if (
+            lines[idx].startswith("- ") and lines[idx - 1].strip() == ""
+            and idx - 2 not in table_ends
+        ):
             violations.append(
                 Violation(
                     "spacing.blank-line-before-list",
@@ -1367,6 +1477,55 @@ def _check_dated_log_order(
     return violations
 
 
+def _check_evidence_links(body: str) -> list[Violation]:
+    lines = body.splitlines()
+    code_lines = _fenced_code_lines(lines)
+    reference_body = "\n".join(
+        "" if idx in code_lines else line for idx, line in enumerate(lines)
+    )
+    external_url = (
+        r"(?:\b(?:[a-z][a-z0-9+.-]*://|mailto:)"
+        r"|(?<![\w./\\])//[^\s/]+)"
+    )
+    references = {
+        " ".join(label.split()).casefold()
+        for label in re.findall(
+            r"^ {0,3}\[([^\[\]]+)\]:\s*<?" + external_url,
+            reference_body, re.MULTILINE | re.IGNORECASE,
+        )
+    }
+    violations: list[Violation] = []
+    evidence_level = len(EVIDENCE_HEADING.split()[0])
+    in_evidence = False
+    for line_no, line in enumerate(lines, start=1):
+        match = None
+        if line_no - 1 not in code_lines:
+            match = re.match(r" {0,3}(#{1,6})(?:[ \t]|$)", line)
+        if match:
+            if line.strip() == EVIDENCE_HEADING:
+                in_evidence = True
+            elif len(match.group(1)) <= evidence_level:
+                in_evidence = False
+        if not in_evidence:
+            continue
+        reference_links = re.finditer(
+            r"(?<!\[)\[([^\[\]]+)\](?:\[([^\[\]]*)\])?(?![\](])",
+            INLINE_CODE_RE.sub("", line),
+        )
+        has_external_reference = any(
+            " ".join((link.group(2) or link.group(1)).split()).casefold()
+            in references
+            for link in reference_links
+        )
+        if re.search(external_url, line, re.IGNORECASE) or has_external_reference:
+            violations.append(Violation(
+                "evidence.external-link",
+                f"В `{EVIDENCE_HEADING}` допустимы wikilinks; URL источников храните в frontmatter исходной заметки.",
+                line_no,
+            ))
+    return violations
+
+
 def _check_multisource_evidence_dates(
     frontmatter: dict[str, object],
     body: str,
@@ -1542,8 +1701,14 @@ def collect_violations_from_text(
     body_violations.extend(_check_duplicate_headings(body))
     body_violations.extend(_check_required_headings(body, required_headings))
     body_violations.extend(_check_forbidden_headings(body, forbidden_headings))
-    body_violations.extend(_check_blank_lines_after_headings(body))
-    body_violations.extend(_check_blank_lines_before_lists(body))
+    table_blocks = _find_table_blocks(body.splitlines())
+    body_violations.extend(_check_blank_lines_after_headings(
+        body, {start for start, _ in table_blocks}
+    ))
+    body_violations.extend(_check_blank_lines_before_lists(
+        body, {end for _, end in table_blocks}
+    ))
+    body_violations.extend(_check_table_spacing(body, table_blocks))
     body_violations.extend(_check_double_blank_lines(body))
     body_violations.extend(_check_forbidden_terms(body, forbidden_terms))
     if expect != "structured-council-verdict":
@@ -1570,6 +1735,7 @@ def collect_violations_from_text(
         )
     )
     body_violations.extend(_check_dated_log_order(body, chronology_headings))
+    body_violations.extend(_check_evidence_links(body))
     body_violations.extend(_check_multisource_evidence_dates(frontmatter, body, expect))
     violations.extend(_offset_violations(body_violations, body_line_offset))
     violations.extend(

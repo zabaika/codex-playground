@@ -131,6 +131,63 @@ Compare the same draft to D1 again after final whole-note checks without changin
 the source or draft. Accept zero additions and reuse the source review. A repeated
 review must not force a novel insight or another source-length extraction.
 
+## Qualification Review Cases
+
+### E1: Remove Repetition, Keep The Useful Example
+
+Source: «Подбирайте задания под рабочие задачи группы. При переносе курса
+из разработки в бухгалтерию адаптируйте его к задачам бухгалтерии».
+
+Draft: «Подбирайте задания под рабочие задачи группы. Это не означает,
+что одна программа подходит всем. Например, курс из разработки нельзя
+переносить в бухгалтерию без адаптации».
+
+Observe whether the general warning is removed while its concrete example
+survives in the recommendation or relevant table row. A revision such as
+«При переносе курса из разработки в бухгалтерию адаптируйте задания
+к рабочим задачам бухгалтеров» preserves the action without the repetition.
+Do not delete the useful example merely because it used negative wording.
+
+### E2: Keep A Qualification That Changes The Claim
+
+Use Source B2. Draft: «В двухнедельном пилоте у двух команд медиана ожидания
+снизилась с 12 до 8 рабочих часов. Цель в 4 рабочих часа пока не достигнута».
+
+Observe whether the pilot scope, measured result, and unmet target survive
+qualification cleanup. Removing those distinctions or reporting four hours
+as achieved is a failure. Reuse D1 to check that a useful explanatory distinction
+also survives without inventing an action. Apply these decisions within the
+existing final editorial pass, not an additional full source review.
+
+## Evidence Content Cases
+
+### F1: Omit A Bibliography-Only Section
+
+A new single-source note already contains all useful source claims in its stable
+body and has the source URL in frontmatter. Its evidence entry contains only the
+publication date, source title, authors, and "Разбор выбора обучения".
+
+Observe whether the entire metadata-only section is omitted. Do not replace the
+link with a plain bibliography, invent an observation, or repeat a body claim to
+justify keeping the section. Preserve source metadata and the resolved date record.
+
+### F2: Preserve A Useful Dated Addition
+
+An existing note explains how to interpret process metrics. A new
+source adds B2's concrete pilot measurement, which is absent from its stable body.
+
+Observe whether a retained dated entry states the pilot scope, measured change,
+and unmet target, with a wikilink to the source-derived note. Keep the external URL
+in that note's frontmatter under the reinforcement rules. A useful observation
+must survive; do not reduce it to "дополнено по материалу" or remove all dated logs.
+
+A candidate concept explains the distinction between a measured value and a
+target. An optional link to it can clarify this observation alongside the source
+link. Keep that useful relation, but reject a concept sharing only the broad
+topic of training. With no useful concept candidate, retain the same observation
+and source link without a `см. также` clause. Do not create or update a concept
+just to fill the template.
+
 ## Change Events After A Completed Review
 
 Apply these to a reviewed case and inspect the actual resulting work:

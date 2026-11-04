@@ -39,7 +39,7 @@ Canonical section-heading strings live in [config/note_schema.yaml](../config/no
   - move the old block lower in the note as a reference block
   - delete or replace it only after explicit approval
 - When the user asks to clean duplicates, treat newer analytical sections as the default cleanup surface and leave older checklists or reference blocks unchanged unless the user explicitly includes them.
-- Add a dated entry that links the touched note to the new article and related concepts.
+- Add a dated entry only for a useful new observation. For `headings.evidence`, apply [Evidence Content](vault-conventions.md#content-of-evidence); processing a source alone does not require a log entry.
 - Resolve the entry date under [Source Date Resolution](vault-conventions.md#source-date-resolution).
 - Insert it within the target dated section in ascending date order; for equal dates, place it after existing entries with that date.
 - Do not silently reorder older entries during a normal update unless their current order is already broken.
@@ -50,33 +50,34 @@ Canonical section-heading strings live in [config/note_schema.yaml](../config/no
 - For evidence-only reinforcement, do not add the new source URL to the existing note's frontmatter `source`.
 - Keep the new source URL in the new source-derived note that was created from that material.
 - In the existing note's dated log bullet, preserve provenance by linking to that source-derived note. The provenance chain should be: existing note -> dated log bullet -> source-derived note -> source-derived note frontmatter `source`.
+- A retained dated entry may also link relevant concept notes under [semantic link coverage](vault-conventions.md#semantic-link-coverage). Concept links supplement the source link; they do not replace it or require updating those concepts. The examples below show an optional `see also` clause: omit the whole clause when no useful concept link remains. There is no concept-link quota.
 - Extend an existing note's frontmatter `source` only when the new source becomes part of that note's primary identity: for example, when the note itself is being rewritten as a source-derived artifact, when it absorbs or replaces another source-derived note, or when a structural merge makes the source materially responsible for the stable body rather than just a later confirmation.
 
 ## Lessons Notes
 
 - Keep or improve the existing lesson wording only when the new article adds a clearer mechanism or trade-off.
-- If the note has no evidence section, add `headings.evidence`.
-- Add one dated bullet per processed article.
+- Add `headings.evidence` only when retaining an entry that meets [Evidence Content](vault-conventions.md#content-of-evidence).
+- Keep a source's useful dated contribution together; do not add a processing receipt or duplicate the stable lesson text.
 - Keep `headings.evidence` chronological unless the user explicitly asked for latest-first ordering.
 
 Bullet format:
 
 ```markdown
-- YYYY-MM-DD: подтверждено статьей [[<article note title>]]; связанные концепты: [[Concept A]], [[Concept B]].
+- YYYY-MM-DD: <concrete new observation, case, measurement, or changed condition>; [[<source-derived note title>]]; see also [[Concept A]], [[Concept B]].
 ```
 
 ## General Notes
 
 - Keep the stable summary of the source near the top.
 - Append only the new signal that the source adds, rather than rewriting the whole note into a different structure.
-- If the note has no evidence section, add `headings.evidence`.
-- Add one dated bullet per processed source.
+- Add `headings.evidence` only when retaining an entry that meets [Evidence Content](vault-conventions.md#content-of-evidence).
+- Keep a source's useful dated contribution together; do not add a bibliography or repeat the stable body.
 - Keep `headings.evidence` chronological unless the user explicitly asked for latest-first ordering.
 
 Bullet format:
 
 ```markdown
-- YYYY-MM-DD: дополнено по материалу [[<general note title>]]; связанные концепты: [[Concept A]], [[Concept B]].
+- YYYY-MM-DD: <useful dated observation not already clear from the stable body>; [[<source-derived note title>]]; see also [[Concept A]], [[Concept B]].
 ```
 
 ## Operating-Model Notes
@@ -84,14 +85,14 @@ Bullet format:
 - Keep the stable description of the operating model near the top.
 - Keep concrete operating detail in the stable sections when the source supports it: team scope, owned systems, partner functions, named metrics, prioritization mechanics, AI rollout, and build-vs-buy constraints should survive rewrites.
 - When a section contains several distinct observations, keep them as separate bullets instead of merging them into one summary line.
-- If the note has no practice log, add `headings.observed_practices`.
-- Add one dated bullet per processed article with links.
+- Add `headings.observed_practices` only for a useful dated operating observation.
+- Keep a source's useful operating contribution together; processing an article alone does not require an entry.
 - Keep `headings.observed_practices` chronological unless the user explicitly asked for latest-first ordering.
 
 Bullet format:
 
 ```markdown
-- YYYY-MM-DD: наблюдения из [[<article or operating-model note title>]]; связанные концепты: [[Concept A]], [[Concept B]].
+- YYYY-MM-DD: <concrete operating observation, case, or changed condition>; [[<source-derived note title>]]; see also [[Concept A]], [[Concept B]].
 ```
 
 ## Concept Notes
@@ -111,7 +112,7 @@ Bullet format:
 Bullet format:
 
 ```markdown
-- YYYY-MM-DD: подтверждено в [[<article note title>]]; см. также [[Concept A]], [[Concept B]].
+- YYYY-MM-DD: confirmed in [[<article note title>]]; see also [[Concept A]], [[Concept B]].
 ```
 
 ## Link Hygiene

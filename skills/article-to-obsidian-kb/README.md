@@ -54,7 +54,7 @@ Treat the repository copy of `config/runtime.local.toml` as the single editable 
 - `config/language_terms.yaml`: curated registry for canonical English terms, role labels, named entities, and discouraged English prose shorthand used by language checks
 - `scripts/note_schema.py`: shared schema accessor for local Python consumers
 - `scripts/language_terms.py`: shared language-term registry accessor for local Python consumers
-- `scripts/check_note_contract.py`: mechanical note-contract checker
+- `scripts/check_note_contract.py`: mechanical note-contract checker, including table spacing and Evidence link boundaries
 - `tests/editorial/practicality_cases.md`: source/draft cases for behavioral validation of practical-content preservation and review reuse
 - `scripts/detect_source_route.py`: diagnostic or fallback helper for route checks, not the normal workflow owner
 - `scripts/write_structured_note.py`: explicit structured-note writer for non-source payloads such as `council-verdict`
