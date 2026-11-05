@@ -96,7 +96,7 @@ def batches(store, job, **kwargs):
 def test_s15_bounded_payloads_history_splits_and_each_final_payload_is_counted(manifest_job):
     store, job = manifest_job
     seed(store, 22, range(1, 10), text="x" * 40)
-    change_setting(store, job, "digest_ai", "messages_per_ai_pass", 3)
+    change_setting(store, job, "analysis.ai", "messages_per_ai_pass", 3)
     change_setting(store, job, "analysis", "max_input_tokens", 100)
     build(store, job)
     output = list(batches(store, job))
@@ -139,7 +139,7 @@ def test_s15_bounded_payloads_split_depth_stops_with_explicit_partial(manifest_j
 def test_s15_bounded_payloads_tiny_batch_disables_overlap_and_resume_uses_count_cache(manifest_job):
     store, job = manifest_job
     seed(store, 22, [1, 2, 3], text="x")
-    change_setting(store, job, "digest_ai", "messages_per_ai_pass", 1)
+    change_setting(store, job, "analysis.ai", "messages_per_ai_pass", 1)
     build(store, job)
     first = list(batches(store, job))
     requests = store.get_job(job["job_id"])["provider_requests"]
@@ -194,7 +194,7 @@ def test_s15_bounded_payloads_provider_cap_stops_stream_with_explicit_partial(ma
 def test_s15_bounded_payloads_overlap_is_context_not_a_second_selected_message(manifest_job):
     store, job = manifest_job
     seed(store, 22, range(1, 8), text="x")
-    change_setting(store, job, "digest_ai", "messages_per_ai_pass", 3)
+    change_setting(store, job, "analysis.ai", "messages_per_ai_pass", 3)
     build(store, job)
     output = list(batches(store, job))
     assert [m["input"]["message_id"] for b in output for m in b["messages"]] == list(range(1, 8))
@@ -207,7 +207,7 @@ def test_s15_bounded_payloads_char_guard_fragments_without_truncation(manifest_j
     store, job = manifest_job
     text = "1234567890"
     seed(store, 22, [1], text=text)
-    change_setting(store, job, "digest_ai", "message_block_max_chars", 3)
+    change_setting(store, job, "analysis.ai", "message_block_max_chars", 3)
     build(store, job)
     output = list(batches(store, job))
     assert "".join(m["message"]["text"] for b in output for m in b["messages"]) == text
@@ -241,7 +241,7 @@ def test_s15_bounded_payloads_inference_uses_exact_counted_input_and_returns_att
 def test_s15_bounded_payloads_resume_skips_completed_outputs_and_preserves_context(manifest_job):
     store, job = manifest_job
     seed(store, 22, [1, 2, 3], text="x")
-    change_setting(store, job, "digest_ai", "messages_per_ai_pass", 1)
+    change_setting(store, job, "analysis.ai", "messages_per_ai_pass", 1)
     build(store, job)
     output = list(batches(store, job))
     store.complete_batch(job["job_id"], output[0]["batch_id"], generation=job["generation"], records=[], inputs=[])
@@ -273,7 +273,7 @@ def test_s15_bounded_payloads_unverified_or_incompatible_model_fails_before_coun
 def test_s15_bounded_payloads_first_yield_does_not_materialize_remaining_history(transport_job, monkeypatch):
     store, job = transport_job
     request = copy.deepcopy(store.get_job(job["job_id"])["request"])
-    request["settings"]["digest_ai"]["messages_per_ai_pass"] = 2
+    request["settings"]["analysis"]["ai"]["messages_per_ai_pass"] = 2
     store.conn.execute("UPDATE analysis_jobs SET request_json=? WHERE job_id=?", (analysis.canonical_json(request), job["job_id"]))
     consumed = []
 

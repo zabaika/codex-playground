@@ -80,7 +80,7 @@ def qa_records(qa_job):
     store, job = qa_job
     for number, (text, labels) in QA_CASES.items():
         seed(store, 22, [number], text=text)
-    change_setting(store, job, "digest_ai", "messages_per_ai_pass", 2)
+    change_setting(store, job, "analysis.ai", "messages_per_ai_pass", 2)
     change_setting(store, job, "analysis", "overlap_messages", 0)
     build(store, job)
     calls = []
@@ -269,9 +269,9 @@ def test_s32_cross_batch_qa_contrary_results_keep_conditions_and_both_sources(qa
         if req.full_url.endswith("input_tokens"):
             return Response({"input_tokens": 100})
         pairs = json.loads(data["input"].split("Кандидаты: ", 1)[1])["pairs"]
-        return Response(model_response({"decisions": [{"left_id": left, "right_id": right,
-            "relation": "answers" if ids[0] in (left, right) else "contradicts", "reason": "Fixture-labelled practical case"}
-            for left, right in pairs], "saturated": False}))
+        return Response(model_response({"decisions": [{"pair_id": pair["pair_id"],
+            "relation": "answers" if ids[0] in (pair["left_id"], pair["right_id"]) else "contradicts", "reason": "Fixture-labelled practical case"}
+            for pair in pairs], "saturated": False}))
     link(store, job, send)
     supplied["relations"] = list(store.iter_link_decisions(job["job_id"]))
     result = analysis_pipeline._synthesis_result(job, supplied, final_document(ids[:2], text="Суммы в личных кейсах различаются."))
@@ -314,8 +314,8 @@ def test_s32_cross_batch_qa_answer_after_cutoff_never_enters_analysis(qa_job):
 
 @pytest.fixture
 def qa_journey(listener, config, access, runtime, tmp_path, monkeypatch):
-    config["digest_ai"]["messages_per_ai_pass"] = 2
-    config["analysis"] = {"overlap_messages": 0}
+    config["analysis"]["ai"]["messages_per_ai_pass"] = 2
+    config["analysis"].update(overlap_messages=0)
     root = tmp_path / "repo" / "telegram_connector"
     root.mkdir(parents=True)
     monkeypatch.setenv("TELEGRAM_CONNECTOR_PROJECT_ROOT", str(root))
@@ -368,13 +368,14 @@ def qa_journey(listener, config, access, runtime, tmp_path, monkeypatch):
                         exceptions=[], assertion_kind="experience" if kind == "answer" else "reported")
                     records.append(value)
                 return Response(model_response({"records": records, "saturated": False}))
-            if kind == "telegram_relations_v1":
+            if kind == "telegram_relations_v2":
                 supplied = json.loads(data["input"].split("Кандидаты: ", 1)[1])
                 by_id = {record["record_id"]: record["payload"] for record in supplied["records"]}
                 decisions = []
-                for left, right in supplied["pairs"]:
+                for pair in supplied["pairs"]:
+                    left, right = pair["left_id"], pair["right_id"]
                     types = {by_id[left]["record_type"], by_id[right]["record_type"]}
-                    decisions.append({"left_id": left, "right_id": right, "relation": "answers" if types == {"question", "answer"} else "unrelated",
+                    decisions.append({"pair_id": pair["pair_id"], "relation": "answers" if types == {"question", "answer"} else "unrelated",
                         "reason": "Fixture-labelled answer to the document question"})
                 return Response(model_response({"decisions": decisions, "saturated": False}))
             if kind == "telegram_synthesis_v1":

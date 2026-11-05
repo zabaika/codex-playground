@@ -201,7 +201,7 @@ openai_api_key = "keychain://telegram-connector/openai_api_key"
 [analysis]
 max_channels = 32 # Explicit raw source entries per request, before peer resolution.
 max_messages = 200000 # Unique manifest messages/job, including context.
-max_input_tokens = 16000 # Complete model input/request, including schema/instructions.
+max_input_tokens = 32768 # Complete model input/request, including schema/instructions.
 max_llm_calls = 256 # Physical inference attempts/job, including retries/repair.
 max_total_tokens = 2000000 # Cumulative input + output tokens/job; cached input counts.
 max_provider_requests = 1024 # Inference + token-count HTTP attempts/job.
@@ -219,8 +219,25 @@ max_repair_attempts = 1 # Extra structure-repair calls/step; refusals are not re
 merge_fan_in = 8 # Groups/reducer request; >=2, reduced further by the input token cap.
 max_merge_depth = 8 # Levels/merge tree; reducer must decrease its representation.
 relation_candidates_per_record = 20 # Persisted candidates/record before semantic verification.
+link_pairs_per_request = 48 # Candidate pairs/AI request; also bounded by input/output tokens.
 max_relation_pairs = 20000 # Semantic candidate pairs checked/job; exhaustion is visible.
 progress_min_interval_seconds = 15 # Seconds between coalesced Telegram progress edits.
+
+[analysis.ai]
+# Analytics only; never inherits digest_ai. Positive integers; no silent clamps.
+query_max_output_tokens = 1024 # Output tokens/query-expansion attempt.
+extract_max_output_tokens = 32768 # Output tokens/extraction attempt, including reasoning.
+link_max_output_tokens = 8192 # Output tokens/relation-verification attempt.
+merge_max_output_tokens = 8192 # Output tokens/merge or ranking attempt.
+request_timeout_seconds = 600 # Seconds/inference attempt, within the job's remaining hard TTL.
+token_count_timeout_seconds = 30 # Seconds/input-count attempt, within the same hard TTL.
+retry_attempts = 2 # Total attempts/logical provider call, including the first; 1..5.
+retry_backoff_seconds = 1 # Base retry delay/attempt; >=0, within the job's hard TTL.
+reasoning_effort = "low" # none|low|medium|high|xhigh|max; model support is checked separately.
+reasoning_summary = "none" # none|auto|concise|detailed.
+store_prompt_text = false # Persist full analytic prompts only when explicitly enabled.
+messages_per_ai_pass = 500 # Message fragments/extraction request; token caps also apply.
+message_block_max_chars = 100000 # Characters/extraction block or synthesis evidence packing.
 
 [analysis.search]
 mode = "fast" # fast=candidate analysis; full=all locally available messages.
@@ -231,6 +248,8 @@ max_query_chars = 2000 # Characters/original query; checked before admission.
 max_term_chars = 128 # Characters/expanded term; bounds FTS-expression complexity.
 
 [analysis.output]
+source_cover_max_states = 50000 # Shared fallback search work/one verification of all result items.
+item_separator_text = "───────────────────" # One nonempty line after each item; no CR/LF.
 default_detail = "normal" # short|normal|full for all three commands.
 max_items = 50 # Global elements/result; --limit must also fit the selected profile.
 sources_per_item = 3 # Default and maximum supporting refs/item; --sources=1..this cap.

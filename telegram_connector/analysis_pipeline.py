@@ -15,14 +15,16 @@ if __package__:
     from . import telegram_history_client as history_client
     from . import analysis_settings
     from . import analysis_evidence
+    from . import analysis_telemetry
 else:
     from analysis_store import AnalysisStore, BudgetExceededError, canonical_json
     import telegram_history_client as history_client
     import analysis_settings
     import analysis_evidence
+    import analysis_telemetry
 
 from telegram_shared import openai_api
-from telegram_shared.openai_usage import build_prompt_cache_info, extract_usage, log_openai_usage
+from telegram_shared.openai_usage import build_prompt_cache_info, log_openai_usage
 
 
 def request_analysis_json(store, job_id, batch_id, *, generation, endpoint, payload, api_key,
@@ -38,17 +40,22 @@ def request_analysis_json(store, job_id, batch_id, *, generation, endpoint, payl
     settings = job["request"]["settings"]
     if payload.get("model") != settings["processing"]["model"]:
         raise ValueError("Provider model differs from frozen job settings")
-    ai = settings["digest_ai"]
+    ai = analysis_settings.analysis_ai(settings)
     request_kind = "inference" if endpoint == "responses" else "token_count"
     serialized = canonical_json(payload)
     cache_info = build_prompt_cache_info(cache_key=f"analysis:{batch_id}:{endpoint}",
         system_instructions=payload.get("instructions", ""), prompt_text=serialized, shared_prefix="")
+    attempts = {}
+    last_attempt = None
 
     def before_attempt(_index):
+        nonlocal last_attempt
         identity = uuid.uuid4().hex
         store.reserve_provider_attempt(job_id, batch_id, generation=generation, attempt_id=identity,
             request_kind=request_kind, input_tokens=counted_input_tokens if request_kind == "inference" else 0,
             output_tokens=payload.get("max_output_tokens", 0) if request_kind == "inference" else 0)
+        attempts[identity] = (datetime.now(timezone.utc).isoformat(), store.current_phase_sequence(job_id, generation))
+        last_attempt = identity
         return identity
 
     def after_attempt(identity, response, exc, latency):
@@ -71,17 +78,35 @@ def request_analysis_json(store, job_id, batch_id, *, generation, endpoint, payl
                 stage=f"{batch['kind']}:{request_kind}", channel="", since=None, until=None,
                 model=settings["processing"]["model"], request_index=current["provider_requests"], message_count=0,
                 status=outcome, cache_info=cache_info, prompt_text=serialized,
-                usage=extract_usage({"usage": {**usage, "total_tokens": usage["input_tokens"] + usage["output_tokens"],
-                                    "input_tokens_details": {"cached_tokens": usage["cached_input_tokens"]}}},
-                                    latency_ms=latency) if usage is not None else None,
-                response_id=None, error=(f"http_{exc.status_code}" if exc.status_code is not None else "provider_error") if exc else None,
+                usage=analysis_telemetry.reported_usage(response, usage, latency),
+                response_id=response.get("id") if response is not None else None,
+                error=(f"http_{exc.status_code}" if exc.status_code is not None else exc.error_type) if exc else None,
                 store_prompt_text=ai["store_prompt_text"], correlation=(job_id, batch_id, identity), latency_ms=latency)
+            raw_usage = (response or {}).get("usage")
+            details = raw_usage.get("input_tokens_details", {}) if isinstance(raw_usage, dict) else {}
+            writes = details.get("cache_write_tokens_details", {}) if isinstance(details, dict) else {}
+            def counter(key):
+                value = writes.get(key) if isinstance(writes, dict) else None
+                return value if type(value) is int and value >= 0 else None
+            started, phase_sequence = attempts[identity]
+            store.record_provider_metrics(job_id, identity, generation=generation, phase_sequence=phase_sequence,
+                started_at=started, actual_model=(response or {}).get("model"),
+                cache_write_30m_tokens=counter("ttl_30m_tokens"), cache_write_12h_tokens=counter("ttl_12h_tokens"))
+
+    def measured_sleep(delay):
+        started = monotonic_func()
+        try:
+            sleep_func(delay)
+        finally:
+            if last_attempt is not None:
+                store.record_provider_backoff(job_id, last_attempt,
+                    elapsed_ms=max(0, round((monotonic_func() - started) * 1000)), requested_ms=round(delay * 1000))
 
     kwargs = {"urlopen_func": urlopen_func} if urlopen_func is not None else {}
     return openai_api.post_json(payload, api_key, endpoint=endpoint,
-        timeout_seconds=ai["openai_timeout_seconds"], retry_attempts=ai["openai_retry_attempts"],
-        retry_backoff_seconds=ai["openai_retry_backoff_seconds"], before_attempt=before_attempt,
-        after_attempt=after_attempt, deadline=deadline, monotonic_func=monotonic_func, sleep_func=sleep_func, **kwargs)
+        timeout_seconds=ai["request_timeout_seconds"] if endpoint == "responses" else ai["token_count_timeout_seconds"],
+        retry_attempts=ai["retry_attempts"], retry_backoff_seconds=ai["retry_backoff_seconds"], before_attempt=before_attempt,
+        after_attempt=after_attempt, deadline=deadline, monotonic_func=monotonic_func, sleep_func=measured_sleep, **kwargs)
 
 
 def prepare_analysis_payload(store, job_id, batch_id, *, generation, payload, capabilities, **transport):
@@ -107,8 +132,7 @@ def prepare_analysis_payload(store, job_id, batch_id, *, generation, payload, ca
     if set(data) - input_fields - {"max_output_tokens", "store", "metadata"}:
         raise ValueError("unsupported_preflight_field")
     output = data.get("max_output_tokens")
-    profile = settings["analysis"]["output"]["profiles"][job["request"]["request"]["detail"]]
-    cap = profile["max_output_tokens"] if batch["kind"] == "synthesize" else settings["digest_ai"]["max_output_tokens"]
+    cap = analysis_settings.stage_output_limit(settings, batch["kind"], detail=job["request"]["request"]["detail"])
     if type(output) is not int or output <= 0 or output > min(cap, capabilities["max_output_tokens"]):
         raise ValueError("model_output_limit")
     count_payload = {key: value for key, value in data.items() if key in input_fields}
@@ -298,7 +322,7 @@ def prepare_search_query(store, job_id, *, generation, **transport):
         "input": analysis_settings.render_analysis_prompt(bundle, "prepare_query", query=prepared["normalized_query"],
             max_terms=policy["max_query_terms"], max_term_chars=policy["max_term_chars"]),
         "text": {"format": analysis_evidence.query_terms_format()}, "reasoning": analysis_settings._analysis_reasoning(settings),
-        "max_output_tokens": settings["digest_ai"]["max_output_tokens"], "store": False}
+        "max_output_tokens": analysis_settings.stage_output_limit(settings, "expand_query"), "store": False}
     digest = hashlib.sha256(canonical_json({"query": request["query"], "payload": payload,
         "prompt_hash": bundle["hash"], "schema_version": settings["schema_version"],
         "algorithm_version": settings["algorithm_version"]}).encode("utf-8")).hexdigest()
@@ -362,7 +386,7 @@ def build_extraction_payload(job, messages, context):
                 query=_analysis_query(job), messages=canonical_json(_extraction_fragments(messages)),
                 context=canonical_json(_extraction_fragments(context))),
             "reasoning": analysis_settings._analysis_reasoning(settings), "text": {"format": analysis_evidence.evidence_format()},
-            "max_output_tokens": settings["digest_ai"]["max_output_tokens"], "store": False}
+            "max_output_tokens": analysis_settings.stage_output_limit(settings, "extract"), "store": False}
 
 
 def _relation_keys(record, store):
@@ -458,90 +482,119 @@ def _validate_relation_document(document, wanted, *, max_bytes):
 
 def _link_pair_group(store, job_id, pairs, *, generation, depth=0, **transport):
     job = store.require_running(job_id, generation=generation)
-    settings = job["request"]["settings"]
-    policy = settings["analysis"]
+    if job["request"]["settings"].get("algorithm_version") != analysis_settings.ANALYSIS_ALGORITHM_VERSION:
+        raise ValueError("analysis_policy_incompatible")
+    settings, policy = job["request"]["settings"], job["request"]["settings"]["analysis"]
     records = {record["record_id"]: record for pair in pairs for record in (pair["left"], pair["right"])}
     _verify_relation_sources(store, job, records)
-    identities = [[pair["left"]["record_id"], pair["right"]["record_id"]] for pair in pairs]
-    plan = {"pairs": identities, "record_digests": {key: hashlib.sha256(canonical_json(value["payload"]).encode("utf-8")).hexdigest()
-                                                    for key, value in sorted(records.items())}}
-    digest = hashlib.sha256(canonical_json(plan).encode("utf-8")).hexdigest()
-    batch = store.plan_batch(job_id, generation=generation, step_key=f"link/{digest}", kind="link", payload=plan, input_digest=digest)
-    if batch["state"] == "succeeded":
-        return False
-    if batch["state"] == "failed":
-        outcome = batch["payload"].get("outcome")
-        output_limited = outcome == "saturated" or (outcome == "incomplete" and any(
-            a["request_kind"] == "inference" and a.get("usage")
-            and a["usage"]["output_tokens"] >= a["output_limit"] for a in batch["attempts"]))
-        if not output_limited or len(pairs) <= 1 or depth >= policy["max_split_depth"]:
+    mapping = {f"p{index:03}": [pair["left"]["record_id"], pair["right"]["record_id"]]
+               for index, pair in enumerate(pairs, 1)}
+    plan = {"pair_map": mapping, "record_digests": {key: hashlib.sha256(canonical_json(value["payload"]).encode()).hexdigest()
+                                                  for key, value in sorted(records.items())}}
+    digest = hashlib.sha256(canonical_json(plan).encode()).hexdigest()
+    batch = store.plan_batch(job_id, generation=generation, step_key=f"link/v2/{digest}", kind="link", payload=plan, input_digest=digest)
+    if batch["state"] in {"succeeded", "failed"}:
+        return batch["state"] == "failed"
+    if batch["state"] == "skipped":
+        if batch["payload"].get("link_split"):
+            pending = set(batch["payload"]["link_progress"]["unresolved_pair_ids"])
+            pairs = [pair for key, pair in zip(mapping, pairs) if key in pending]
+        return _split_link_group(store, job_id, pairs, generation=generation, depth=depth, **transport)
+    technical = {key: {"left_id": mapping[key][0], "right_id": mapping[key][1], "relation": "duplicate",
+                      "reason": "Идентичное извлечение из тех же версий и фрагментов источников."}
+                 for key, pair in zip(mapping, pairs)
+                 if _technical_record_identity(pair["left"]) == _technical_record_identity(pair["right"])}
+    progress = batch["payload"].get("link_progress")
+    if progress is None:
+        progress = {"accepted_decisions": technical, "unresolved_pair_ids": sorted(set(mapping) - set(technical)),
+                    "diagnostics": [], "active_request": None, "saturated": False}
+        if not progress["unresolved_pair_ids"]:
+            store.save_link_progress(job_id, batch["batch_id"], generation=generation, expected=None, progress=progress)
+            return False
+    bundle = settings["analysis_prompts"]
+    while True:
+        expected = batch["payload"].get("link_progress")
+        claimed = store.begin_link_request(job_id, batch["batch_id"], generation=generation, expected=expected, progress=progress)
+        if claimed is None:
+            store.set_batch_outcome(job_id, batch["batch_id"], generation=generation,
+                                    outcome="saturated" if progress["saturated"] else "invalid_schema")
             return True
-    if batch["state"] in {"failed", "skipped"}:
-        middle = len(pairs) // 2
-        left = _link_pair_group(store, job_id, pairs[:middle], generation=generation, depth=depth + 1, **transport)
-        right = _link_pair_group(store, job_id, pairs[middle:], generation=generation, depth=depth + 1, **transport)
-        return left or right
-    technical, semantic = [], []
-    for pair in pairs:
-        if _technical_record_identity(pair["left"]) == _technical_record_identity(pair["right"]):
-            technical.append({"left_id": pair["left"]["record_id"], "right_id": pair["right"]["record_id"],
-                              "relation": "duplicate", "reason": "Идентичное извлечение из тех же версий и фрагментов источников."})
-        else:
-            semantic.append([pair["left"]["record_id"], pair["right"]["record_id"]])
-    result = None
-    if semantic:
-        bundle = settings["analysis_prompts"]
-        data = {"pairs": semantic, "records": [{"record_id": key, "payload": value["payload"]} for key, value in sorted(records.items())]}
+        batch = claimed
+        progress = batch["payload"]["link_progress"]
+        marker = progress["active_request"]
+        if any(a["request_kind"] == "inference" for a in batch["attempts"][marker["attempt_offset"]:]):
+            # The physical receipt survived but its observation did not: do not replay it.
+            store.set_batch_outcome(job_id, batch["batch_id"], generation=generation, outcome="incomplete")
+            return True
+        pending = {key: mapping[key] for key in marker["pair_ids"]}
+        ids = {key for pair in pending.values() for key in pair}
+        data = {"pairs": [{"pair_id": key, "left_id": pair[0], "right_id": pair[1]} for key, pair in pending.items()],
+                "records": [{"record_id": key, "payload": records[key]["payload"]} for key in sorted(ids)],
+                "repair_index": marker["repair_index"],
+                "validation_errors": progress["diagnostics"][-1]["codes"] if progress["diagnostics"] else []}
         payload = {"model": settings["processing"]["model"], "instructions": bundle["system_instructions"] + "\n" + bundle["shared_prefix"],
             "input": analysis_settings.render_analysis_prompt(bundle, "link", command_rubric=bundle["commands"][job["command"]],
                 query=_analysis_query(job), records=canonical_json(data)),
-            "reasoning": analysis_settings._analysis_reasoning(settings),
-            "text": {"format": analysis_evidence.relation_format()}, "max_output_tokens": settings["digest_ai"]["max_output_tokens"], "store": False}
-        while True:
-            try:
-                result = request_counted_analysis_payload(store, job_id, batch["batch_id"], generation=generation, payload=payload, **transport)
-            except BudgetExceededError:
+            "reasoning": analysis_settings._analysis_reasoning(settings), "text": {"format": analysis_evidence.relation_format(pending)},
+            "max_output_tokens": analysis_settings.stage_output_limit(settings, "link"), "store": False}
+        _verify_relation_sources(store, job, records)
+        try:
+            result = request_counted_analysis_payload(store, job_id, batch["batch_id"], generation=generation, payload=payload, **transport)
+        except ValueError as exc:
+            if str(exc) not in {"max_input_tokens", "model_context_limit"}:
                 raise
-            except ValueError as exc:
-                if str(exc) not in {"max_input_tokens", "model_context_limit"}:
-                    raise
-                attempted = store.get_batch(batch["batch_id"])["attempts"]
-                if len(pairs) > 1 and depth < policy["max_split_depth"] and not any(a["request_kind"] == "inference" for a in attempted):
-                    store.skip_counted_batch(job_id, batch["batch_id"], generation=generation)
-                    return _link_pair_group(store, job_id, pairs, generation=generation, depth=depth, **transport)
-                store.set_batch_outcome(job_id, batch["batch_id"], generation=generation, outcome="max_split_depth")
-                return True
-            invalid = ""
-            try:
-                outcome, invalid = analysis_evidence.response_text(result["response"])
-                if outcome != "completed":
-                    store.set_batch_outcome(job_id, batch["batch_id"], generation=generation, outcome=outcome)
-                    return _link_pair_group(store, job_id, pairs, generation=generation, depth=depth, **transport)
-                document = _validate_relation_document(analysis_evidence.parse_document(invalid),
-                    {tuple(sorted(pair)) for pair in semantic}, max_bytes=policy["max_intermediate_bytes"])
-                if document["saturated"] and len(semantic) == 1:
-                    raise ValueError("relation_saturated")
-            except BudgetExceededError:
-                raise
-            except ValueError as exc:
-                if store.claim_repair(job_id, batch["batch_id"], generation=generation):
-                    payload = {**payload, "input": analysis_settings.render_analysis_prompt(bundle, "repair", invalid_output=canonical_json({"invalid_output": invalid, "candidates": data}), validation_errors=str(exc))}
-                    continue
-                store.set_batch_outcome(job_id, batch["batch_id"], generation=generation,
-                    outcome="saturated" if str(exc) == "relation_saturated" else "invalid_schema")
-                return True
-            if document["saturated"]:
-                store.set_batch_outcome(job_id, batch["batch_id"], generation=generation, outcome="saturated")
-                return _link_pair_group(store, job_id, pairs, generation=generation, depth=depth, **transport)
-            break
-    else:
-        document = {"decisions": [], "saturated": False}
-    document["decisions"].extend(technical)
-    _verify_relation_sources(store, job, records)
-    attempt = next(a for a in store.get_batch(batch["batch_id"])["attempts"] if a["attempt_id"] == result["attempt_id"]) if result else None
-    store.complete_batch(job_id, batch["batch_id"], generation=generation, records=[], inputs=[], json_output=document,
-        attempt_id=result["attempt_id"] if result else None, usage=attempt["usage"] if attempt else None)
-    return False
+            if len(pairs) > 1 and depth < policy["max_split_depth"] and not any(a["request_kind"] == "inference" for a in store.get_batch(batch["batch_id"])["attempts"]):
+                store.skip_counted_batch(job_id, batch["batch_id"], generation=generation)
+                return _split_link_group(store, job_id, pairs, generation=generation, depth=depth, **transport)
+            store.set_batch_outcome(job_id, batch["batch_id"], generation=generation,
+                                    outcome="max_split_depth", diagnostic_code=str(exc))
+            return True
+        outcome = "completed"
+        try:
+            outcome, text = analysis_evidence.response_text(result["response"])
+            if outcome != "completed":
+                raise ValueError("relation_" + outcome)
+            classified = analysis_evidence.classify_relation_document(analysis_evidence.parse_document(text), pending,
+                                                                      max_bytes=policy["max_intermediate_bytes"])
+        except ValueError as exc:
+            classified = {"accepted_decisions": {}, "unresolved_pair_ids": list(pending), "saturated": False,
+                "diagnostics": {"requested": len(pending), "accepted": 0, "missing": len(pending), "extra": 0,
+                    "duplicate": 0, "conflicting": 0, "codes": [str(exc)]}}
+        _verify_relation_sources(store, job, records)
+        accepted = {**progress["accepted_decisions"], **classified["accepted_decisions"]}
+        diagnostic = {**classified["diagnostics"], "attempt_id": result["attempt_id"],
+            "repair_index": marker["repair_index"], "scope_sha256": marker["scope_sha256"],
+            "request_kind": "inference", "provider_ms": result["latency_ms"]}
+        progress = {"accepted_decisions": accepted, "unresolved_pair_ids": sorted(set(mapping) - set(accepted)),
+                    "diagnostics": [*progress["diagnostics"], diagnostic], "active_request": None,
+                    "saturated": classified["saturated"]}
+        batch = store.save_link_progress(job_id, batch["batch_id"], generation=generation,
+            expected=batch["payload"]["link_progress"], progress=progress, attempt_id=result["attempt_id"])
+        if outcome != "completed":
+            attempt = next(a for a in batch["attempts"] if a["attempt_id"] == result["attempt_id"])
+            output_limited = outcome == "incomplete" and attempt.get("usage") and attempt["usage"]["output_tokens"] >= attempt["output_limit"]
+            if output_limited and len(pending) > 1 and depth < policy["max_split_depth"]:
+                store.split_link_progress(job_id, batch["batch_id"], generation=generation, expected=progress)
+                remaining = [pair for key, pair in zip(mapping, pairs) if key in pending]
+                return _split_link_group(store, job_id, remaining, generation=generation, depth=depth, **transport)
+            store.set_batch_outcome(job_id, batch["batch_id"], generation=generation, outcome=outcome)
+            return True
+        if batch["state"] == "succeeded":
+            return False
+        if progress["saturated"] and len(progress["unresolved_pair_ids"]) > 1 and depth < policy["max_split_depth"]:
+            store.split_link_progress(job_id, batch["batch_id"], generation=generation, expected=progress)
+            remaining = [pair for key, pair in zip(mapping, pairs) if key in progress["unresolved_pair_ids"]]
+            return _split_link_group(store, job_id, remaining, generation=generation, depth=depth, **transport)
+        if not progress["unresolved_pair_ids"]:
+            store.set_batch_outcome(job_id, batch["batch_id"], generation=generation, outcome="saturated")
+            return True
+
+
+def _split_link_group(store, job_id, pairs, *, generation, depth, **transport):
+    middle = len(pairs) // 2
+    left = _link_pair_group(store, job_id, pairs[:middle], generation=generation, depth=depth + 1, **transport)
+    right = _link_pair_group(store, job_id, pairs[middle:], generation=generation, depth=depth + 1, **transport)
+    return left or right
 
 
 def link_analysis_records(store, job_id, *, generation, **transport):
@@ -551,7 +604,8 @@ def link_analysis_records(store, job_id, *, generation, **transport):
     try:
         for pair in iter_relation_candidates(store, job_id, generation=generation):
             pending.append(pair)
-            if len(pending) >= policy["relation_candidates_per_record"]:
+            if len(pending) >= min(policy.get("link_pairs_per_request", policy["relation_candidates_per_record"]),
+                                   analysis_evidence.RELATION_PAIR_ENUM_LIMIT):
                 partial |= _link_pair_group(store, job_id, pending, generation=generation, **transport)
                 pending = []
         if pending:
@@ -605,7 +659,7 @@ def _synthesis_evidence(store, job):
         groups.append({"node_id": ref["node_id"], "title": value.get("title", value.get("topic_key")),
                        "summary": value.get("summary", value.get("claim")), "evidence_ids": []})
     size = len(canonical_json(groups))
-    guard = job["request"]["settings"]["digest_ai"]["message_block_max_chars"]
+    guard = analysis_settings.analysis_ai(job["request"]["settings"])["message_block_max_chars"]
     def members():
         # Give each ranked group a representative before filling from the first
         # group. Only one lineage iterator is live; do not materialize all facts.
@@ -635,11 +689,23 @@ def _synthesis_evidence(store, job):
     relations = [value for value in store.iter_link_decisions(job["job_id"])
                  if value["left_id"] in selected and value["right_id"] in selected]
     manifest = job["checkpoint"]["manifest"]
-    return {"groups": [group for group in groups if group["evidence_ids"]], "records": records, "relations": relations,
+    passed_groups = [group for group in groups if group["evidence_ids"]]
+    order = state.get("group_order")
+    if order not in {None, "global", "unranked"}:
+        raise ValueError("synthesis_group_order")
+    if order is None:
+        # Old checkpoints need evidence of a real global rank, not an assumption.
+        batches = {ref["batch_id"] for ref in state["frontier"]}
+        ranked = (len(batches) == 1 and all(ref["kind"] == "merge" for ref in state["frontier"])
+                  and store.get_batch(next(iter(batches)))["payload"]["plan"].get("operation") == "rank")
+        order = "global" if len(groups) <= 1 or ranked else "unranked"
+    return {"groups": passed_groups, "records": records, "relations": relations, "group_order": order,
         "partial": state["partial"] or bool(reasons) or manifest.get("partial", False), "reasons": sorted(reasons),
         "coverage": {"selection_mode": manifest["selection_mode"], "selected_messages": manifest["selected"],
             "processed_messages": store.processed_analysis_messages(job["job_id"]), "known_skipped": manifest.get("known_skipped"),
             "ranked_evidence_records": len(seen), "synthesis_evidence_records": len(records),
+            "group_order": order, "ranking_scope": "complete" if len(passed_groups) == len(groups) and len(records) == len(seen) else "limited",
+            "eligible_groups": len(groups), "passed_groups": len(passed_groups), "eligible_evidence_records": len(seen),
             **({"candidate_messages": manifest["selected_candidates"], "context_messages": manifest["context_messages"]}
                if manifest["selection_mode"] == "candidates" else {})}}
 
@@ -753,6 +819,7 @@ def _synthesize_analysis_result(store, job_id, *, generation, **transport):
             evidence["groups"] = [group for group in evidence["groups"] if group["evidence_ids"]]
             evidence["relations"] = [value for value in evidence["relations"] if value["left_id"] in selected and value["right_id"] in selected]
             evidence["coverage"]["synthesis_evidence_records"] = len(selected)
+            evidence["coverage"].update(ranking_scope="limited", passed_groups=len(evidence["groups"]))
             evidence.update(partial=True, reasons=sorted(set(evidence["reasons"]) | {"synthesis_evidence_limited"}))
             split_depth += 1
             continue
@@ -884,8 +951,15 @@ def _advance_merge_frontier(state, references, produced, *, terminal):
         advanced.update(frontier=advanced["next_frontier"], next_frontier=[], cursor=0, depth=state["depth"] + 1)
         if terminal or not advanced["frontier"]:
             advanced["state"] = "ready"
+            advanced["group_order"] = "global"
         elif len(advanced["frontier"]) >= len(state["frontier"]):
-            advanced.update(state="partial", partial=True, reasons=sorted(set(advanced["reasons"]) | {"merge_no_progress"}))
+            if state.get("algorithm_version", 7) >= 8:
+                advanced.update(state="ready", group_order="unranked",
+                    reduction_outcome="no_reduction" if len(advanced["frontier"]) == len(state["frontier"]) else "expanded")
+            else:
+                advanced.update(state="partial", partial=True, reasons=sorted(set(advanced["reasons"]) | {"merge_no_progress"}))
+        else:
+            advanced.update(group_order="unranked", reduction_outcome="reduced")
     return advanced
 
 
@@ -919,7 +993,7 @@ def _merge_group(store, job_id, state, references, *, generation, **transport):
         "input": analysis_settings.render_analysis_prompt(bundle, "merge", command_rubric=bundle["commands"][job["command"]],
             query=_analysis_query(job), records=canonical_json({"operation": operation, "inputs": nodes, "relations": relations})),
         "reasoning": analysis_settings._analysis_reasoning(settings),
-        "text": {"format": analysis_evidence.merge_format()}, "max_output_tokens": settings["digest_ai"]["max_output_tokens"], "store": False}
+        "text": {"format": analysis_evidence.merge_format()}, "max_output_tokens": analysis_settings.stage_output_limit(settings, "merge"), "store": False}
     result = None
     if batch["state"] == "succeeded":
         cached = batch["payload"]["output"]
@@ -998,14 +1072,15 @@ def _merge_analysis_records(store, job_id, *, generation, **transport):
         if job["checkpoint"].get("relations", {}).get("partial") and "relations_incomplete" not in reasons:
             reasons.append("relations_incomplete")
         state = {"state": "running" if frontier else "ready", "frontier": frontier, "next_frontier": [],
-                 "cursor": 0, "depth": 0, "partial": bool(reasons), "reasons": reasons}
+                 "cursor": 0, "depth": 0, "partial": bool(reasons), "reasons": reasons,
+                 "algorithm_version": job["request"]["settings"]["algorithm_version"], "group_order": "unranked"}
         _save_merge_state(store, job, state)
     for ref in state["frontier"] + state["next_frontier"]:
         for _ in iter_merge_leaf_records(store, job_id, ref, generation=generation):
             pass
     while state["state"] == "running":
         if len(state["frontier"]) == 1 and state["cursor"] == 0 and not state["next_frontier"]:
-            state = {**state, "state": "ready"}
+            state = {**state, "state": "ready", "group_order": "global"}
             _save_merge_state(store, job, state)
             break
         if state["depth"] >= policy["max_merge_depth"]:
@@ -1168,7 +1243,7 @@ def _iter_analysis_batches(store, job_id, *, generation, build_payload, capabili
     """Stream the fixed manifest; recursively recount splits and bounded context."""
     job = store.require_running(job_id, generation=generation)
     settings = job["request"]["settings"]
-    policy, ai = settings["analysis"], settings["digest_ai"]
+    policy, ai = settings["analysis"], analysis_settings.analysis_ai(settings)
     maximum, guard = ai["messages_per_ai_pass"], ai["message_block_max_chars"]
     overlap = min(policy["overlap_messages"], maximum - 1)
     previous, stopped, seen = [], False, set()

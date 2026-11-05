@@ -5,16 +5,18 @@ from datetime import datetime
 import hashlib
 import json
 import re
+import unicodedata
 import uuid
 
 if __package__:
-    from .analysis_store import canonical_json
+    from .analysis_store import canonical_json, SOURCE_VERIFICATION_FIELDS
     from . import analysis_settings
 else:
-    from analysis_store import canonical_json
+    from analysis_store import canonical_json, SOURCE_VERIFICATION_FIELDS
     import analysis_settings
 
 from telegram_shared.formatting import build_message_link
+from common import process as common_process
 
 EVIDENCE_SCHEMA_VERSION = 1
 
@@ -52,6 +54,14 @@ RELATION_SCHEMA = _object({
         "reason": {"type": "string", "minLength": 1}})),
     "saturated": {"type": "boolean"},
 })
+RELATION_PAIR_SCHEMA = _object({
+    "decisions": _array(_object({"pair_id": {"type": "string", "minLength": 1},
+        "relation": copy.deepcopy(RELATION_SCHEMA["properties"]["decisions"]["items"]["properties"]["relation"]),
+        "reason": {"type": "string", "minLength": 1}})),
+    "saturated": {"type": "boolean"},
+})
+# Structured Outputs permits 1000 enum values across the complete schema.
+RELATION_PAIR_ENUM_LIMIT = 1000 - len(RELATION_PAIR_SCHEMA["properties"]["decisions"]["items"]["properties"]["relation"]["enum"])
 MERGE_SCHEMA = _object({
     "groups": _array(_object({"title": {"type": "string", "minLength": 1},
         "summary": {"type": "string", "minLength": 1}, "input_ids": _STRINGS})),
@@ -84,8 +94,49 @@ def merge_format():
     return {"type": "json_schema", "name": "telegram_merge_v1", "strict": True, "schema": copy.deepcopy(MERGE_SCHEMA)}
 
 
-def relation_format():
-    return {"type": "json_schema", "name": "telegram_relations_v1", "strict": True, "schema": copy.deepcopy(RELATION_SCHEMA)}
+def relation_format(pair_map=None):
+    if pair_map is None:
+        return {"type": "json_schema", "name": "telegram_relations_v1", "strict": True, "schema": copy.deepcopy(RELATION_SCHEMA)}
+    if not 1 <= len(pair_map) <= RELATION_PAIR_ENUM_LIMIT:
+        raise ValueError("relation_pair_enum_limit")
+    schema = copy.deepcopy(RELATION_PAIR_SCHEMA)
+    schema["properties"]["decisions"]["items"]["properties"]["pair_id"]["enum"] = list(pair_map)
+    return {"type": "json_schema", "name": "telegram_relations_v2", "strict": True, "schema": schema}
+
+
+def classify_relation_document(document, pair_map, *, max_bytes, legacy=False):
+    """Validate shape, then retain only unambiguous application-addressed decisions."""
+    validate_shape(document, RELATION_SCHEMA if legacy else RELATION_PAIR_SCHEMA)
+    if len(canonical_json(document).encode("utf-8")) > max_bytes:
+        raise ValueError("relation_output_limit")
+    reverse = {tuple(sorted(pair)): key for key, pair in pair_map.items()}
+    if len(reverse) != len(pair_map) or any(len(pair) != 2 or pair[0] == pair[1] for pair in pair_map.values()):
+        raise ValueError("relation_pair_mapping")
+    grouped, extra, duplicate = {}, 0, 0
+    for item in document["decisions"]:
+        identity = (reverse.get(tuple(sorted((item["left_id"], item["right_id"]))))
+                    if legacy else item["pair_id"])
+        if identity not in pair_map:
+            extra += 1
+            continue
+        left, right = pair_map[identity]
+        value = {"left_id": left, "right_id": right, "relation": item["relation"], "reason": item["reason"]}
+        bucket = grouped.setdefault(identity, {})
+        digest = canonical_json(value)
+        if digest in bucket:
+            duplicate += 1
+        bucket[digest] = value
+    accepted = {key: next(iter(values.values())) for key, values in sorted(grouped.items()) if len(values) == 1}
+    missing = sorted(set(pair_map) - set(grouped))
+    conflicts = sorted(key for key, values in grouped.items() if len(values) > 1)
+    diagnostics = {"requested": len(pair_map), "accepted": len(accepted), "missing": len(missing),
+                   "extra": extra, "duplicate": duplicate, "conflicting": len(conflicts)}
+    diagnostics["codes"] = [code for key, code in (("missing", "relation_missing_disposition"),
+        ("extra", "relation_pair_scope"), ("duplicate", "relation_duplicate"), ("conflicting", "relation_conflict")) if diagnostics[key]]
+    if document["saturated"]:
+        diagnostics["codes"].append("relation_saturated")
+    return {"accepted_decisions": accepted, "unresolved_pair_ids": sorted(set(missing) | set(conflicts)),
+            "diagnostics": diagnostics, "saturated": document["saturated"]}
 
 
 def evidence_format():
@@ -178,6 +229,13 @@ def build_analysis_message_link(channel, message_id):
     return build_message_link({"channel_id": peer, "username": username, "message_id": message_id})
 
 
+def _is_digest_source(message):
+    text = (message.get("text") or "").strip()
+    heading = text.split("\n", 1)[0]
+    return bool(re.search(r"(?i)(?<!\w)#(?:дайджест|digest)\b", text)
+                or re.match(r"(?i)^[^\w]*(?:(?:нейро)?дайджест\b|digest\b|weekly\s+(?:digest|roundup)\b)", heading))
+
+
 def _verified_analysis_source(store, job, ref, *, supporting):
     pair = (ref["channel_id"], ref["message_id"])
     manifest = store.manifest_reference(job["job_id"], *pair)
@@ -202,6 +260,7 @@ def _verified_analysis_source(store, job, ref, *, supporting):
     return {"channel_id": pair[0], "message_id": pair[1], "date_utc": manifest["date_utc"],
             "content_digest": manifest["content_digest"], "title": channel["title"],
             "quote": ref["quote"] if supporting else None,
+            "is_digest": _is_digest_source(message),
             "url": build_analysis_message_link(channel, pair[1])}
 
 
@@ -218,27 +277,304 @@ def _validate_qa_support(ids, known, answer_pairs):
         raise ValueError("qa_question_without_answer_link")
 
 
-def verify_analysis_sources(store, job_id, result, *, generation):
+def source_verification_counts(result):
+    counts = {key: result.get(key, 0) for key in SOURCE_VERIFICATION_FIELDS}
+    counts['digest_sources'] = sum(bool(source.get('is_digest')) for item in result.get('items', [])
+                                  for source in item.get('sources', []))
+    return counts
+
+
+def _source_identity_text(value):
+    return ' '.join(unicodedata.normalize('NFC', value).split()).casefold()
+
+
+def _source_subject(record):
+    return tuple(sorted({_source_identity_text(value) for value in record['entities'] if value.strip()}))
+
+
+def _source_fact_key(record, *, claim=True, subject=True):
+    values = tuple(tuple(sorted(_source_identity_text(text) for text in record[key]))
+                   for key in ('details', 'conditions', 'exceptions'))
+    constraints = (values, record['assertion_kind'], record.get('event_at'))
+    if subject:
+        constraints += (_source_subject(record),)
+    return (_source_identity_text(record['claim']), constraints) if claim else constraints
+
+
+def _source_options(store, job, records, relations, *, budget):
+    """Prefer complete standalone equivalents within this frozen evidence set."""
+    def sources(record):
+        return [_verified_analysis_source(store, job, ref, supporting=True) for ref in record['source_refs']]
+    options = {key: sources(record) for key, record in records.items()}
+    if job['command'] == 'topics':
+        return {key: [ref for ref in refs if not ref['is_digest']] for key, refs in options.items()}, set()
+    for key, record in records.items():
+        if record['record_type'] in {'question', 'problem'}:
+            options[key] = [ref for ref in options[key] if not ref['is_digest']]
+    targets = {key for key, refs in options.items() if refs and all(ref['is_digest'] for ref in refs)
+               and records[key]['record_type'] not in {'question', 'problem', 'opinion'}}
+    if not targets:
+        return options, set()
+    # Equivalence is app-owned exact fact identity or an accepted duplicate edge.
+    # Conditions/details remain part of the identity even for duplicate edges.
+    metrics, scan_limited = budget.metrics, False
+    def expired():
+        return budget.deadline is not None and budget.clock() >= budget.deadline
+    roots = {}
+    cached = {key: (_source_subject(record), _source_fact_key(record, claim=False)) for key, record in records.items()}
+    forbidden = {frozenset((edge['left_id'], edge['right_id'])) for edge in relations if edge['relation'] != 'duplicate'}
+    def payload(key):
+        if key not in cached:
+            value = store.leaf_evidence(job['job_id'], key)
+            cached[key] = (_source_subject(value['payload']), _source_fact_key(value['payload'], claim=False)) if value else None
+        return cached[key]
+    def root(key):
+        roots.setdefault(key, key)
+        while roots[key] != key:
+            roots[key] = roots[roots[key]]
+            key = roots[key]
+        return key
+    for edge in relations:
+        if expired():
+            scan_limited = True
+            break
+        if edge['relation'] == 'duplicate':
+            left, right = payload(edge['left_id']), payload(edge['right_id'])
+            if left is None or right is None:
+                continue
+            if not left[0] or left[0] != right[0]:
+                metrics['source_subject_rejections'] += 1
+                continue
+            if (frozenset((edge['left_id'], edge['right_id'])) not in forbidden
+                    and left[1] == right[1]):
+                roots[root(edge['left_id'])] = root(edge['right_id'])
+    by_fact, by_root = {}, {}
+    for key in targets:
+        by_fact.setdefault(_source_fact_key(records[key], subject=False), []).append(key)
+        by_root.setdefault(root(key), []).append(key)
+    alternatives, ambiguous = {key: [] for key in targets}, set()
+    for candidate in store.iter_leaf_evidence(job['job_id'], page_size=job['request']['settings']['sync']['batch_size']):
+        if expired():
+            scan_limited = True
+            break
+        record = candidate['payload']
+        if record['record_type'] in {'question', 'problem', 'opinion'}:
+            continue
+        potential = set(by_fact.get(_source_fact_key(record, subject=False), []))
+        if candidate['record_id'] in roots:
+            potential.update(key for key in by_root.get(root(candidate['record_id']), [])
+                           if _source_fact_key(records[key], claim=False) == _source_fact_key(record, claim=False))
+        matched = set()
+        for key in potential:
+            if key == candidate['record_id']:
+                continue
+            target_subject, candidate_subject = _source_subject(records[key]), _source_subject(record)
+            if not target_subject or target_subject != candidate_subject:
+                metrics['source_subject_rejections'] += 1
+                if not target_subject or not candidate_subject:
+                    ambiguous.add(key)
+                continue
+            if frozenset((key, candidate['record_id'])) in forbidden:
+                ambiguous.add(key)
+                continue
+            matched.add(key)
+        if matched:
+            standalone = [ref for ref in sources(record) if not ref['is_digest']]
+            for key in matched:
+                alternatives[key].extend(standalone)
+    checkpoint = job['checkpoint']
+    incomplete = (scan_limited or bool(store.incomplete_evidence_reasons(job['job_id']))
+                  or store.processed_analysis_messages(job['job_id']) < checkpoint.get('manifest', {}).get('selected', 0)
+                  or checkpoint.get('manifest', {}).get('partial', False)
+                  or checkpoint.get('relations', {}).get('partial', False)
+                  or checkpoint.get('relations', {}).get('limited', False))
+    uncertain = set()
+    for key in targets:
+        if alternatives[key]:
+            options[key] = alternatives[key]
+        elif incomplete or key in ambiguous:
+            options[key] = []
+            uncertain.add(key)
+    for key, refs in options.items():
+        standalone = [ref for ref in refs if not ref['is_digest']]
+        if standalone:
+            options[key] = standalone
+    return options, uncertain
+
+
+class _SourceCoverLimited(Exception):
+    pass
+
+
+class SourceCoverBudget:
+    """One frozen work budget shared by every item in one verification."""
+    def __init__(self, maximum, *, deadline=None, monotonic_func=common_process.continuous_time):
+        if type(maximum) is not int or maximum < 1:
+            raise ValueError('Invalid source cover state budget')
+        self.maximum, self.deadline, self.clock = maximum, deadline, monotonic_func
+        self.metrics = {key: 0 for key in SOURCE_VERIFICATION_FIELDS if key.startswith('source_')}
+
+    def check(self):
+        if self.deadline is not None and self.clock() >= self.deadline:
+            raise _SourceCoverLimited()
+
+    def spend(self):
+        self.check()
+        if self.metrics['source_cover_states'] >= self.maximum:
+            raise _SourceCoverLimited()
+        self.metrics['source_cover_states'] += 1
+
+
+def _select_supporting_sources(options, required, limit, *, budget):
+    started = budget.clock()
+    try:
+        return _find_supporting_sources(options, required, limit, budget=budget)
+    except _SourceCoverLimited:
+        budget.metrics['source_cover_limited_items'] += 1
+        return {'outcome': 'search_limited', 'sources': []}
+    finally:
+        budget.metrics['source_cover_elapsed_ms'] += max(0, round((budget.clock() - started) * 1000))
+
+
+def _find_supporting_sources(options, required, limit, *, budget):
+    candidates, coverage = {}, {}
+    for key, refs in options.items():
+        budget.check()
+        for source in refs:
+            budget.check()
+            pair = (source['channel_id'], source['message_id'])
+            if pair not in candidates or len(source['quote']) > len(candidates[pair]['quote']):
+                candidates[pair] = source
+            coverage.setdefault(pair, set()).add(key)
+    def priority(pair):
+        source = candidates[pair]
+        return (source['is_digest'], -len(source['quote']), pair)
+    def found(selected):
+        budget.check()
+        if len(selected) > limit or len(selected) != len(set(selected)) or set(required) - set().union(set(), *(coverage[p] for p in selected)):
+            raise ValueError('source_cover_validation')
+        selected = list(selected)
+        selected.extend(sorted((pair for pair in candidates if pair not in selected), key=priority)[:limit - len(selected)])
+        return {'outcome': 'found', 'sources': [candidates[pair] for pair in selected]}
+
+    budget.check()
+    missing, selected = set(required), []
+    while missing and len(selected) < limit:
+        choices = []
+        for pair in candidates:
+            budget.check()
+            if pair not in selected and coverage[pair] & missing:
+                choices.append(pair)
+        if not choices:
+            break
+        pair = min(choices, key=lambda pair: (-len(coverage[pair] & missing), priority(pair)))
+        selected.append(pair)
+        missing -= coverage[pair]
+    if not missing:
+        return found(selected)
+    budget.metrics['source_cover_fallbacks'] += 1
+    positions = {key: index for index, key in enumerate(sorted(required))}
+    compressed = {}
+    for pair in sorted(candidates, key=priority):
+        budget.check()
+        mask = 0
+        for key in coverage[pair] & required:
+            budget.check()
+            mask |= 1 << positions[key]
+        if mask:
+            compressed.setdefault(mask, pair)
+    masks = list(compressed)
+
+    def choices_for(mask, slots):
+        if slots <= 0:
+            return None
+        union, gain = 0, 0
+        for candidate in masks:
+            budget.spend()
+            covered = candidate & mask
+            union |= covered
+            gain = max(gain, covered.bit_count())
+        if union != mask or (mask.bit_count() + gain - 1) // gain > slots:
+            return None
+        remaining, best = mask, None
+        while remaining:
+            bit = remaining & -remaining
+            remaining ^= bit
+            choices = []
+            for candidate in masks:
+                budget.spend()
+                if candidate & bit:
+                    choices.append(candidate)
+            if best is None or len(choices) < len(best):
+                best = choices
+            if len(best) == 1:
+                break
+        return iter(sorted(best, key=lambda candidate: (-(candidate & mask).bit_count(), priority(compressed[candidate]))))
+
+    wanted = (1 << len(required)) - 1
+    choices = choices_for(wanted, limit)
+    stack = [(wanted, limit, (), choices)] if choices is not None else []
+    while stack:
+        remaining, slots, selected, choices = stack[-1]
+        candidate = next(choices, None)
+        if candidate is None:
+            stack.pop()
+            continue
+        budget.spend()
+        pending, chosen = remaining & ~candidate, (*selected, compressed[candidate])
+        if not pending:
+            return found(chosen)
+        following = choices_for(pending, slots - 1)
+        if following is not None:
+            stack.append((pending, slots - 1, chosen, following))
+    budget.metrics['source_cover_impossible_items'] += 1
+    return {'outcome': 'proven_impossible', 'sources': []}
+
+
+def verify_analysis_sources(store, job_id, result, *, generation, deadline=None,
+                            monotonic_func=common_process.continuous_time):
     """Resolve application-owned provenance; this does not prove semantic entailment."""
     job = store.require_running(job_id, generation=generation)
     limit = analysis_settings._synthesis_limits(job)["sources_per_item"]
     verified = copy.deepcopy(result)
     verified.pop("sources", None)
-    answer_pairs = _qa_answer_pairs(store.iter_link_decisions(job_id)) if job["command"] == "qa" else set()
+    retained = []
+    excluded = verified.get("excluded_digest_only_items", 0)
+    unsupported = verified.get('excluded_unsupported_items', 0)
+    source_limited = verified.get('excluded_source_limited_items', 0)
+    relations = list(store.iter_link_decisions(job_id)) if job['command'] != 'topics' else []
+    answer_pairs = _qa_answer_pairs(relations) if job["command"] == "qa" else set()
+    known = {}
+    for item in verified.get('items', []):
+        for identity in item['evidence_ids']:
+            if identity not in known:
+                record = store.leaf_evidence(job_id, identity)
+                if record is None or not record['payload']['source_refs']:
+                    raise ValueError('final_evidence_scope')
+                known[identity] = record['payload']
+    output = job['request']['settings']['analysis']['output']
+    if 'source_cover_max_states' not in output:
+        raise ValueError('analysis_policy_incompatible')
+    budget = SourceCoverBudget(output['source_cover_max_states'],
+                               deadline=deadline, monotonic_func=monotonic_func)
+    options, uncertain = _source_options(store, job, known, relations, budget=budget)
     for item in verified.get("items", []):
         sources, records = {}, {}
         for identity in item["evidence_ids"]:
-            record = store.leaf_evidence(job_id, identity)
-            if record is None or not record["payload"]["source_refs"]:
-                raise ValueError("final_evidence_scope")
-            records[identity] = record["payload"]
-            for ref in record["payload"]["source_refs"]:
-                source = _verified_analysis_source(store, job, ref, supporting=True)
+            records[identity] = known[identity]
+            for source in options[identity]:
                 pair = (source["channel_id"], source["message_id"])
                 if pair not in sources or len(source["quote"]) > len(sources[pair]["quote"]):
                     sources[pair] = source
         if not sources:
-            raise ValueError("final_evidence_without_support")
+            if not records:
+                raise ValueError("final_evidence_without_support")
+            if job['command'] == 'topics':
+                excluded += 1
+            else:
+                unsupported += 1
+                source_limited += bool(set(records) & uncertain)
+            continue
         if job["command"] == "qa":
             _validate_qa_support(item["evidence_ids"], records, answer_pairs)
         # Keep the latest update; remaining slots retain substantive backing
@@ -248,10 +584,69 @@ def verify_analysis_sources(store, job_id, result, *, generation):
             -len(s["quote"]), s["channel_id"], s["message_id"]))
         if job["command"] == "topics":
             ordered = ordered[:1] + sorted(ordered[1:], key=lambda s: -len(s["quote"]))
-        item["sources"] = ordered[:limit]
+            selected = ordered[:limit]
+        else:
+            required = {key for key, record in records.items() if record['record_type'] not in {'question', 'problem'}}
+            item_options = {key: options[key] for key in records}
+            if job['command'] == 'search' and required:
+                # Search has always shown representative standalone references.
+                # Unique digest facts are mandatory; a question alone cannot fill
+                # the remaining representative factual source slot.
+                factual = [source for key in required for source in options[key]]
+                required = {key for key in required if key in uncertain or any(ref['is_digest'] for ref in options[key])}
+                item_options['__facts__'] = factual
+                required.add('__facts__')
+            selection = _select_supporting_sources(item_options, required, limit, budget=budget) if required else {'outcome': 'proven_impossible', 'sources': []}
+            selected = selection['sources']
+            if not selected:
+                unsupported += 1
+                source_limited += bool(set(records) & uncertain) or selection['outcome'] == 'search_limited'
+                continue
+        item['sources'] = [{key: value for key, value in source.items() if key != 'is_digest' or value}
+                           for source in selected]
+        retained.append(item)
+    verified["items"] = retained
+    verified.update(budget.metrics)
+    if excluded:
+        verified["excluded_digest_only_items"] = excluded
+        notice = f"Не включено пунктов без отдельных постов по теме: {excluded}. Источники есть только в дайджестах."
+        limitations = verified.setdefault("limitations", [])
+        if notice not in limitations:
+            limitations.append(notice)
+        if not retained:
+            verified["summary"] = ""
+            verified["insufficient_information"] = True
+    if unsupported:
+        verified['excluded_unsupported_items'] = unsupported
+        notice = f'Не включено пунктов без допустимого подтверждения ответа/утверждений в пределах лимита источников: {unsupported}.'
+        if notice not in verified.setdefault('limitations', []):
+            verified['limitations'].append(notice)
+        verified['summary'] = ''
+        if not retained:
+            verified['insufficient_information'] = True
+    if source_limited:
+        verified['excluded_source_limited_items'] = source_limited
+        verified['partial'] = True
+        verified['reasons'] = sorted(set(verified.get('reasons', [])) | {'source_selection_incomplete'})
+    if budget.metrics['source_cover_limited_items']:
+        notice = 'Проверка покрытия источниками ограничена бюджетом поиска или временем; отсутствие полного покрытия не доказано.'
+        if notice not in verified.setdefault('limitations', []):
+            verified['limitations'].append(notice)
+    if any(source.get('is_digest') for item in retained for source in item['sources']):
+        notice = ('Дайджестные источники подтверждают сведения, для которых эквивалентный отдельный пост '
+                  'не найден в проанализированной выборке. Это не проверка всего архива Telegram.')
+        if notice not in verified.setdefault('limitations', []):
+            verified['limitations'].append(notice)
     if not verified.get("items"):
-        verified["sources"] = [_verified_analysis_source(store, job, ref, supporting=False)
-            for ref in store.processed_source_refs(job_id, limit=limit)]
+        verified["sources"] = []
+        if not excluded and not unsupported:
+            for ref in store.processed_source_refs(job_id, limit=limit):
+                source = _verified_analysis_source(store, job, ref, supporting=False)
+                digest = source.pop('is_digest')
+                if not digest or job['command'] != 'topics':
+                    if digest:
+                        source['is_digest'] = True
+                    verified['sources'].append(source)
         verified["source_role"] = "processed_inputs"
         verified.pop("source_refs", None)
     return verified

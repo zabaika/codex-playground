@@ -203,6 +203,20 @@ ANALYSIS_SCHEMA_STATEMENTS = (
         PRIMARY KEY(batch_id,channel_id,message_id,fragment_start,fragment_end,role),
         CHECK((fragment_start=0 AND fragment_end=0) OR fragment_start < fragment_end)
     )""",
+    """CREATE TABLE IF NOT EXISTS analysis_phase_runs (
+        job_id TEXT NOT NULL REFERENCES analysis_jobs(job_id) ON DELETE CASCADE,
+        generation INTEGER NOT NULL CHECK(generation>=0),
+        sequence INTEGER NOT NULL CHECK(sequence>=0),
+        phase TEXT NOT NULL,
+        process_run_id TEXT NOT NULL,
+        implementation_sha256 TEXT,
+        started_at TEXT NOT NULL,
+        finished_at TEXT,
+        elapsed_ms INTEGER CHECK(elapsed_ms IS NULL OR elapsed_ms>=0),
+        duration_source TEXT NOT NULL CHECK(duration_source IN ('monotonic','utc_estimate')),
+        outcome TEXT NOT NULL,
+        PRIMARY KEY(job_id,generation,sequence)
+    )""",
     "CREATE INDEX IF NOT EXISTS idx_analysis_jobs_queue ON analysis_jobs(status,created_at)",
     "CREATE INDEX IF NOT EXISTS idx_analysis_batches_job_state ON analysis_batches(job_id,state,step_key)",
     "CREATE INDEX IF NOT EXISTS idx_analysis_batches_cache ON analysis_batches(cache_key,state)",
@@ -403,6 +417,14 @@ def migrate_ai_usage_log_schema(conn: sqlite3.Connection) -> None:
         "job_id": "TEXT",
         "batch_id": "TEXT",
         "attempt_id": "TEXT",
+        "generation": "INTEGER",
+        "phase_sequence": "INTEGER",
+        "started_at": "TEXT",
+        "backoff_ms": "INTEGER",
+        "backoff_requested_ms": "INTEGER",
+        "cache_write_30m_tokens": "INTEGER",
+        "cache_write_12h_tokens": "INTEGER",
+        "actual_model": "TEXT",
     }
     for column_name, column_type in ai_usage_additions.items():
         if ai_usage_columns and column_name not in ai_usage_columns:

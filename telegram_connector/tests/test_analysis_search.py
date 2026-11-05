@@ -117,7 +117,7 @@ def test_s27_query_preparation_failed_provider_keeps_bounded_original_fallback(s
     result = prepare_query(store, job, send)
     assert result["expanded_terms"] == [] and result["expansion_status"] == "fallback"
     assert result["original_terms"] and all("secret" not in reason for reason in result["reasons"])
-    assert len(calls) == (3 if kind == "network" else 1)
+    assert len(calls) == (job["request"]["settings"]["analysis"]["ai"]["retry_attempts"] if kind == "network" else 1)
     assert store.get_job(job["job_id"])["llm_calls"] == len(calls)
 
 
@@ -133,7 +133,7 @@ def test_s27_query_preparation_configuration_failure_is_not_invalid_model_output
 def test_s27_query_preparation_minimum_payload_too_large_uses_explicit_original_fallback(search_job):
     store, job = search_job
     calls = []
-    result = prepare_query(store, job, lambda req, **kw: calls.append(req.full_url) or Response({"input_tokens": 16001}))
+    result = prepare_query(store, job, lambda req, **kw: calls.append(req.full_url) or Response({"input_tokens": job["request"]["settings"]["analysis"]["max_input_tokens"] + 1}))
     assert result["expansion_status"] == "fallback" and result["expanded_terms"] == []
     assert result["reasons"] == ["query_expansion_saturated"]
     assert len(calls) == 1 and store.get_job(job["job_id"])["llm_calls"] == 0
@@ -160,7 +160,7 @@ def test_s27_query_preparation_cache_revalidates_compatible_leaf_and_policy(sear
         if change == "query":
             value["request"]["query"] += " Португалия"
         if change == "reasoning":
-            value["settings"]["digest_ai"]["reasoning_effort"] = "low"
+            value["settings"]["analysis"]["ai"]["reasoning_effort"] = "high"
         if change == "prompt":
             value["settings"]["analysis_prompts"]["hash"] = "new-prompt-hash"
         if change == "model":
@@ -547,7 +547,7 @@ def search_answer(search_job, runtime, tmp_path, monkeypatch):
     def run(*, mode="full", detail="normal", query="  Условия\u00a0ВНЖ в Espan\u0303a?  ", empty=False, max_calls=None):
         profile = store.get_job(job["job_id"])["request"]["settings"]["analysis"]["output"]["profiles"][detail]
         current = query_request(store, job, query=query, mode=mode, detail=detail, limit=profile["default_limit"])
-        change_setting(store, job, "digest_ai", "messages_per_ai_pass", 2)
+        change_setting(store, job, "analysis.ai", "messages_per_ai_pass", 2)
         change_setting(store, job, "analysis", "overlap_messages", 0)
         change_setting(store, job, "analysis", "merge_fan_in", 2)
         if max_calls is not None:
@@ -579,14 +579,15 @@ def search_answer(search_job, runtime, tmp_path, monkeypatch):
                         assertion_kind="experience" if "Experiencia personal" in message["text"] else "reported")
                     records.append(value)
                 return Response(model_response({"records": records, "saturated": False}))
-            if kind == "telegram_relations_v1":
+            if kind == "telegram_relations_v2":
                 pairs = json.loads(data["input"].split("Кандидаты: ", 1)[1])
                 by_id = {r["record_id"]: r["payload"] for r in pairs["records"]}
                 decisions = []
-                for left, right in pairs["pairs"]:
+                for pair in pairs["pairs"]:
+                    left, right = pair["left_id"], pair["right_id"]
                     a, b = by_id[left]["claim"], by_id[right]["claim"]
                     contrary = ("1250 EUR" in a and "1500 EUR" in b) or ("1500 EUR" in a and "1250 EUR" in b)
-                    decisions.append({"left_id": left, "right_id": right, "relation": "contradicts" if contrary else "complements",
+                    decisions.append({"pair_id": pair["pair_id"], "relation": "contradicts" if contrary else "complements",
                         "reason": "Fixture-labelled compatibility of conditions"})
                 return Response(model_response({"decisions": decisions, "saturated": False}))
             if kind == "telegram_synthesis_v1":
@@ -627,7 +628,7 @@ def test_s29_full_search_answer_normalizes_each_ai_stage_but_keeps_original_ques
     saved, status, calls, sent = run(query=raw)
     assert saved["result"]["query"] == raw
     assert {data["text"]["format"]["name"] for data in calls} >= {
-        "telegram_evidence_v1", "telegram_relations_v1", "telegram_merge_v1", "telegram_synthesis_v1"}
+        "telegram_evidence_v1", "telegram_relations_v2", "telegram_merge_v1", "telegram_synthesis_v1"}
     assert all("Условия ВНЖ в España?" in data["input"] for data in calls)
 
 
@@ -700,8 +701,8 @@ def test_s29_full_search_answer_requires_brief_when_supported_details_exist(sear
 @pytest.fixture
 def search_journey(listener, config, access, runtime, tmp_path, monkeypatch):
     """Real bridge/supervisor/worker boundaries; external history and AI are fixtures."""
-    config["digest_ai"]["messages_per_ai_pass"] = 2
-    config["analysis"] = {"overlap_messages": 0}
+    config["analysis"]["ai"]["messages_per_ai_pass"] = 2
+    config["analysis"].update(overlap_messages=0)
     root = tmp_path / "repo" / "telegram_connector"
     root.mkdir(parents=True)
     monkeypatch.setenv("TELEGRAM_CONNECTOR_PROJECT_ROOT", str(root))

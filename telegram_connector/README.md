@@ -229,6 +229,65 @@ resume, with shared TERM/grace/KILL process-group cleanup. Copied-runtime upgrad
 the canonical installer. Jobs retain frozen prompt/schema/algorithm identities;
 incompatible execution-policy changes require a fresh request.
 
+Analytics use their own `[analysis.ai]` policy for provider timeouts, retries,
+reasoning, batching and intermediate output caps. Digest settings do not change
+new analytic jobs. Final output still follows the chosen detail profile.
+Each item ends with a single separator line; Telegram source labels such as
+`1 источник` are clickable across the whole label.
+The first Telegram part starts with channel titles, the UTC period and selected
+message count. A partial-status block precedes the command heading and content.
+Item and section headings use one newline before their content.
+Conditions and source entries use single newlines within their blocks. A separator
+also follows a nonempty introduction when result items follow it.
+Link requests use application-owned pair IDs and preserve accepted decisions in
+durable progress. Repairs contain only unresolved pairs; an extra pair cannot
+enter the graph or erase valid decisions. Request scope, conflicts and repair
+diagnostics appear in the read-only report alongside physical-attempt usage.
+A valid merge level can keep distinct events separate without becoming partial.
+Unranked groups pass explicitly to final synthesis for global selection when its
+complete input fits; omitted evidence and independent failures remain partial.
+Algorithm v9 and prompt bundle v11 version these contracts. Older frozen jobs
+require a fresh request rather than silently switching policy; historical
+responses retain an explicit legacy decoder for offline inspection.
+Topics exclude sources with explicit digest headings or tags and omit digest-only
+items. QA/search allow unique digest facts within the analyzed frozen selection,
+label those sources, and prefer complete standalone equivalents from validated
+evidence. Incomplete selection/extraction/relations cannot establish uniqueness.
+QA source limits must retain support for every answer, ahead of question links;
+unsupported composite answers are omitted. Search keeps representative standalone
+references and mandatory references for unique digest facts. Original evidence
+remains auditable; unrelated posts and unverified message references cannot supply
+replacement links. Dropping a QA/search item also clears its unverified summary.
+Standalone replacement requires matching nonempty normalized entities and complete
+fact qualifiers. Incompatible/unknown subjects cannot bridge duplicate components;
+an explicit non-duplicate relation prevents replacement through another path.
+Source coverage first uses the existing greedy path, then a bounded alternative
+search before declaring a composite answer unsupported. The frozen
+`analysis.output.source_cover_max_states` (default 50000) is shared across all
+items in one verification; work includes failed candidate/branch inspections.
+Search distinguishes found, proven impossible and resource-limited outcomes.
+The last outcome preserves `source_selection_incomplete`; it is not proof that
+no cover exists. Verification reuses the worker deadline through presentation,
+full artifacts and delivery, without opening a new time window.
+Bounded source-verification counters and search duration appear in the checkpoint,
+delivery intent and reporter; historical missing measurements remain unknown.
+Admission and resume reserve the fixed lifecycle's phase storage, including close
+and finalization. A queued job unable to start under its frozen storage cap fails
+without stopping the supervisor. Invalidated link batches remain in the attempt
+history but cannot enter the active graph or its planned/accepted pair counts.
+
+For a read-only timing and usage report, without new API requests:
+
+```bash
+python3 telegram_connector/scripts/report_analysis.py --db telegram_connector/data/telegram_history.sqlite3 --job-id JOB_ID
+```
+
+The report correlates phases and physical provider attempts, including retries,
+backoff, interruptions and unknown usage. Historical jobs can lack phase timings;
+missing measurements remain unknown. `--pricing` accepts a reviewed JSON snapshot
+of USD rates per million tokens (`input`, `cached_input`, `cache_write_30m`,
+`cache_write_12h`, `output`). Without rates or complete usage, cost stays unknown.
+
 ## Digest Behavior
 
 Digest runs are per channel: prep-sync, optional OCR, AI analysis, and Telegram delivery are isolated by channel where possible.

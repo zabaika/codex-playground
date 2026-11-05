@@ -937,8 +937,9 @@ def test_s06_controls_and_resume_keeps_cutoff_request_and_cumulative_ledger(stor
     assert result["status"] == "queued" and after["finished_at"] is None
     assert after["generation"] > before["generation"]
     for key in ("cutoff_at", "accepted_at", "request", "checkpoint", "llm_calls", "provider_requests",
-                "used_tokens", "reserved_tokens", "downloaded_messages", "intermediate_bytes"):
+                "used_tokens", "reserved_tokens", "downloaded_messages"):
         assert after[key] == before[key], key
+    assert after['intermediate_bytes'] == store.storage_usage(job['job_id'])['allocated_bytes']
     with pytest.raises(StaleGenerationError):
         store.save_checkpoint(job["job_id"], {"late": True}, generation=before["generation"], max_bytes=1000)
     assert control(store, config, access, "resume", job)["status"] == "queued"

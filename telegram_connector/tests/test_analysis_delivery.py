@@ -277,7 +277,8 @@ def test_s21_sources_and_rendering_capped_fallback_preserves_original_reason(man
     store, job = manifest_job
     sourced_result(store, job)
     fallback = store.record_budget_stop(job["job_id"], generation=job["generation"], reason="max_llm_calls")
-    frozen_output_setting(store, job, lambda p: p["settings"]["analysis"]["output"]["profiles"]["normal"].update(max_chars=330))
+    # Leave room for mandatory channel/period/count metadata before trimming sources.
+    frozen_output_setting(store, job, lambda p: p["settings"]["analysis"]["output"]["profiles"]["normal"].update(max_chars=430))
     output = presentation(store, job, fallback)
     assert output["result"]["partial"] is True
     assert {"max_llm_calls", "max_chars"} <= set(output["result"]["reasons"])

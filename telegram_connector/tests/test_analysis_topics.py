@@ -13,7 +13,7 @@ from telegram_connector.tests.test_analysis_manifest import manifest_job, seed, 
 from telegram_connector.tests.test_analysis_evidence import document, model_response
 from telegram_connector.tests.test_analysis_transport import Response
 from telegram_connector.tests.test_analysis_merge import merge
-from telegram_connector.tests.test_analysis_relations import link
+from telegram_connector.tests.test_analysis_relations import link, relation_decision
 from telegram_connector.tests.test_analysis_synthesis import synthesize, synthesis_job
 from telegram_connector.tests.test_analysis_lifecycle import config, access, listener, update, supervisor, FixtureProcess
 from telegram_connector.tests.test_analysis_history import runtime, posts
@@ -66,16 +66,17 @@ def event_provider(req, timeout):
         return Response({"input_tokens": 100})
     request = json.loads(req.data)
     kind = request["text"]["format"]["name"]
-    if kind == "telegram_relations_v1":
+    if kind == "telegram_relations_v2":
         data = json.loads(request["input"].split("Кандидаты: ", 1)[1])
         records = {r["record_id"]: r["payload"] for r in data["records"]}
         decisions = []
-        for left, right in data["pairs"]:
+        for pair in data["pairs"]:
+            left, right = pair["left_id"], pair["right_id"]
             a, b = records[left], records[right]
             relation = "unrelated"
             if a["topic_key"] == b["topic_key"] == "комиссия":
                 relation = "duplicate" if a["claim"] == b["claim"] else "contradicts" if any("Опровержение" in r["claim"] for r in (a, b)) else "complements"
-            decisions.append({"left_id": left, "right_id": right, "relation": relation, "reason": "Fixture-labelled event relationship"})
+            decisions.append(relation_decision(pair, relation, "Fixture-labelled event relationship"))
         output = {"decisions": decisions, "saturated": False}
     else:
         assert kind == "telegram_merge_v1"
@@ -168,7 +169,7 @@ def test_s25_topics_events_membership_stays_in_scope_when_final_input_is_split(t
         assert all(group["evidence_ids"] and set(group["evidence_ids"]) <= selected for group in evidence["groups"])
         if req.full_url.endswith("input_tokens"):
             counted.append(len(selected))
-            return Response({"input_tokens": 16001 if len(selected) > 2 else 100})
+            return Response({"input_tokens": job["request"]["settings"]["analysis"]["max_input_tokens"] + 1 if len(selected) > 2 else 100})
         first = evidence["groups"][0]
         claim = next(r["payload"]["claim"] for r in evidence["records"] if r["record_id"] in first["evidence_ids"])
         return Response(model_response({"summary": "", "items": [{"title": first["title"], "text": claim,
@@ -182,7 +183,7 @@ def test_s25_topics_events_membership_stays_in_scope_when_final_input_is_split(t
 
 @pytest.fixture
 def topics_journey(listener, config, access, runtime, tmp_path, monkeypatch):
-    config["digest_ai"]["messages_per_ai_pass"] = 2
+    config["analysis"]["ai"]["messages_per_ai_pass"] = 2
     root = tmp_path / "repo" / "telegram_connector"
     root.mkdir(parents=True)
     monkeypatch.setenv("TELEGRAM_CONNECTOR_PROJECT_ROOT", str(root))
@@ -355,3 +356,84 @@ def test_s38_topics_sources_keep_substantive_original_and_latest_update(topic_re
     assert len(ids) == 3
     assert 1 in ids, "The source with the dates and amount must not be displaced by three later replies"
     assert 4 in ids, "Keep the latest update alongside substantive evidence"
+
+
+@pytest.mark.parametrize("topic_records", [[
+    (22, 1, "2026-10-10", "комиссия", "Банк Uno объявил комиссию 10 EUR."),
+    (22, 2, "2026-10-12", "комиссия", "Нейродайджест за неделю\nБанк Uno объявил комиссию 10 EUR.\n#дайджест"),
+]], indirect=True)
+def test_topics_links_keep_standalone_post_instead_of_newer_digest(topic_records):
+    from telegram_connector.tests.test_analysis_delivery import frozen_output_setting
+    store, job, records = topic_records
+    frozen_output_setting(store, job, lambda p: p["request"].update(sources=1))
+    result = {"items": [{"evidence_ids": [r["record_id"] for r in records]}]}
+    view = analysis.verify_analysis_sources(store, job["job_id"], result, generation=job["generation"])
+    assert [s["message_id"] for s in view["items"][0]["sources"]] == [1]
+
+
+@pytest.mark.parametrize("topic_records", [[
+    (22, 1, "2026-10-10", "pro", "Нейродайджест за две недели\nOpenAI изменила лимиты Pro.\n#дайджест"),
+]], indirect=True)
+def test_digest_only_item_is_excluded_without_replacing_it_with_unrelated_post(topic_records):
+    store, job, records = topic_records
+    result = {"summary": "OpenAI изменила лимиты Pro.", "items": [{"evidence_ids": [records[0]["record_id"]]}]}
+    view = analysis.verify_analysis_sources(store, job["job_id"], result, generation=job["generation"])
+    assert not view["items"] and not view.get("sources")
+    assert view["summary"] == "" and view["insufficient_information"]
+    assert view["excluded_digest_only_items"] == 1
+    assert "отдельных постов" in " ".join(view["limitations"])
+    assert len(result["items"]) == 1  # Persisted synthesis remains auditable.
+
+
+@pytest.mark.parametrize("topic_records", [[
+    (22, 1, "2026-10-10", "комиссия", "Банк Uno объявил комиссию 10 EUR."),
+    (22, 2, "2026-10-12", "pro", "Нейродайджест за неделю\nOpenAI изменила лимиты Pro.\n#дайджест"),
+]], indirect=True)
+def test_excluding_digest_only_item_preserves_introduction_before_retained_topics(topic_records):
+    store, job, records = topic_records
+    summary = ("За период источники сообщили о релизах и изменениях у OpenAI, Google, Anthropic "
+               "и других компаний: новые модели, продукты, тарифы, режимы доступа и исследовательские результаты. "
+               "Сведения имеют статус сообщений источников; для большинства событий дата события "
+               "не указана отдельно от даты публикации.")
+    items = [{"title": "Тема", "text": "Подробность", "conditions": [], "exceptions": [],
+              "contradictions": [], "evidence_ids": [r["record_id"]]} for r in records]
+    result = {"summary": summary, "items": items, "limitations": [], "partial": False,
+              "coverage": {"selected_messages": 2, "processed_messages": 2}}
+    view = analysis.prepare_analysis_presentation(store, job["job_id"], result, generation=job["generation"])
+    assert view["result"]["summary"] == summary
+    assert len(view["result"]["items"]) == 1
+    assert view["result"]["excluded_digest_only_items"] == 1
+    html = "\n".join(view["chunks"])
+    assert html.index("Главные темы") < html.index(summary) < html.index("<b>Тема</b>")
+    assert "https://t.me/peer22/2" not in html
+
+
+def test_presentation_header_resolves_all_scoped_channel_titles(topic_records):
+    store, job, records = topic_records
+    store.conn.execute("UPDATE channels SET title='Налоги 🇪🇸' WHERE channel_id=22")
+    store.conn.execute("UPDATE channels SET title='Visa Spain' WHERE channel_id=11")
+    result = {"summary": "", "items": [], "coverage": {"selected_messages": 7},
+              "partial": False, "insufficient_information": True, "limitations": []}
+    view = analysis.prepare_analysis_presentation(store, job["job_id"], result, generation=job["generation"])
+    assert set(view["result"]["channel_titles"]) == {"Налоги 🇪🇸", "Visa Spain"}
+    assert "Сообщений в анализе: 7" in view["chunks"][0]
+
+
+def test_source_policy_still_rejects_an_item_without_evidence(topic_records):
+    store, job, records = topic_records
+    with pytest.raises(ValueError, match="final_evidence_without_support"):
+        analysis.verify_analysis_sources(store, job["job_id"], {"items": [{"evidence_ids": []}]},
+                                         generation=job["generation"])
+
+
+@pytest.mark.parametrize("text,digest", [
+    ("Нейродайджест за неделю\nНовости", True),
+    ("📰 **Дайджест недели**\nНовости", True),
+    ("Weekly roundup\nNews", True),
+    ("Новости\n#дайджест", True),
+    ("Новая модель\n#DIGEST", True),
+    ("Как собрать дайджест\nОтдельная новость о продукте", False),
+    ("Новость\nЯ прочитал дайджест и проверил эту новость.", False),
+])
+def test_digest_source_detection_uses_explicit_heading_or_tag(text, digest):
+    assert analysis_evidence._is_digest_source({"text": text}) is digest

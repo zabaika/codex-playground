@@ -63,8 +63,8 @@ def test_s24_model_settings_reach_count_and_inference(manifest_job, stage, summa
     from telegram_connector.tests.test_analysis_synthesis import synthesize, synthesis_sender
 
     store, job = manifest_job
-    change_setting(store, job, "digest_ai", "reasoning_effort", "low")
-    change_setting(store, job, "digest_ai", "reasoning_summary", summary)
+    change_setting(store, job, "analysis.ai", "reasoning_effort", "low")
+    change_setting(store, job, "analysis.ai", "reasoning_summary", summary)
     job = store.get_job(job["job_id"])
     sent = []
 
@@ -122,9 +122,9 @@ def engine_provider(store, job, calls):
                 value.update(claim=fragment["message"]["text"], conditions=[], exceptions=[])
                 records.append(value)
             output = {"records": records, "saturated": False}
-        elif kind == "telegram_relations_v1":
+        elif kind == "telegram_relations_v2":
             pairs = json.loads(data["input"].split("Кандидаты: ", 1)[1])["pairs"]
-            output = {"decisions": [{"left_id": a, "right_id": b, "relation": "unrelated", "reason": "Разные факты"} for a, b in pairs], "saturated": False}
+            output = {"decisions": [{"pair_id": pair["pair_id"], "relation": "unrelated", "reason": "Разные факты"} for pair in pairs], "saturated": False}
         elif kind == "telegram_merge_v1":
             inputs = json.loads(data["input"].split("Записи: ", 1)[1])["inputs"]
             ids = [value["node_id"] for value in inputs]
@@ -220,7 +220,7 @@ def test_s24_engine_wiring_actual_stage_trace_and_first_middle_last_facts(manife
     from telegram_connector.analysis_store import AnalysisStore
     store, job = manifest_job
     store.save_checkpoint(job["job_id"], {}, generation=job["generation"], max_bytes=10000)
-    change_setting(store, job, "digest_ai", "messages_per_ai_pass", 2)
+    change_setting(store, job, "analysis.ai", "messages_per_ai_pass", 2)
     change_setting(store, job, "analysis", "merge_fan_in", 2)
     values = posts([6, 5, 4, 3, 2, 1])
     for message in values:
@@ -253,7 +253,7 @@ def test_s24_engine_wiring_actual_stage_trace_and_first_middle_last_facts(manife
     text = "\n".join(sent)
     assert all(f"Факт {n}: сумма {n * 100} EUR" in text for n in (1, 3, 6))
     assert calls.count("telegram_evidence_v1") >= 3
-    assert {"telegram_relations_v1", "telegram_merge_v1", "telegram_synthesis_v1"} <= set(calls)
+    assert {"telegram_relations_v2", "telegram_merge_v1", "telegram_synthesis_v1"} <= set(calls)
     phases = [row[0] for row in store.conn.execute("SELECT phase FROM engine_phases")]
     unique = [p for i, p in enumerate(phases) if i == 0 or phases[i-1] != p]
     assert unique == ["sync", "select", "extract", "link", "merge", "synthesize", "verify", "deliver"]
@@ -527,7 +527,7 @@ def test_s24_engine_wiring_partial_inputs_keep_successful_facts(manifest_job, ru
     from telethon import errors
     store, job = manifest_job
     store.save_checkpoint(job["job_id"], {}, generation=job["generation"], max_bytes=10000)
-    change_setting(store, job, "digest_ai", "messages_per_ai_pass", 1)
+    change_setting(store, job, "analysis.ai", "messages_per_ai_pass", 1)
     values = posts([2, 1])
     for message in values:
         message.date = datetime(2026, 10, 12, 10, tzinfo=timezone.utc)

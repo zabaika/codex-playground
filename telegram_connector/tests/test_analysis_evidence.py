@@ -81,7 +81,7 @@ def extract(store, job, batch, send):
     function = getattr(analysis, "extract_analysis_batch", None)
     assert callable(function), "A counted extraction must validate and atomically persist supported records"
     return function(store, job["job_id"], batch, generation=job["generation"], api_key="fixture-key",
-                    capabilities={"model": "fixture-model", "context_window": 16000, "max_output_tokens": 1200, "source": "fixture"},
+                    capabilities={"model": "fixture-model", "context_window": 128000, "max_output_tokens": 128000, "source": "fixture"},
                     deadline=100, monotonic_func=lambda: 0, urlopen_func=send, sleep_func=lambda _: None)
 
 
@@ -250,7 +250,7 @@ def test_s38_oversized_extraction_repair_splits_or_stops_with_paid_usage(manifes
         data = json.loads(req.data)
         repair = '"invalid_output"' in data["input"]
         if req.full_url.endswith("input_tokens"):
-            return Response({"input_tokens": 18034 if repair else 100})
+            return Response({"input_tokens": job["request"]["settings"]["analysis"]["max_input_tokens"] + 1 if repair else 100})
         assert not repair, "Oversized repair must never reach inference"
         sends.append(data)
         if len(sends) == 1:
@@ -270,7 +270,7 @@ def test_s38_oversized_extraction_repair_splits_or_stops_with_paid_usage(manifes
 def test_s16_evidence_contract_context_only_record_is_not_extracted_again(manifest_job):
     store, job = manifest_job
     seed(store, 22, range(1, 5), text="Не менее 1250 EUR; 30 дней.")
-    change_setting(store, job, "digest_ai", "messages_per_ai_pass", 3)
+    change_setting(store, job, "analysis.ai", "messages_per_ai_pass", 3)
     build(store, job)
     stream = batches(store, job)
     next(stream)

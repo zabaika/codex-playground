@@ -13,7 +13,7 @@ from telegram_connector import telegram_bridge as bridge
 CONFIG_DIR = Path(__file__).resolve().parents[1] / "config"
 
 EXPECTED_DEFAULTS = {
-    "max_channels": 32, "max_messages": 200000, "max_input_tokens": 16000,
+    "max_channels": 32, "max_messages": 200000, "max_input_tokens": 32768,
     "max_llm_calls": 256, "max_total_tokens": 2000000, "max_provider_requests": 1024,
     "max_evidence_records": 20000, "max_intermediate_bytes": 67108864,
     "max_running_jobs": 1, "max_queued_jobs": 8, "retention_days": 7,
@@ -80,7 +80,7 @@ def test_digest_specific_timeout_does_not_change_analytics_timeout(legacy_config
     legacy_config.setdefault("digest", {})["openai_timeout_seconds"] = "30"
     legacy_config["digest_ai"]["openai_timeout_seconds"] = "120"
     settings = analysis_module().resolve_analysis_settings(legacy_config, config_dir=CONFIG_DIR)
-    assert settings["digest_ai"]["openai_timeout_seconds"] == 120
+    assert settings["analysis"]["ai"]["request_timeout_seconds"] == 600
 
 
 def test_s02_settings_and_prompts_legacy_config_snapshot(legacy_config):
@@ -93,7 +93,8 @@ def test_s02_settings_and_prompts_legacy_config_snapshot(legacy_config):
     assert settings["analysis"]["search"]["mode"] == "fast"
     assert settings["analysis"]["cache"]["max_bytes"] == 134217728
     assert settings["processing"]["model"] == "fixture-model"
-    assert settings["digest_ai"]["max_output_tokens"] == 1500
+    assert settings["analysis"]["ai"]["extract_max_output_tokens"] == 32768
+    assert "digest_ai" not in settings
     assert settings["sync"]["sync_limit"] == 6000
     assert settings["digest"] == {"since": "yesterday", "until": "yesterday"}
     assert settings["settings_sources"]["analysis.max_messages"] == "default"
@@ -169,8 +170,7 @@ def test_s02_settings_and_prompts_invalid_new_settings(key, value, legacy_config
 
 
 @pytest.mark.parametrize("key", [
-    "processing.model", "sync.sync_limit", "sync.batch_size", "digest_ai.messages_per_ai_pass",
-    "digest_ai.message_block_max_chars", "digest_ai.reasoning_effort", "digest_ai.reasoning_summary",
+    "processing.model", "sync.sync_limit", "sync.batch_size",
 ])
 def test_s02_settings_and_prompts_required_legacy_inputs(key, legacy_config):
     section, name = key.split(".")
@@ -179,7 +179,7 @@ def test_s02_settings_and_prompts_required_legacy_inputs(key, legacy_config):
         analysis_module().resolve_analysis_settings(legacy_config, config_dir=CONFIG_DIR)
 
 
-def test_s02_settings_and_prompts_zero_allowances_and_legacy_clamps(legacy_config):
+def test_s02_settings_and_prompts_zero_allowances_ignore_digest_clamps(legacy_config):
     assign(legacy_config, "analysis.overlap_messages", 0)
     assign(legacy_config, "analysis.max_repair_attempts", 0)
     legacy_config["sync"].update(sync_limit="0", batch_size="0")
@@ -190,22 +190,21 @@ def test_s02_settings_and_prompts_zero_allowances_and_legacy_clamps(legacy_confi
     settings = analysis_module().resolve_analysis_settings(legacy_config, config_dir=CONFIG_DIR)
     assert settings["analysis"]["overlap_messages"] == settings["analysis"]["max_repair_attempts"] == 0
     assert settings["sync"] == {"sync_limit": 0, "batch_size": 0}
-    assert settings["digest_ai"]["messages_per_ai_pass"] == 1
-    assert settings["digest_ai"]["message_block_max_chars"] == 1
-    assert settings["digest_ai"]["max_output_tokens"] == 1
-    assert settings["digest_ai"]["openai_retry_attempts"] == 5
-    assert settings["digest_ai"]["openai_retry_backoff_seconds"] == 60
+    assert settings["analysis"]["ai"]["messages_per_ai_pass"] == 500
+    assert settings["analysis"]["ai"]["extract_max_output_tokens"] == 32768
+    assert settings["analysis"]["ai"]["retry_attempts"] == 2
+    assert settings["analysis"]["ai"]["retry_backoff_seconds"] == 1
 
 
 def test_s02_settings_and_prompts_reuses_runtime_policies_without_credentials(legacy_config):
     legacy_config["processing"]["ocr"] = "false"
-    legacy_config["digest_ai"]["store_prompt_text"] = "true"
+    assign(legacy_config, "analysis.ai.store_prompt_text", "true")
     legacy_config["bridge"]["worker_process_timeout_seconds"] = "7200"
     legacy_config["bridge"]["text_chunk_size"] = "99999"
     legacy_config["telethon"]["connection_timeout_seconds"] = "42"
     settings = analysis_module().resolve_analysis_settings(legacy_config, config_dir=CONFIG_DIR)
     assert settings["processing"]["ocr"] is False
-    assert settings["digest_ai"]["store_prompt_text"] is True
+    assert settings["analysis"]["ai"]["store_prompt_text"] is True
     assert settings["bridge"]["worker_process_timeout_seconds"] == 7200
     assert settings["bridge"]["text_chunk_size"] == 4096
     assert settings["bridge"]["send_message_retry_attempts"] == 3
@@ -233,7 +232,7 @@ def test_s02_settings_and_prompts_versioned_bundle(legacy_config, tmp_path):
     settings = module.resolve_analysis_settings(legacy_config, config_dir=CONFIG_DIR)
     bundle = settings["analysis_prompts"]
     assert bundle["file"] == "analysis_prompts.toml"
-    assert bundle["version"] == "10"
+    assert bundle["version"] == "11"
     assert len(bundle["hash"]) == 64
     assert set(bundle["templates"]) == {"prepare_query", "extract", "link", "merge", "synthesize", "repair"}
     assert set(bundle["commands"]) == {"topics", "search", "qa"}

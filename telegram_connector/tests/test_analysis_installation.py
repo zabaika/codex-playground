@@ -26,6 +26,7 @@ MODULES = (
     "digest_pipeline.py",
     "telegram_analysis.py", "analysis_store.py", "analysis_evidence.py",
     "analysis_settings.py", "analysis_rendering.py", "analysis_pipeline.py",
+    "analysis_telemetry.py",
 )
 
 
@@ -39,6 +40,7 @@ def installation(tmp_path):
     for name in MODULES:
         shutil.copy2(ROOT / "telegram_connector" / name, project / name)
     shutil.copy2(installer, project / "scripts/install_launch_agent.sh")
+    shutil.copy2(ROOT / "telegram_connector/scripts/report_analysis.py", project / "scripts/report_analysis.py")
     shutil.copy2(ROOT / "telegram_connector/requirements.txt", project / "requirements.txt")
     shutil.copytree(ROOT / "telegram_connector/third_party", project / "third_party")
     for name in ("runtime.example.toml", "digest_prompts.toml", "analysis_prompts.toml"):
@@ -75,6 +77,10 @@ def test_s37_runtime_bundle_staging_parity_imports_and_reinstall(installation):
     assert f"Python interpreter: {sys.executable}" in outcome.stdout
     assert not marker.exists()
     service = staging / "telegram_connector_service"
+    reporter = subprocess.run([sys.executable, str(service / "scripts/report_analysis.py"), "--help"],
+                              env=env, text=True, capture_output=True, timeout=10)
+    assert reporter.returncode == 0, reporter.stderr
+    assert "--job-id" in reporter.stdout
     binding = json.loads((project / "data/runtime/python.json").read_text())
     assert binding["policy_digest"]
     assert binding["architecture"] == "arm64"
@@ -179,7 +185,8 @@ def test_analytics_modules_preserve_ownership_boundaries():
         "analysis_settings": set(),
         "analysis_evidence": {"analysis_settings", "analysis_store"},
         "analysis_rendering": set(),
-        "analysis_pipeline": {"analysis_settings", "analysis_evidence", "analysis_store", "telegram_history_client"},
+        "analysis_pipeline": {"analysis_settings", "analysis_evidence", "analysis_store", "analysis_telemetry", "telegram_history_client"},
+        "analysis_telemetry": {"analysis_store"},
     }
     connector = {Path(name).stem for name in MODULES}
     for module, dependencies in allowed.items():

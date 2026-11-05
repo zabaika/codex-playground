@@ -276,7 +276,7 @@ def test_s36_eval_contract_separate_events_in_one_item_fail_grouping(evaluator):
 
 def test_s36_eval_contract_scope_is_secret_free_bounded_and_repeatable(evaluator, config, tmp_path):
     config["processing"]["model"] = "gpt-5.6-luna"
-    config["digest_ai"].update(reasoning_effort="low", reasoning_summary="none")
+    config["analysis"]["ai"].update(reasoning_effort="low", reasoning_summary="none")
     config["secrets"] = {"openai_api_key": "must-not-enter-scope"}
     gold = evaluator.validate_gold(raw_gold())
     scope = evaluator.build_scope(gold, config, config_dir=ROOT / "config", output_root=tmp_path)
@@ -323,9 +323,9 @@ def fixture_api(command, calls):
             result = document({"messages": [fragment]})
             result["records"][0].update(record_type="answer" if command == "qa" else "claim", claim=fragment["message"]["text"],
                 conditions=[], exceptions=[], entities=["Uno"], topic_key="case")
-        elif kind == "telegram_relations_v1":
+        elif kind == "telegram_relations_v2":
             pairs = json.loads(data["input"].split("Кандидаты: ", 1)[1])["pairs"]
-            result = {"decisions": [{"left_id": left, "right_id": right, "relation": "complements", "reason": "Fixture"} for left, right in pairs], "saturated": False}
+            result = {"decisions": [{"pair_id": pair["pair_id"], "relation": "complements", "reason": "Fixture"} for pair in pairs], "saturated": False}
         elif kind == "telegram_merge_v1":
             values = json.loads(data["input"].split("Записи: ", 1)[1])["inputs"]
             ids = [value["node_id"] for value in values]
@@ -344,7 +344,7 @@ def fixture_api(command, calls):
 @pytest.mark.parametrize("command,mode,detail", [("topics", None, "full"), ("search", "fast", "normal"), ("search", "full", "short"), ("qa", None, "normal")])
 def test_s36_eval_contract_isolated_engine_capture_and_replay(evaluator, config, tmp_path, monkeypatch, command, mode, detail):
     config["processing"]["model"] = "gpt-5.6-luna"
-    config["digest_ai"].update(reasoning_effort="low", reasoning_summary="none")
+    config["analysis"]["ai"].update(reasoning_effort="low", reasoning_summary="none")
     project = tmp_path / "repo/telegram_connector"
     project.mkdir(parents=True)
     monkeypatch.setenv("TELEGRAM_CONNECTOR_PROJECT_ROOT", str(project))
@@ -373,7 +373,7 @@ def test_s36_eval_contract_isolated_engine_capture_and_replay(evaluator, config,
 def test_s36_eval_contract_changed_scope_fails_before_credentials(evaluator, config, tmp_path, monkeypatch):
     gold = evaluator.validate_gold(raw_gold())
     scope = evaluator.build_scope(gold, config, config_dir=ROOT / "config", output_root=tmp_path)
-    config["digest_ai"]["reasoning_effort"] = "high"
+    config["analysis"]["ai"]["reasoning_effort"] = "high"
     monkeypatch.setattr(analysis.bridge, "resolve_secret_value", lambda *a, **k: pytest.fail("Changed scope cannot resolve credentials"))
     with pytest.raises(ValueError, match="approved_scope_changed"):
         evaluator.execute_case(gold, config, scope, scope["cases"][0]["id"], output_root=tmp_path, config_dir=ROOT / "config", live=True)
@@ -396,6 +396,6 @@ def test_s36_eval_contract_cli_does_not_overwrite_previous_scope(evaluator, conf
     arguments = ["--gold", str(GOLD), "--output", str(tmp_path), "--config-dir", str(ROOT / "config"), "prepare"]
     assert evaluator.main(arguments) == 0
     original = (tmp_path / "scope.json").read_bytes()
-    config["digest_ai"]["reasoning_effort"] = "high"
+    config["analysis"]["ai"]["reasoning_effort"] = "high"
     assert evaluator.main(arguments) == 2
     assert "existing_scope_changed" in capsys.readouterr().err and (tmp_path / "scope.json").read_bytes() == original

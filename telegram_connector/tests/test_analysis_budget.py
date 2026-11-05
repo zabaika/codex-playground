@@ -263,10 +263,12 @@ def test_s13_budget_ledger_completion_plan_follows_fan_in_and_detail(budget_job,
     assert full["tokens"] - short["tokens"] == (11000 if roots else 0)
 
 
-@pytest.mark.parametrize("tokens,output,reason", [(16001, 20, "max_input_tokens"), (10, 3001, "stage_output_limit")])
+@pytest.mark.parametrize("tokens,output,reason", [(None, 20, "max_input_tokens"), (10, 3001, "stage_output_limit")])
 def test_s13_budget_ledger_per_request_caps_cannot_be_overridden(budget_job, tokens, output, reason):
     store, job = budget_job
     batch = plan(store, job)
+    if tokens is None:
+        tokens = job["request"]["settings"]["analysis"]["max_input_tokens"] + 1
     with pytest.raises(ValueError, match=reason):
         reserve(store, job, batch, input_tokens=tokens, output_tokens=output)
     assert store.get_job(job["job_id"])["provider_requests"] == 0

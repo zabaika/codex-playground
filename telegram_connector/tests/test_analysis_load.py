@@ -75,10 +75,10 @@ def bounded_provider(job, stats):
                         "fragment_end": ref["fragment_start"] + len(quote), "quote": quote}],
                     "related_message_refs": [], "assertion_kind": "reported", "support_status": "reported"})
             output = {"records": records, "saturated": False}
-        elif kind == "telegram_relations_v1":
+        elif kind == "telegram_relations_v2":
             pairs = json.loads(data["input"].split("Кандидаты: ", 1)[1])["pairs"]
-            output = {"decisions": [{"left_id": left, "right_id": right, "relation": "complements", "reason": "Synthetic repeated condition"}
-                for left, right in pairs], "saturated": False}
+            output = {"decisions": [{"pair_id": pair["pair_id"], "relation": "complements", "reason": "Synthetic repeated condition"}
+                for pair in pairs], "saturated": False}
         elif kind == "telegram_merge_v1":
             values = json.loads(data["input"].split("Записи: ", 1)[1])["inputs"]
             ids = [value["node_id"] for value in values]
@@ -147,7 +147,9 @@ def measure(count, report, *, cache_probe=False):
         config = tomllib.loads((history.APP_DIR / "config/runtime.example.toml").read_text())
         config["paths"]["history_db"] = str(path)
         config["processing"]["model"] = "gpt-5.6-luna"
-        config["digest_ai"].update(reasoning_effort="low", reasoning_summary="none", max_output_tokens=1500)
+        config["analysis"]["ai"].update(reasoning_effort="low", reasoning_summary="none",
+            query_max_output_tokens=1500, extract_max_output_tokens=1500,
+            link_max_output_tokens=1500, merge_max_output_tokens=1500)
         conn = common_sqlite.connect_sqlite(path)
         try:
             history.init_db(conn)

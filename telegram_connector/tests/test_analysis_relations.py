@@ -68,7 +68,7 @@ def link(store, job, sender):
     function = getattr(analysis, "link_analysis_records", None)
     assert callable(function), "Candidates must be checked semantically through the counted job ledger"
     return function(store, job["job_id"], generation=job["generation"], api_key="fixture-key",
-        capabilities={"model": "fixture-model", "context_window": 16000, "max_output_tokens": 1200, "source": "fixture"},
+        capabilities={"model": "fixture-model", "context_window": 128000, "max_output_tokens": 128000, "source": "fixture"},
         deadline=100, monotonic_func=lambda: 0, urlopen_func=sender, sleep_func=lambda _: None)
 
 
@@ -78,10 +78,17 @@ def link_sender(relation, *, forge=False):
         if req.full_url.endswith("input_tokens"):
             return Response({"input_tokens": 100})
         data = json.loads(request["input"].split("Кандидаты: ", 1)[1])
-        decisions = [{"left_id": "forged" if forge else pair[0], "right_id": pair[1], "relation": relation,
-                      "reason": "Опирается на содержание обеих записей."} for pair in data["pairs"]]
+        decisions = [relation_decision(pair, relation, "Опирается на содержание обеих записей.") for pair in data["pairs"]]
+        if forge:
+            for value in decisions:
+                value["pair_id" if "pair_id" in value else "left_id"] = "forged"
         return Response(model_response({"decisions": decisions, "saturated": False}))
     return send
+
+
+def relation_decision(pair, relation, reason):
+    address = {"pair_id": pair["pair_id"]} if isinstance(pair, dict) else {"left_id": pair[0], "right_id": pair[1]}
+    return {**address, "relation": relation, "reason": reason}
 
 
 @pytest.mark.parametrize("relation", ["complements", "contradicts", "answers", "unrelated"])
@@ -164,7 +171,7 @@ def test_s18_record_relations_large_input_splits_and_counts_every_child(manifest
         data = json.loads(request["input"].split("Кандидаты: ", 1)[1])
         sent.append((req.full_url.endswith("input_tokens"), len(data["pairs"])))
         if req.full_url.endswith("input_tokens") and len(data["pairs"]) > 1:
-            return Response({"input_tokens": 20000})
+            return Response({"input_tokens": job["request"]["settings"]["analysis"]["max_input_tokens"] + 1})
         return delegate(req, timeout)
     assert link(store, job, sender)["partial"] is False
     assert len([entry for entry in sent if not entry[0]]) == 3
@@ -201,8 +208,8 @@ def test_s36_single_pair_declared_saturation_gets_one_bounded_repair(manifest_jo
         if len(requests) == 1:
             return Response(model_response({"decisions": [], "saturated": True}))
         pairs = json.loads(requests[0]["input"].split("Кандидаты: ", 1)[1])["pairs"]
-        return Response(model_response({"decisions": [{"left_id": left, "right_id": right,
-            "relation": "contradicts", "reason": "План отменён."} for left, right in pairs], "saturated": False}))
+        return Response(model_response({"decisions": [relation_decision(pair, "contradicts", "План отменён.")
+            for pair in pairs], "saturated": False}))
     assert link(store, job, sender)["partial"] is False
     assert len(requests) == 2 and store.get_job(job["job_id"])["llm_calls"] == 2
     assert "relation_saturated" in requests[1]["input"]
@@ -293,7 +300,7 @@ def test_s38_relation_output_splits_preserve_pairs_usage_and_replay(manifest_job
             if outcome == 'incomplete':
                 return Response({'status':'incomplete','output':[], 'usage':{'input_tokens':100,'output_tokens':payload['max_output_tokens']}})
             return Response(model_response({'decisions':[], 'saturated':True}))
-        return Response(model_response({'decisions':[{'left_id':a,'right_id':b,'relation':'complements','reason':'Уточнение.'} for a,b in data['pairs']], 'saturated':False}))
+        return Response(model_response({'decisions':[relation_decision(pair, 'complements', 'Уточнение.') for pair in data['pairs']], 'saturated':False}))
     result = link(store, job, sender)
     assert result['partial'] is False, 'Recover an oversized output by bounded pair splitting'
     assert len(list(store.iter_link_decisions(job['job_id']))) == 3

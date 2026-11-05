@@ -72,43 +72,66 @@ def _analysis_insufficiency_notice(job, result):
 
 def _analysis_html_chunks(job, result):
     size = min(4096, job["request"]["settings"]["bridge"]["text_chunk_size"])
+    separator = html.escape(job["request"]["settings"]["analysis"]["output"].get("item_separator_text", ""))
+    # Leave room in the final text fragment; a separator is never its own part.
+    text_size = size - _telegram_units(separator) - 2 if separator else size
+    if text_size <= 0:
+        raise ValueError("presentation_budget_too_small")
     blocks = []
-    def text(value, *, bold=False):
+    compact_after = set()
+    def text(value, *, bold=False, compact=False):
         if value and value.strip():
-            blocks.extend(_escaped_analysis_parts(value, size, bold=bold))
+            blocks.extend(_escaped_analysis_parts(value, text_size, bold=bold))
+            if compact:
+                compact_after.add(len(blocks) - 1)
     def sources(values, *, processed=False):
         if not values:
             return
-        text("Источники обработанных сообщений" if processed else "Источники", bold=True)
+        text("Источники обработанных сообщений" if processed else "Источники", bold=True, compact=True)
         for number, source in enumerate(values, 1):
             if source["url"]:
-                blocks.append(f'<a href="{html.escape(source["url"], quote=True)}">{number}</a>')
+                suffix = ' (дайджест)' if source.get('is_digest') else ''
+                blocks.append(f'<a href="{html.escape(source["url"], quote=True)}">{number} источник</a>' + suffix)
             else:
                 text(f'{source["channel_id"]}/{source["message_id"]}: ссылка недоступна')
+            if number < len(values):
+                compact_after.add(len(blocks) - 1)
     request = job["request"]["request"]
+    text(", ".join(result.get("channel_titles") or request["channels"]), bold=True)
+    text(f'Период UTC: {request["since"][:10]} .. {request["until"][:10]}\n'
+         f'Сообщений в анализе: {result.get("coverage", {}).get("selected_messages", 0)}')
+    if result.get("partial") or result.get("kind") == "budget_stop":
+        reasons = ", ".join(result.get("reasons", []) or [result.get("reason", "incomplete")])
+        status = "<b>Частичный результат</b>\nПричины: " + html.escape(reasons)
+        if _telegram_units(status) <= text_size:
+            blocks.append(status)
+        else:
+            text("Частичный результат", bold=True)
+            text("Причины: " + reasons)
     text({"topics": "Главные темы", "search": "Результат поиска", "qa": "Практические вопросы и ответы"}[job["command"]], bold=True)
-    text(f'{request["since"][:10]} — {request["until"][:10]} UTC')
     if request.get("query"):
         text("Запрос: " + result.get("display_query", request["query"]))
-    if result.get("partial") or result.get("kind") == "budget_stop":
-        text("Частичный результат", bold=True)
-        text("Причины: " + ", ".join(result.get("reasons", []) or [result.get("reason", "incomplete")]))
     if job["command"] == "search":
         text("Краткий ответ", bold=True)
-    text(_analysis_brief(job, result))
+    brief = _analysis_brief(job, result)
+    text(brief)
+    if brief.strip() and result.get("items") and separator:
+        blocks[-1] += "\n\n" + separator
     if job["command"] == "search" and result.get("items"):
         text("Подробности", bold=True)
     for item in result.get("items", []):
         title, answer_label = _analysis_item_labels(job, item)
-        text(title, bold=True)
-        text(answer_label, bold=True)
+        text(title, bold=True, compact=True)
+        text(answer_label, bold=True, compact=True)
         text(item["text"])
         for field, label in (("conditions", "Условия"), ("exceptions", "Исключения"), ("contradictions", "Противоречия")):
             if item[field]:
-                text(label, bold=True)
-                for value in item[field]:
-                    text(value)
+                text(label, bold=True, compact=True)
+                for index, value in enumerate(item[field]):
+                    text(value, compact=field == "conditions" and index < len(item[field]) - 1)
         sources(item["sources"])
+        if separator:
+            blocks[-1] += "\n\n" + separator
     if not result.get("items"):
         if job["command"] != "search":
             text("Проверенные утверждения не сформированы.")
@@ -120,11 +143,12 @@ def _analysis_html_chunks(job, result):
     for line in _analysis_coverage_lines(result.get("coverage", {})):
         text(line)
     chunks = []
-    for block in blocks:
+    for index, block in enumerate(blocks):
         if _telegram_units(block) > size:
             raise ValueError("presentation_block_too_large")
-        if chunks and _telegram_units(chunks[-1] + "\n\n" + block) <= size:
-            chunks[-1] += "\n\n" + block
+        gap = "\n" if index - 1 in compact_after else "\n\n"
+        if chunks and _telegram_units(chunks[-1] + gap + block) <= size:
+            chunks[-1] += gap + block
         else:
             chunks.append(block)
     return chunks
@@ -136,6 +160,7 @@ def _markdown_text(text):
 
 def _full_analysis_markdown(job, result):
     request = job["request"]["request"]
+    separator = job["request"]["settings"]["analysis"]["output"].get("item_separator_text", "")
     blocks = [f'# Аналитика Telegram: /{job["command"]}',
         "Каналы: " + _markdown_text(", ".join(request["channels"])),
         f'Период (UTC): {request["since"]} — {request["until"]}',
@@ -158,7 +183,8 @@ def _full_analysis_markdown(job, result):
         for source in values:
             identity = f'{source["channel_id"]}/{source["message_id"]}'
             link = f'[{identity}]({source["url"]})' if source["url"] else f'{identity}: ссылка недоступна'
-            blocks.append(f'- {link} · {source["date_utc"]}')
+            suffix = ' (дайджест)' if source.get('is_digest') else ''
+            blocks.append(f'- {link}{suffix} · {source["date_utc"]}')
     for item in result.get("items", []):
         title, answer_label = _analysis_item_labels(job, item)
         blocks.append("## " + _markdown_text(title.replace("\n", " ")))
@@ -170,6 +196,8 @@ def _full_analysis_markdown(job, result):
                 blocks.append("### " + label)
                 blocks.extend("- " + _markdown_text(value) for value in item[field])
         sources(item["sources"])
+        if separator:
+            blocks.append(_markdown_text(separator))
     if not result.get("items"):
         if job["command"] != "search":
             blocks.append("Проверенные утверждения не сформированы.")

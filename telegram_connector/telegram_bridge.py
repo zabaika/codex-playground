@@ -391,6 +391,10 @@ def format_analysis_status(view: dict[str, Any]) -> str:
     lines = [f"Задача: {view['job_id']}", f"Статус: {view['status']}",
              f"Этап: {view['phase']}", f"Доставка: {view['delivery']}",
              f"LLM-вызовы: {view['llm_calls']}; токены: {view['used_tokens']}; резерв: {view['reserved_tokens']}"]
+    if "elapsed_seconds" in view:
+        lines.append(f"Время задачи: {view['elapsed_seconds']} с.")
+    if "phase_elapsed_seconds" in view:
+        lines.append(f"Текущий этап: {view['phase_elapsed_seconds']} с.")
     if view["cancel_requested"] and view["status"] == "running":
         lines.append("Отмена запрошена; остановка worker ещё не подтверждена.")
     if view.get("error"):
@@ -1729,7 +1733,12 @@ class BridgeSupervisor:
             with analysis_ownership_lock(self.db_path, owner=candidate["job_id"]) as owned:
                 if owned is None:
                     continue
-                job = store.claim_job(candidate["job_id"], max_running_jobs=self.policy["max_running_jobs"], now=now)
+                try:
+                    job = store.claim_job(candidate["job_id"], max_running_jobs=self.policy["max_running_jobs"], now=now)
+                except self.analysis.BudgetExceededError as exc:
+                    store.fail_queued_job(candidate["job_id"], generation=candidate["generation"], reason=exc.reason, now=now)
+                    self.progress_pending.add(candidate["job_id"])
+                    continue
             if job is None:
                 continue
             self.progress_pending.add(job["job_id"])

@@ -1,6 +1,7 @@
 """Persistence owner for analytic jobs in the existing Connector database."""
 
 from datetime import datetime, timezone
+import copy
 import hashlib
 import json
 from pathlib import Path
@@ -15,6 +16,10 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from common import sqlite as common_sqlite
+if __package__:
+    from . import analysis_settings
+else:
+    import analysis_settings
 
 
 class StaleGenerationError(RuntimeError):
@@ -40,10 +45,19 @@ BUDGET_REASONS = frozenset({"max_llm_calls", "max_provider_requests", "max_total
     "stage_output_limit", "max_intermediate_bytes", "max_evidence_records", "usage_overrun", "max_merge_depth", "max_split_depth"})
 DELIVERY_STOP_REASONS = frozenset({"forbidden", "deadline_exceeded", "artifact_unavailable"})
 _COUNT_FIELDS = ("downloaded_messages", "llm_calls", "provider_requests", "used_tokens", "reserved_tokens", "evidence_records")
+# Fixed worker lifecycle; optional/repeated spans still pass normal accounting.
+_LIFECYCLE_PHASES = ("queue", "worker_start", "startup", "sync", "select", "extract", "link", "merge",
+                     "synthesize", "verify", "deliver", "finalize")
+SOURCE_VERIFICATION_FIELDS = ('excluded_digest_only_items', 'excluded_unsupported_items',
+                              'excluded_source_limited_items', 'digest_sources', 'source_subject_rejections',
+                              'source_cover_fallbacks', 'source_cover_states', 'source_cover_impossible_items',
+                              'source_cover_limited_items', 'source_cover_elapsed_ms')
 _CHILD_VALUE_COLUMNS = {
     "b": ("batch_id", "job_id", "step_key", "kind", "state", "input_digest", "cache_key", "payload_json", "attempts_json", "created_at", "updated_at"),
     "e": ("record_id", "batch_id", "record_type", "topic_key", "payload_json"),
     "i": ("batch_id", "channel_id", "message_id", "fragment_start", "fragment_end", "role", "date_utc", "content_digest"),
+    "p": ("job_id", "generation", "sequence", "phase", "process_run_id", "implementation_sha256", "started_at",
+          "finished_at", "elapsed_ms", "duration_source", "outcome"),
 }
 _CACHE_ELIGIBLE = """j.kind='analysis' AND j.status IN ('completed','failed','cancelled')
     AND (j.status!='completed' OR j.result_json IS NOT NULL) AND b.kind IN ('extract','expand_query')
@@ -66,6 +80,14 @@ def _budget_integer(value, name):
     return value
 
 
+def _validate_source_verification(value):
+    if not isinstance(value, dict) or set(value) != set(SOURCE_VERIFICATION_FIELDS):
+        raise ValueError('Invalid source verification counts')
+    for key, count in value.items():
+        _budget_integer(count, key)
+    return dict(value)
+
+
 def completion_budget(settings, *, detail, roots):
     """Conservative one-attempt cost of the bounded, consecutive fan-in tree."""
     _budget_integer(roots, "completion roots")
@@ -82,7 +104,7 @@ def completion_budget(settings, *, detail, roots):
     output = policy["output"]["profiles"][detail]["max_output_tokens"]
     return {"roots": roots, "merge_calls": merges, "llm_calls": merges + final,
             "provider_requests": 2 * (merges + final),
-            "tokens": merges * (policy["max_input_tokens"] + settings["digest_ai"]["max_output_tokens"])
+            "tokens": merges * (policy["max_input_tokens"] + analysis_settings.stage_output_limit(settings, "merge"))
                       + final * (policy["max_input_tokens"] + output)}
 
 
@@ -167,6 +189,7 @@ def _delivery_allowance(job):
         "error_code": SQLITE_INTEGER_MAX, "retry_after": SQLITE_INTEGER_MAX}
     future = {"version": 1, "destination": job["destination"], "detail": detail, "parse_mode": None if detail == "full" else "HTML",
         "plan_digest": "f" * 64, "artifact_hash": "f" * 64 if detail == "full" else None, "analysis_partial": False,
+        "source_verification": {key: SQLITE_INTEGER_MAX for key in SOURCE_VERIFICATION_FIELDS},
         "outcome": "confirmed", "error": max(DELIVERY_STOP_REASONS, key=len), "parts": []}
     part_bytes = len(canonical_json({"text": "", "outcome": "confirmed", "attempts": []}).encode("utf-8"))
     part_bytes += attempts * len(canonical_json(future_attempt).encode("utf-8")) + attempts - 1
@@ -199,6 +222,8 @@ def _finalization_allowance(job):
         projection["progress"] = {"outcome": "confirmed", "message_id": SQLITE_INTEGER_MAX,
             "view_digest": "f" * 64, "updated_at": "9999-12-31T23:59:59.999999+00:00"}
     projection["last_stop"] = {"reason": "worker_exited_without_terminal_state", "phase": "synthesize", "exit_code": SQLITE_INTEGER_MAX}
+    if job['kind'] == 'analysis':
+        projection['source_verification'] = {key: SQLITE_INTEGER_MAX for key in SOURCE_VERIFICATION_FIELDS}
     result_extra = 0
     artifact_extra = 0
     if job["kind"] == "analysis" and "output" in policy:
@@ -231,6 +256,31 @@ def _finalization_allowance(job):
             + result_extra + artifact_extra + (_delivery_allowance(job) if job["kind"] == "analysis" else 0))
 
 
+def _telemetry_allowance(conn, job):
+    if job['kind'] != 'analysis':
+        return 0
+    rows = [dict(row) for row in conn.execute('SELECT * FROM analysis_phase_runs WHERE job_id=?', (job['job_id'],))]
+    stamp = '9999-12-31T23:59:59.999999+00:00'
+    def size(row):
+        return sum(len(str(row[key]).encode('utf-8')) for key in _CHILD_VALUE_COLUMNS['p'] if row[key] is not None)
+    reserve = 0
+    for row in rows:
+        if row['finished_at'] is None:
+            future = {**row, 'finished_at': stamp, 'elapsed_ms': SQLITE_INTEGER_MAX,
+                      'outcome': 'interrupted', 'duration_source': 'utc_estimate'}
+            reserve += max(0, size(future) - size(row))
+    if job['status'] in {'queued', 'running'}:
+        generation = job['generation'] + int(job['status'] == 'queued')
+        present = {row['phase'] for row in rows if row['generation'] == generation}
+        for phase in set(_LIFECYCLE_PHASES) - present:
+            future = dict(zip(_CHILD_VALUE_COLUMNS['p'], (
+                job['job_id'], SQLITE_INTEGER_MAX, SQLITE_INTEGER_MAX, phase,
+                '9' * len(str(SQLITE_INTEGER_MAX)) + ':' + 'f' * 32, 'f' * 64,
+                stamp, stamp, SQLITE_INTEGER_MAX, 'utc_estimate', 'interrupted')))
+            reserve += size(future)
+    return reserve
+
+
 def job_storage_usage(conn, job_id):
     """UTF-8 value bytes, excluding SQLite pages/WAL, plus unconsumed reserves."""
     cursor = conn.execute("SELECT * FROM analysis_jobs WHERE job_id=?", (job_id,))
@@ -244,7 +294,8 @@ def job_storage_usage(conn, job_id):
         value = job.pop(f"{key}_json")
         job[key] = json.loads(value) if value is not None else None
     sources = {"b": "analysis_batches b", "e": "analysis_evidence e JOIN analysis_batches b USING(batch_id)",
-               "i": "analysis_inputs i JOIN analysis_batches b USING(batch_id)"}
+               "i": "analysis_inputs i JOIN analysis_batches b USING(batch_id)",
+               "p": "analysis_phase_runs p JOIN analysis_jobs b USING(job_id)"}
     for alias in _CHILD_VALUE_COLUMNS:
         expression = _value_bytes_sql(alias)
         logical += conn.execute(f"SELECT COALESCE(SUM({expression}),0) FROM {sources[alias]} WHERE b.job_id=?", (job_id,)).fetchone()[0]
@@ -252,8 +303,9 @@ def job_storage_usage(conn, job_id):
     for entry in conn.execute("SELECT attempts_json FROM analysis_batches WHERE job_id=? AND kind!='select'", (job_id,)):
         receipts += sum(item.get("receipt_allowance", _receipt_allowance(item)) for item in json.loads(entry[0]))
     finalization = _finalization_allowance(job)
+    telemetry = _telemetry_allowance(conn, job)
     return {"logical_bytes": logical, "receipt_reserve": receipts, "finalization_reserve": finalization,
-            "allocated_bytes": logical + receipts + finalization}
+            "telemetry_reserve": telemetry, "allocated_bytes": logical + receipts + finalization + telemetry}
 
 
 def account_job_storage_no_tx(conn, job_id):
@@ -343,6 +395,7 @@ class AnalysisStore:
         if type(max_running_jobs) is not int or max_running_jobs < 1:
             raise ValueError("Running job cap must be a positive integer")
         with common_sqlite.write_tx(self.conn, immediate=True):
+            queued = self.get_job(job_id)
             running = self.conn.execute("SELECT COUNT(*) FROM analysis_jobs WHERE status='running'").fetchone()[0]
             if running >= max_running_jobs:
                 return None
@@ -351,7 +404,89 @@ class AnalysisStore:
                    WHERE job_id=? AND status='queued' AND cancel_requested=0""",
                 (now.astimezone(timezone.utc).isoformat(), job_id),
             ).rowcount
+            if changed and queued["kind"] == "analysis":
+                generation = queued["generation"] + 1
+                timestamp = now.astimezone(timezone.utc).isoformat()
+                started = queued["created_at"] if queued["generation"] == 0 else queued["updated_at"]
+                elapsed = max(0, round((now - datetime.fromisoformat(started)).total_seconds() * 1000))
+                self.conn.execute("""INSERT INTO analysis_phase_runs VALUES
+                    (?,?,0,'queue','bridge',NULL,?,?,?,'utc_estimate','succeeded')""",
+                    (job_id, generation, started, timestamp, elapsed))
+                self.conn.execute("""INSERT INTO analysis_phase_runs VALUES
+                    (?,?,1,'worker_start','bridge',NULL,?,NULL,NULL,'utc_estimate','running')""",
+                    (job_id, generation, timestamp))
+                self._sync_intermediate_no_tx(job_id)
             return self.get_job(job_id) if changed else None
+
+    def phase_runs(self, job_id):
+        return [dict(row) for row in self.conn.execute(
+            "SELECT * FROM analysis_phase_runs WHERE job_id=? ORDER BY generation,sequence", (job_id,))]
+
+    def fail_queued_job(self, job_id, *, generation, reason, now):
+        if reason not in BUDGET_REASONS:
+            raise ValueError('Invalid queued failure reason')
+        with common_sqlite.write_tx(self.conn, immediate=True):
+            job = self.get_job(job_id)
+            if job is None or job['status'] != 'queued' or job['generation'] != generation or job['cancel_requested']:
+                return False
+            job['checkpoint']['last_stop'] = {'reason': reason, 'phase': 'worker_start'}
+            self.conn.execute("""UPDATE analysis_jobs SET status='failed',finished_at=?,updated_at=?,checkpoint_json=?
+                WHERE job_id=? AND generation=? AND status='queued'""",
+                (now.isoformat(), now.isoformat(), canonical_json(job['checkpoint']), job_id, generation))
+            self._sync_intermediate_no_tx(job_id)
+            return True
+
+    def current_phase_sequence(self, job_id, generation):
+        row = self.conn.execute("""SELECT sequence FROM analysis_phase_runs
+            WHERE job_id=? AND generation=? AND finished_at IS NULL
+            ORDER BY sequence DESC LIMIT 1""", (job_id, generation)).fetchone()
+        return row[0] if row else None
+
+    def record_provider_metrics(self, job_id, attempt_id, *, generation, phase_sequence,
+                                started_at, actual_model, cache_write_30m_tokens, cache_write_12h_tokens):
+        with common_sqlite.write_tx(self.conn):
+            self.conn.execute("""UPDATE ai_usage_log SET generation=?,phase_sequence=?,started_at=?,
+                actual_model=?,cache_write_30m_tokens=?,cache_write_12h_tokens=?,
+                backoff_ms=0,backoff_requested_ms=0 WHERE job_id=? AND attempt_id=?""",
+                (generation, phase_sequence, started_at, actual_model, cache_write_30m_tokens,
+                 cache_write_12h_tokens, job_id, attempt_id))
+
+    def record_provider_backoff(self, job_id, attempt_id, *, elapsed_ms, requested_ms):
+        with common_sqlite.write_tx(self.conn):
+            self.conn.execute("""UPDATE ai_usage_log SET backoff_ms=?,backoff_requested_ms=?
+                WHERE job_id=? AND attempt_id=?""", (elapsed_ms, requested_ms, job_id, attempt_id))
+
+    def _close_open_phases_no_tx(self, job_id, generation, *, now, outcome):
+        for row in self.conn.execute("""SELECT sequence,phase,started_at FROM analysis_phase_runs
+            WHERE job_id=? AND generation=? AND finished_at IS NULL""", (job_id, generation)).fetchall():
+            elapsed = max(0, round((now - datetime.fromisoformat(row["started_at"])).total_seconds() * 1000))
+            self.conn.execute("""UPDATE analysis_phase_runs SET finished_at=?,elapsed_ms=?,
+                duration_source='utc_estimate',outcome=? WHERE job_id=? AND generation=? AND sequence=?""",
+                (now.isoformat(), elapsed, "succeeded" if row["phase"] == "worker_start" and outcome == "interrupted"
+                 else outcome, job_id, generation, row["sequence"]))
+
+    def begin_phase(self, job_id, *, generation, phase, process_run_id, now, implementation_sha256=None):
+        with common_sqlite.write_tx(self.conn, immediate=True):
+            self.require_running(job_id, generation=generation)
+            self._close_open_phases_no_tx(job_id, generation, now=now, outcome="interrupted")
+            sequence = self.conn.execute("""SELECT COALESCE(MAX(sequence),-1)+1 FROM analysis_phase_runs
+                WHERE job_id=? AND generation=?""", (job_id, generation)).fetchone()[0]
+            self.conn.execute("""INSERT INTO analysis_phase_runs VALUES
+                (?,?,?,?,?,?,?,NULL,NULL,'monotonic','running')""",
+                (job_id, generation, sequence, phase, process_run_id, implementation_sha256, now.isoformat()))
+            self._sync_intermediate_no_tx(job_id)
+            return sequence
+
+    def end_phase(self, job_id, *, generation, sequence, now, elapsed_ms, outcome):
+        _budget_integer(elapsed_ms, "phase elapsed milliseconds")
+        with common_sqlite.write_tx(self.conn, immediate=True):
+            job = self.get_job(job_id)
+            if job is None or job["generation"] != generation:
+                raise StaleGenerationError("Phase generation changed")
+            self.conn.execute("""UPDATE analysis_phase_runs SET finished_at=?,elapsed_ms=?,outcome=?
+                WHERE job_id=? AND generation=? AND sequence=? AND finished_at IS NULL""",
+                (now.isoformat(), elapsed_ms, outcome, job_id, generation, sequence))
+            self._sync_intermediate_no_tx(job_id)
 
     def queue_index_job(self, payload, *, index_key, index_version, rebuild, max_queued_jobs, now):
         """Keep one durable service job per index version, outside user admission."""
@@ -536,10 +671,93 @@ class AnalysisStore:
         return _same_channel_reply(json.loads(row[0]), channel_id) if row else None
 
     def iter_link_decisions(self, job_id):
-        rows = self.conn.execute("""SELECT payload_json FROM analysis_batches
-            WHERE job_id=? AND kind='link' AND state='succeeded' ORDER BY batch_id""", (job_id,))
+        rows = self.conn.execute("""SELECT state,payload_json FROM analysis_batches
+            WHERE job_id=? AND kind='link' ORDER BY batch_id""", (job_id,))
         for row in rows:
-            yield from json.loads(row[0])["output"]["decisions"]
+            payload = json.loads(row["payload_json"])
+            if payload.get('invalidated'):
+                continue
+            if row["state"] == "skipped" and not payload.get("link_split"):
+                continue
+            if "link_progress" in payload:
+                yield from payload["link_progress"]["accepted_decisions"].values()
+            else:
+                yield from payload.get("output", {}).get("decisions", [])
+
+    def _link_progress_batch(self, job_id, batch_id, generation, expected):
+        job = self.require_running(job_id, generation=generation)
+        batch = self.get_batch(batch_id)
+        if batch is None or batch["job_id"] != job_id or batch["kind"] != "link" or batch["state"] not in {"planned", "running"}:
+            raise ValueError("Link progress outside active batch")
+        if batch["payload"].get("link_progress") != expected:
+            raise StaleGenerationError("Link progress changed")
+        return job, batch
+
+    def begin_link_request(self, job_id, batch_id, *, generation, expected, progress):
+        """Claim one logical repair and its scope before any physical attempt."""
+        with common_sqlite.write_tx(self.conn, immediate=True):
+            job, batch = self._link_progress_batch(job_id, batch_id, generation, expected)
+            if expected is not None and progress != expected:
+                raise ValueError("Link request must use saved progress")
+            value = copy.deepcopy(progress)
+            if value.get("active_request"):
+                return batch
+            repair_index = batch["payload"].get("repair_attempts", 0)
+            if value["diagnostics"]:
+                if repair_index >= job["request"]["settings"]["analysis"]["max_repair_attempts"]:
+                    return None
+                repair_index += 1
+                batch["payload"]["repair_attempts"] = repair_index
+            pair_ids = value["unresolved_pair_ids"]
+            if not pair_ids or not set(pair_ids) <= set(batch["payload"]["plan"]["pair_map"]):
+                raise ValueError("Invalid link request scope")
+            value["active_request"] = {"pair_ids": pair_ids, "attempt_offset": len(batch["attempts"]),
+                "repair_index": repair_index,
+                "scope_sha256": hashlib.sha256(canonical_json(pair_ids).encode()).hexdigest()}
+            batch["payload"]["link_progress"] = value
+            self.conn.execute("UPDATE analysis_batches SET payload_json=? WHERE batch_id=?",
+                              (canonical_json(batch["payload"]), batch_id))
+            self._sync_intermediate_no_tx(job_id)
+            return self.get_batch(batch_id)
+
+    def split_link_progress(self, job_id, batch_id, *, generation, expected):
+        with common_sqlite.write_tx(self.conn, immediate=True):
+            _, batch = self._link_progress_batch(job_id, batch_id, generation, expected)
+            batch["payload"].update(link_split=True, outcome="split")
+            self.conn.execute("UPDATE analysis_batches SET state='skipped',payload_json=? WHERE batch_id=?",
+                              (canonical_json(batch["payload"]), batch_id))
+            self._sync_intermediate_no_tx(job_id)
+
+    def save_link_progress(self, job_id, batch_id, *, generation, expected, progress, attempt_id=None):
+        """Commit accepted decisions, remaining scope and terminal output together."""
+        with common_sqlite.write_tx(self.conn, immediate=True):
+            job, batch = self._link_progress_batch(job_id, batch_id, generation, expected)
+            mapping = batch["payload"]["plan"]["pair_map"]
+            accepted, pending = progress["accepted_decisions"], progress["unresolved_pair_ids"]
+            if any(accepted.get(key) != value for key, value in (expected or {}).get("accepted_decisions", {}).items()):
+                raise ValueError("Accepted link decision cannot be overwritten")
+            if (set(accepted) & set(pending) or set(accepted) | set(pending) != set(mapping)
+                    or len(pending) != len(set(pending))
+                    or any([value["left_id"], value["right_id"]] != mapping[key] for key, value in accepted.items())):
+                raise ValueError("Invalid accepted link scope")
+            if attempt_id is not None:
+                marker = (expected or {}).get("active_request")
+                attempts = batch["attempts"][marker["attempt_offset"]:] if marker else []
+                if not any(a["attempt_id"] == attempt_id and a["request_kind"] == "inference"
+                           and a["state"] == "succeeded" for a in attempts):
+                    raise ValueError("Link progress requires a settled inference receipt")
+            elif any(a["request_kind"] == "inference" for a in batch["attempts"]):
+                raise ValueError("Physical link output requires its receipt")
+            batch["payload"]["link_progress"] = copy.deepcopy(progress)
+            complete = not pending and not progress.get("saturated", False)
+            if complete:
+                output = {"decisions": [accepted[key] for key in sorted(accepted)], "saturated": False}
+                batch["payload"]["output"] = output
+                batch["payload"]["completion_digest"] = hashlib.sha256(canonical_json(output).encode()).hexdigest()
+            self.conn.execute("UPDATE analysis_batches SET state=?,payload_json=? WHERE batch_id=?",
+                ("succeeded" if complete else batch["state"], canonical_json(batch["payload"]), batch_id))
+            self._sync_intermediate_no_tx(job_id)
+            return self.get_batch(batch_id)
 
     def incomplete_evidence_reasons(self, job_id):
         return ["extraction_incomplete" if row[0] == "extract" else "relations_incomplete"
@@ -655,7 +873,7 @@ class AnalysisStore:
             self._sync_intermediate_no_tx(job_id)
             return True
 
-    def set_batch_outcome(self, job_id, batch_id, *, generation, outcome):
+    def set_batch_outcome(self, job_id, batch_id, *, generation, outcome, diagnostic_code=None):
         if outcome not in {"refused", "invalid_schema", "incomplete", "saturated", "max_split_depth", "provider_error"}:
             raise ValueError("Invalid extraction outcome")
         with common_sqlite.write_tx(self.conn, immediate=True):
@@ -663,6 +881,25 @@ class AnalysisStore:
             batch = self.get_batch(batch_id)
             if batch is None or batch["job_id"] != job_id or batch["state"] not in {"planned", "running"}:
                 raise ValueError("Extraction outcome outside active step")
+            progress = batch["payload"].get("link_progress")
+            marker = progress.get("active_request") if progress else None
+            if marker:
+                attempts = batch["attempts"][marker["attempt_offset"]:]
+                inference = [attempt for attempt in attempts if attempt["request_kind"] == "inference"]
+                last = inference[-1] if inference else attempts[-1] if attempts else None
+                code = ("relation_preflight_stop" if not inference else
+                        "relation_observation_missing" if last["state"] == "succeeded" else
+                        "relation_provider_failure" if last["state"] == "failed" else "relation_outcome_unknown")
+                receipt = self.conn.execute("SELECT latency_ms FROM ai_usage_log WHERE job_id=? AND attempt_id=?",
+                    (job_id, last["attempt_id"])).fetchone() if last else None
+                progress["diagnostics"].append({"requested": len(marker["pair_ids"]), "accepted": 0,
+                    "missing": len(marker["pair_ids"]), "extra": 0, "duplicate": 0, "conflicting": 0,
+                    "codes": [code, "relation_" + outcome] + ([diagnostic_code] if diagnostic_code else []),
+                    "attempt_id": last["attempt_id"] if last else None,
+                    "request_kind": last["request_kind"] if last else None,
+                    "repair_index": marker["repair_index"], "scope_sha256": marker["scope_sha256"],
+                    "provider_ms": receipt[0] if receipt else None})
+                progress["active_request"] = None
             batch["payload"]["outcome"] = outcome
             self.conn.execute("UPDATE analysis_batches SET state='failed',payload_json=? WHERE batch_id=?", (canonical_json(batch["payload"]), batch_id))
             self._sync_intermediate_no_tx(job_id)
@@ -674,7 +911,11 @@ class AnalysisStore:
             if (batch is None or batch["job_id"] != job_id or batch["state"] not in {"planned", "running", "skipped"}
                     or any(a["request_kind"] == "inference" for a in batch["attempts"])):
                 raise ValueError("Only count-only steps may be skipped for input splitting")
-            self.conn.execute("UPDATE analysis_batches SET state='skipped' WHERE batch_id=?", (batch_id,))
+            if batch["kind"] == "link" and batch["payload"].get("link_progress"):
+                batch["payload"]["link_progress"]["active_request"] = None
+                batch["payload"]["outcome"] = "input_split"
+            self.conn.execute("UPDATE analysis_batches SET state='skipped',payload_json=? WHERE batch_id=?",
+                              (canonical_json(batch["payload"]), batch_id))
             self._sync_intermediate_no_tx(job_id)
 
     def save_token_count(self, job_id, batch_id, *, generation, payload_digest, input_tokens):
@@ -717,8 +958,8 @@ class AnalysisStore:
             if request_kind == "inference":
                 if input_tokens > policy["max_input_tokens"]:
                     raise BudgetExceededError("max_input_tokens")
-                output_cap = (policy["output"]["profiles"][job["request"]["request"]["detail"]]["max_output_tokens"]
-                              if batch["kind"] == "synthesize" else job["request"]["settings"]["digest_ai"]["max_output_tokens"])
+                output_cap = analysis_settings.stage_output_limit(job["request"]["settings"], batch["kind"],
+                    detail=job["request"]["request"]["detail"])
                 if output_tokens > output_cap:
                     raise BudgetExceededError("stage_output_limit")
             protected = self._completion_reserve_no_tx(job, batch, request_kind=request_kind)
@@ -902,8 +1143,19 @@ class AnalysisStore:
 
     def save_analysis_result(self, job_id, result, *, generation):
         with common_sqlite.write_tx(self.conn, immediate=True):
-            self.require_running(job_id, generation=generation)
-            self.conn.execute("UPDATE analysis_jobs SET result_json=? WHERE job_id=?", (canonical_json(result), job_id))
+            job = self.require_running(job_id, generation=generation)
+            job['checkpoint'].pop('source_verification', None)
+            self.conn.execute("UPDATE analysis_jobs SET result_json=?,checkpoint_json=? WHERE job_id=?",
+                              (canonical_json(result), canonical_json(job['checkpoint']), job_id))
+            self._sync_intermediate_no_tx(job_id)
+
+    def record_source_verification(self, job_id, *, generation, counts):
+        counts = _validate_source_verification(counts)
+        with common_sqlite.write_tx(self.conn, immediate=True):
+            job = self.require_running(job_id, generation=generation)
+            job['checkpoint']['source_verification'] = counts
+            self.conn.execute('UPDATE analysis_jobs SET checkpoint_json=? WHERE job_id=?',
+                              (canonical_json(job['checkpoint']), job_id))
             self._sync_intermediate_no_tx(job_id)
 
     def save_full_artifact(self, job_id, *, generation, relative_path, content_hash, result_digest, partial, ready=True, previous_hash=None):
@@ -940,7 +1192,7 @@ class AnalysisStore:
             (canonical_json(delivery), datetime.now(timezone.utc).isoformat(), job_id))
         self._sync_intermediate_no_tx(job_id)
 
-    def prepare_delivery(self, job_id, *, generation, chunks, parse_mode, detail, analysis_partial):
+    def prepare_delivery(self, job_id, *, generation, chunks, parse_mode, detail, analysis_partial, source_verification=None):
         with common_sqlite.write_tx(self.conn, immediate=True):
             job = self.require_running(job_id, generation=generation)
             settings = job["request"]["settings"]
@@ -957,6 +1209,8 @@ class AnalysisStore:
                 raise ValueError("Invalid text delivery bounds")
             identity = {"destination": job["destination"], "detail": detail, "parse_mode": parse_mode, "chunks": chunks,
                         "analysis_partial": analysis_partial, "artifact_hash": job["full_hash"] if detail == "full" else None}
+            if source_verification is not None:
+                identity['source_verification'] = _validate_source_verification(source_verification)
             digest = hashlib.sha256(canonical_json(identity).encode("utf-8")).hexdigest()
             if job["delivery"]:
                 if job["delivery"].get("plan_digest") != digest:
@@ -965,6 +1219,8 @@ class AnalysisStore:
             delivery = {"version": 1, "destination": job["destination"], "detail": detail, "parse_mode": parse_mode,
                 "plan_digest": digest, "analysis_partial": analysis_partial, "artifact_hash": identity["artifact_hash"], "outcome": "prepared",
                 "parts": [{"text": text, "outcome": "pending", "attempts": []} for text in chunks]}
+            if source_verification is not None:
+                delivery['source_verification'] = dict(source_verification)
             self._write_delivery_no_tx(job_id, delivery)
             return delivery
 
@@ -1173,6 +1429,7 @@ class AnalysisStore:
                 (f"invalidated/{batch_id}", canonical_json(batch["payload"]), batch_id))
         job["checkpoint"].pop("merge", None)
         job["checkpoint"].pop("relations", None)
+        job['checkpoint'].pop('source_verification', None)
         self.conn.execute("""UPDATE analysis_jobs SET result_json=NULL,full_path=NULL,full_hash=NULL,delivery_json='{}',
             evidence_records=(SELECT COUNT(*) FROM analysis_evidence e JOIN analysis_batches b USING(batch_id) WHERE b.job_id=?)
             WHERE job_id=?""", (job["job_id"], job["job_id"]))
@@ -1453,6 +1710,22 @@ class AnalysisStore:
             ).rowcount
             if changed != 1:
                 raise StaleGenerationError("Analytic job generation or running state changed")
+            self._close_open_phases_no_tx(job_id, generation, now=now, outcome=status)
+            latest = self.conn.execute("""SELECT sequence,finished_at,process_run_id,implementation_sha256
+                FROM analysis_phase_runs WHERE job_id=? AND generation=?
+                ORDER BY sequence DESC LIMIT 1""", (job_id, generation)).fetchone()
+            if latest and latest["finished_at"] is not None:
+                elapsed = max(0, round((now - datetime.fromisoformat(latest["finished_at"])).total_seconds() * 1000))
+                self.conn.execute("""INSERT INTO analysis_phase_runs VALUES
+                    (?,?,?,'finalize',?,?,?,?,?,'utc_estimate',?)""",
+                    (job_id, generation, latest["sequence"] + 1, latest["process_run_id"],
+                     latest["implementation_sha256"], latest["finished_at"], timestamp, elapsed, status))
+            try:
+                self._sync_intermediate_no_tx(job_id)
+            except json.JSONDecodeError:
+                # Terminal state must survive checkpoint corruption. The existing
+                # allocation retains the reserved phase-close/finalization bound.
+                pass
 
     def request_cancel(self, job_id: str, *, now: datetime) -> dict[str, Any]:
         timestamp = now.astimezone(timezone.utc).isoformat()
@@ -1494,6 +1767,7 @@ class AnalysisStore:
                    cancel_requested=0,finished_at=NULL,updated_at=? WHERE job_id=?""",
                 (phase, now.astimezone(timezone.utc).isoformat(), job_id),
             )
+            self._sync_intermediate_no_tx(job_id)
             return self.get_job(job_id)
 
     def update_progress(self, job_id, *, generation, expected, value):

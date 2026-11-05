@@ -20,9 +20,11 @@ if str(ROOT) not in sys.path:
 from telegram_connector import telegram_analysis as analysis
 from telegram_connector import analysis_pipeline
 from telegram_connector import analysis_evidence
+from telegram_connector import analysis_settings, analysis_telemetry, history_store
 from telegram_connector import telegram_history_client as history
 from telegram_connector.analysis_store import AnalysisStore
 from common import json_io, sqlite as common_sqlite, ttl_runner
+from common import process as common_process
 
 
 TRIAL_LIMITS = {"max_llm_calls": 24, "max_provider_requests": 96, "max_total_tokens": 200000}
@@ -65,13 +67,15 @@ def validate_gold(document):
     since = datetime.combine(date.fromisoformat(gold["period"]["since"]), time.min, tzinfo=timezone.utc)
     until = datetime.combine(date.fromisoformat(gold["period"]["until"]), time.max, tzinfo=timezone.utc)
     accepted = datetime.fromisoformat(gold["period"]["accepted_at"])
-    _require(accepted.tzinfo is not None and since <= until <= accepted, "invalid_gold_period")
+    recorded = gold.get("recorded")
+    _require(accepted.tzinfo is not None and since <= until
+             and (since <= accepted if recorded else until <= accepted), "invalid_gold_period")
     messages = {}
     for message in gold["messages"]:
         key = _source_key(message)
         stamp = datetime.fromisoformat(message["date"])
-        _require(key not in messages and isinstance(message["text"], str) and bool(message["text"])
-            and stamp.tzinfo is not None and since <= stamp <= until, "invalid_gold_message")
+        _require(key not in messages and isinstance(message["text"], str) and (bool(message["text"]) or bool(recorded))
+            and stamp.tzinfo is not None and since <= stamp <= min(until, accepted), "invalid_gold_message")
         messages[key] = message["text"]
     facts = set()
     for fact in gold["facts"]:
@@ -98,6 +102,18 @@ def validate_gold(document):
         else:
             _require(task["query"] is None and task["modes"] == [None], "invalid_gold_command_mode")
     _require(bool(messages) and bool(facts) and bool(tasks), "empty_gold")
+    if recorded:
+        _require(len(expand_cases(gold)) == 1 and gold["tasks"][0]["command"] == "topics",
+                 "recorded_scope_requires_one_topics_case")
+        _require(len(recorded["messages"]) == len(messages), "recorded_message_count_changed")
+        for item in recorded["messages"]:
+            snapshot = item["snapshot"]
+            identity = _source_key(snapshot)
+            _require(identity in messages and snapshot["text"] == messages[identity]
+                     and _digest(snapshot) == item["input"]["content_digest"], "recorded_source_changed")
+        _require(set(recorded["limits"]) == set(TRIAL_LIMITS)
+                 and all(type(value) is int and value > 0 for value in recorded["limits"].values()),
+                 "invalid_recorded_trial_limits")
     return gold
 
 
@@ -216,9 +232,15 @@ def trial_config(gold, config, *, config_dir, output_root):
     values = copy.deepcopy(config)
     values.setdefault("paths", {})["history_db"] = str(Path(output_root).resolve() / "history.sqlite3")
     values.setdefault("bridge", {}).update(allowed_chat_ids="100", allowed_user_ids="7", allowed_usernames="")
-    values.setdefault("digest_ai", {})["messages_per_ai_pass"] = min(4, effective["digest_ai"]["messages_per_ai_pass"])
     narrowed = values.setdefault("analysis", {})
-    narrowed.update({key: min(limit, policy[key]) for key, limit in TRIAL_LIMITS.items()})
+    recorded = gold.get("recorded")
+    if recorded:
+        _require(all(value <= policy[key] for key, value in recorded["limits"].items()), "trial_exceeds_operator_scope")
+        _require(effective["processing"]["model"] == recorded["model"], "recorded_model_changed")
+        narrowed.update(recorded["limits"])
+    else:
+        narrowed.setdefault("ai", {})["messages_per_ai_pass"] = min(4, analysis_settings.analysis_ai(effective)["messages_per_ai_pass"])
+        narrowed.update({key: min(limit, policy[key]) for key, limit in TRIAL_LIMITS.items()})
     narrowed.update(max_messages=len(gold["messages"]))
     narrowed.setdefault("output", {})["results_dir"] = TRIAL_RESULTS_DIR
     return values
@@ -231,9 +253,16 @@ def build_scope(gold, config, *, config_dir, output_root):
     limits = {key: settings["analysis"][key] for key in TRIAL_LIMITS}
     scope = {"version": 1, "gold_sha256": _digest(gold), "settings_sha256": _digest(settings),
         "output_root": str(Path(output_root).resolve()), "model": settings["processing"]["model"],
-        "reasoning_effort": settings["digest_ai"]["reasoning_effort"], "prompt_sha256": settings["analysis_prompts"]["hash"],
+        "reasoning_effort": analysis_settings.analysis_ai(settings)["reasoning_effort"], "prompt_sha256": settings["analysis_prompts"]["hash"],
         "cases": cases, "limits": limits, "total_limits": {key: limit * len(cases) for key, limit in limits.items()},
-        "delivery_transport": "local capture; no Telegram requests", "data_scope": "synthetic gold messages only"}
+        "delivery_transport": "local capture; no Telegram requests", "data_scope": "synthetic gold messages only",
+        "implementation_sha256": analysis_telemetry.implementation_sha256(),
+        "evaluator_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest()}
+    if gold.get("recorded"):
+        scope.update(data_scope="one frozen historical topics; no Telegram history fetch",
+                     baseline_job_id=gold["recorded"]["baseline_job_id"],
+                     message_count=len(gold["messages"]), pricing=gold["recorded"]["pricing"],
+                     baseline_cutoff_at=gold["period"]["accepted_at"])
     return {**scope, "scope_sha256": _digest(scope)}
 
 
@@ -282,6 +311,28 @@ def capture_extraction_rejections(path):
         analysis_evidence.validate_evidence_records = original
 
 
+def seed_recorded_sources(conn, recorded):
+    """Restore only approved fixture rows in the evaluator-owned database."""
+    with common_sqlite.write_tx(conn):
+        for item in recorded["messages"]:
+            row, snapshot = item["message"], item["snapshot"]
+            values = [row["channel_id"], row["message_id"], row["grouped_id"], row["date_utc"],
+                None, row["sender_id"], row["sender_username"], row["sender_display_name"], row["text"],
+                None, None, None, row["has_media"], row["media_kind"], row["raw_json"],
+                item["input"]["content_digest"], history_store.now_utc()]
+            history_store._upsert_prepared_message_no_tx(conn, {"message": values, "media": None})
+            for asset in snapshot["media"]:
+                conn.execute("""INSERT INTO media_assets
+                    (channel_id,message_id,ordinal,media_kind,ocr_status,ocr_text,created_at)
+                    VALUES (?,?,?,?,?,?,?)""", (row["channel_id"], row["message_id"], asset["ordinal"],
+                    asset["media_kind"], asset["ocr_status"], asset["ocr_text"], history_store.now_utc()))
+        store = AnalysisStore(conn)
+        for item in recorded["messages"]:
+            ref = item["input"]
+            _, digest = analysis_evidence._analysis_message_snapshot(store, ref["channel_id"], ref["message_id"], 67108864)
+            _require(digest == ref["content_digest"], "restored_recorded_source_changed")
+
+
 def execute_case(gold, config, scope, case_id, *, output_root, config_dir=None, live=False, api_key=None, urlopen_func=None):
     _require(live or urlopen_func is not None, "live_scope_not_approved")
     config_dir = Path(config_dir or ROOT / "telegram_connector/config")
@@ -315,15 +366,20 @@ def execute_case(gold, config, scope, case_id, *, output_root, config_dir=None, 
             history.init_db(conn)
             store = AnalysisStore(conn)
             peers = list(dict.fromkeys(message["channel_id"] for message in gold["messages"]))
-            refs = {f"@quality{peer}": peer for peer in peers}
-            client = CorpusClient(refs)
+            recorded = gold.get("recorded")
+            refs = ({"@" + channel["username"]: channel["channel_id"] for channel in recorded["channels"]}
+                    if recorded else {f"@quality{peer}": peer for peer in peers})
+            client = RecordedCorpusClient(refs, recorded["channels"]) if recorded else CorpusClient(refs)
             if first:
                 for peer in peers:
                     history.upsert_channel(conn, client.entity(peer))
-                for message in gold["messages"]:
-                    history.upsert_message(conn, client.entity(message["channel_id"]), SimpleNamespace(
-                        id=message["message_id"], date=datetime.fromisoformat(message["date"]),
-                        message=message["text"], media=None), None, None, None, None)
+                if recorded:
+                    seed_recorded_sources(conn, recorded)
+                else:
+                    for message in gold["messages"]:
+                        history.upsert_message(conn, client.entity(message["channel_id"]), SimpleNamespace(
+                            id=message["message_id"], date=datetime.fromisoformat(message["date"]),
+                            message=message["text"], media=None), None, None, None, None)
                 now = datetime.now(timezone.utc)
                 queued = analysis.enqueue_fts_backfill(store, values, rebuild=False, now=now)
                 index = store.claim_job(queued["job_id"], max_running_jobs=1, now=now)
@@ -334,11 +390,15 @@ def execute_case(gold, config, scope, case_id, *, output_root, config_dir=None, 
             if case["command"] == "search":
                 text += f" {shlex.quote(case['query'])} --mode {case['mode']}"
             text += f" --detail {case['detail']}"
+            for key in ("limit", "sources"):
+                if key in case:
+                    text += f" --{key} {case[key]}"
             update = {"update_id": scope["cases"].index(case) + 1,
                 "message": {"chat": {"id": 100}, "from": {"id": 7}, "text": text}}
             now = datetime.now(timezone.utc)
             queued, _ = analysis.admit_analysis_job(store, values, update, access=access,
-                bot_namespace="quality:" + scope["scope_sha256"], now=now, config_dir=config_dir)
+                bot_namespace="quality:" + scope["scope_sha256"], now=now, config_dir=config_dir,
+                cutoff_at=datetime.fromisoformat(gold["period"]["accepted_at"]) if recorded else None)
             owner["cases"][case_id] = queued["job_id"]
             json_io.write_json_atomic(owner_path, owner)
             job = store.claim_job(queued["job_id"], max_running_jobs=1, now=now)
@@ -356,13 +416,15 @@ def execute_case(gold, config, scope, case_id, *, output_root, config_dir=None, 
                 local_messages.append(text)
                 return {"message_id": len(local_messages), "chat": {"id": 100}}
             def execute(store, current):
+                deadline = common_process.continuous_time() + current['request']['settings']['bridge']['worker_process_timeout_seconds']
                 with capture_extraction_rejections(output_root / f"{case_id}.validation.json"), \
                         capture_model_responses(output_root / f"{case_id}.stages.json"):
                     status = analysis.execute_analysis_job(store, current, runtime=runtime, client=client,
                         api_key=api_key, token="local-capture", access_provider=lambda: access,
-                        urlopen_func=urlopen_func, send_func=capture)
+                        urlopen_func=urlopen_func, send_func=capture, deadline=deadline)
                 saved = store.get_job(current["job_id"])
-                presentation.update(analysis.prepare_analysis_presentation(store, current["job_id"], saved["result"], generation=current["generation"]))
+                presentation.update(analysis.prepare_analysis_presentation(store, current['job_id'], saved['result'],
+                    generation=current['generation'], deadline=deadline))
                 return status
             exit_code = analysis.run_analysis(store, db_path, job_id=job["job_id"], generation=job["generation"], executor=execute)
             saved = store.get_job(job["job_id"])
@@ -377,6 +439,12 @@ def execute_case(gold, config, scope, case_id, *, output_root, config_dir=None, 
                 "delivery_transport": "local_capture", "local_messages": local_messages, "full_path": saved["full_path"],
                 "selected_source_refs": selected, "result": result, "result_sha256": _digest(result),
                 "usage": {key: saved[key] for key in ("llm_calls", "provider_requests", "used_tokens", "reserved_tokens")}}
+            captured["telemetry"] = analysis_telemetry.summarize_job(store, job["job_id"], pricing=scope.get("pricing"))
+            if recorded:
+                expected = {(item["input"]["channel_id"], item["input"]["message_id"])
+                            for item in recorded["messages"]}
+                _require({(ref["channel_id"], ref["message_id"]) for ref in selected} == expected,
+                         "recorded_selected_scope_changed")
             if case["mode"] == "fast" and saved["checkpoint"].get("manifest"):
                 request, settings = saved["request"]["request"], saved["request"]["settings"]
                 manifest = saved["checkpoint"]["manifest"]
@@ -412,6 +480,16 @@ class CorpusClient:
 
 class Chat(SimpleNamespace):
     pass
+
+
+class RecordedCorpusClient(CorpusClient):
+    def __init__(self, refs, channels):
+        super().__init__(refs)
+        self.entities = {row["channel_id"]: type(row["channel_type"], (SimpleNamespace,), {})(
+            id=row["channel_id"], title=row["title"], username=row["username"]) for row in channels}
+
+    def entity(self, peer):
+        return self.entities[peer]
 
 
 def main(argv=None):

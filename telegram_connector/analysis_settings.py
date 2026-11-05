@@ -13,7 +13,7 @@ DEFAULT_CONFIG_FILE = APP_DIR / "config" / "runtime.example.toml"
 _MISSING = object()
 # Versioned application/template contracts, not operator sizing defaults.
 ANALYSIS_SCHEMA_VERSION = 1
-ANALYSIS_ALGORITHM_VERSION = 7
+ANALYSIS_ALGORITHM_VERSION = 9
 
 
 def resolve_analysis_model_capabilities(model):
@@ -29,8 +29,32 @@ def resolve_analysis_model_capabilities(model):
         "source": "https://developers.openai.com/api/docs/models/gpt-5.4-mini", "verified_at": "2026-10-16"}
 
 
+def analysis_ai(settings):
+    """Read the frozen policy; legacy jobs use only their own saved values."""
+    if "ai" in settings["analysis"]:
+        return settings["analysis"]["ai"]
+    old = settings["digest_ai"]
+    return {
+        **{f"{stage}_max_output_tokens": old["max_output_tokens"]
+           for stage in ("query", "extract", "link", "merge")},
+        "request_timeout_seconds": old["openai_timeout_seconds"],
+        "token_count_timeout_seconds": old["openai_timeout_seconds"],
+        "retry_attempts": old["openai_retry_attempts"],
+        "retry_backoff_seconds": old["openai_retry_backoff_seconds"],
+        **{key: old[key] for key in ("reasoning_effort", "reasoning_summary",
+           "store_prompt_text", "messages_per_ai_pass", "message_block_max_chars")},
+    }
+
+
+def stage_output_limit(settings, kind, *, detail=None):
+    if kind == "synthesize":
+        return settings["analysis"]["output"]["profiles"][detail]["max_output_tokens"]
+    stage = "query" if kind == "expand_query" else kind
+    return analysis_ai(settings)[f"{stage}_max_output_tokens"]
+
+
 def _analysis_reasoning(settings):
-    ai = settings["digest_ai"]
+    ai = analysis_ai(settings)
     reasoning = {"effort": ai["reasoning_effort"]}
     if ai["reasoning_summary"] != "none":
         reasoning["summary"] = ai["reasoning_summary"]
@@ -89,7 +113,8 @@ def _resolve_new_settings(default: Any, supplied: Any, path: str, sources: dict[
     elif type(default) is int:
         if isinstance(value, str) and re.fullmatch(r"[0-9]+", value.strip()):
             value = int(value)
-        minimum = 0 if path in {"analysis.overlap_messages", "analysis.max_repair_attempts"} else 1
+        minimum = 0 if path in {"analysis.overlap_messages", "analysis.max_repair_attempts",
+                               "analysis.ai.retry_backoff_seconds"} else 1
         if path == "analysis.merge_fan_in":
             minimum = 2
         if type(value) is not int or value < minimum:
@@ -160,6 +185,15 @@ def resolve_analysis_policy(config: dict[str, Any]) -> dict[str, Any]:
     }
     analysis = settings["analysis"]
     output = analysis["output"]
+    ai = analysis["ai"]
+    if ai["retry_attempts"] > 5:
+        raise ValueError("Invalid analysis.ai.retry_attempts: expected 1..5")
+    if ai["reasoning_effort"] not in {"none", "low", "medium", "high", "xhigh", "max"}:
+        raise ValueError("Invalid analysis.ai.reasoning_effort")
+    if ai["reasoning_summary"] not in {"none", "auto", "concise", "detailed"}:
+        raise ValueError("Invalid analysis.ai.reasoning_summary")
+    if any(char in output["item_separator_text"] for char in "\r\n"):
+        raise ValueError("Invalid analysis.output.item_separator_text: expected one line")
     if analysis["search"]["mode"] not in {"fast", "full"}:
         raise ValueError("Invalid analysis.search.mode")
     if output["default_detail"] not in output["profiles"]:

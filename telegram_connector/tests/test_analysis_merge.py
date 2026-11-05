@@ -17,7 +17,7 @@ def merge(store, job, sender):
     function = getattr(analysis, "merge_analysis_records", None)
     assert callable(function), "A bounded reducer must preserve every leaf and persist its own lineage"
     return function(store, job["job_id"], generation=job["generation"], api_key="fixture-key",
-        capabilities={"model": "fixture-model", "context_window": 16000, "max_output_tokens": 1200, "source": "fixture"},
+        capabilities={"model": "fixture-model", "context_window": 128000, "max_output_tokens": 128000, "source": "fixture"},
         deadline=100, monotonic_func=lambda: 0, urlopen_func=sender, sleep_func=lambda _: None)
 
 
@@ -68,14 +68,44 @@ def test_s19_hierarchical_merge_unknown_lineage_is_rejected(manifest_job):
     assert store.conn.execute("SELECT COUNT(*) FROM analysis_batches WHERE kind='merge' AND state='succeeded'").fetchone()[0] == 0
 
 
-def test_s19_hierarchical_merge_no_progress_preserves_all_leafs_as_partial(manifest_job):
+def test_s19_hierarchical_merge_no_reduction_preserves_all_leafs_as_unranked_ready(manifest_job):
     store, job = manifest_job
     original = records_fixture(store, job, [{"claim": f"Разное событие {n}"} for n in range(4)])
     change_setting(store, job, "analysis", "merge_fan_in", 2)
     result = merge(store, job, merge_sender(no_progress=True))
-    assert result["partial"] is True and "merge_no_progress" in result["reasons"]
+    assert result["state"] == "ready" and result["partial"] is False
+    assert result["group_order"] == "unranked" and result["reduction_outcome"] == "no_reduction"
     restored = [record for root in result["frontier"] for record in leafs(store, job, root)]
     assert {record["record_id"] for record in restored} == {record["record_id"] for record in original}
+
+
+def test_unranked_complete_frontier_is_explicit_at_synthesis_boundary(manifest_job):
+    store, job = manifest_job
+    original = records_fixture(store, job, [{"claim": f"Отдельное событие {n}"} for n in range(9)])
+    change_setting(store, job, "analysis", "merge_fan_in", 4)
+    state = merge(store, job, merge_sender(no_progress=True))
+    assert state["state"] == "ready"
+    current = store.get_job(job["job_id"])
+    value = analysis_pipeline._synthesis_evidence(store, current)
+    assert value["group_order"] == "unranked"
+    assert value["coverage"]["ranking_scope"] == "complete"
+    assert len(value["groups"]) == len(value["records"]) == 9
+    assert {r["record_id"] for r in value["records"]} == {r["record_id"] for r in original}
+    payload = analysis_pipeline.build_synthesis_payload(current, value)
+    assert '"group_order":"unranked"' in payload["input"]
+    assert "всему переданному набору" in payload["input"]
+
+
+def test_no_reduction_keeps_independent_relations_partial_reason(manifest_job):
+    store, job = manifest_job
+    records_fixture(store, job, [{"claim": f"Отдельное событие {n}"} for n in range(4)])
+    change_setting(store, job, "analysis", "merge_fan_in", 2)
+    current = store.get_job(job["job_id"])
+    store.save_checkpoint(job["job_id"], {**current["checkpoint"], "relations": {"partial": True}},
+                          generation=job["generation"], max_bytes=67108864)
+    state = merge(store, job, merge_sender(no_progress=True))
+    assert state["state"] == "ready" and state["partial"]
+    assert state["reasons"] == ["relations_incomplete"]
 
 
 def test_s19_hierarchical_merge_final_rank_does_not_force_distinct_events_together(manifest_job):
@@ -140,7 +170,7 @@ def test_s19_hierarchical_merge_token_limit_reduces_fan_in_and_recounts(manifest
     def sender(req, timeout):
         data = json.loads(json.loads(req.data)["input"].split("Записи: ", 1)[1])
         if req.full_url.endswith("input_tokens") and len(data["inputs"]) > 2:
-            return Response({"input_tokens": 20000})
+            return Response({"input_tokens": job["request"]["settings"]["analysis"]["max_input_tokens"] + 1})
         return delegate(req, timeout)
     assert merge(store, job, sender)["state"] == "ready"
     assert store.get_job(job["job_id"])["llm_calls"] == 3
@@ -205,7 +235,7 @@ def test_s19_hierarchical_merge_real_batch_composition_after_repair_reuses_valid
     store, job = manifest_job
     for number in range(1, 4):
         seed(store, 22, [number], text=f"Факт {number}")
-    change_setting(store, job, "digest_ai", "messages_per_ai_pass", 1)
+    change_setting(store, job, "analysis.ai", "messages_per_ai_pass", 1)
     build(store, job)
     for ready in batches(store, job):
         assert extract_ready(store, job, ready)["outcome"] == "succeeded"

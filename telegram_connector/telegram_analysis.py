@@ -4,7 +4,7 @@ import argparse
 import asyncio
 import codecs
 from contextlib import nullcontext
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from datetime import datetime, timedelta, timezone
 import hashlib
 import html
@@ -26,6 +26,7 @@ if __package__:
     from . import analysis_evidence
     from . import analysis_rendering
     from . import analysis_pipeline
+    from . import analysis_telemetry
 else:
     from analysis_store import AdmissionConflictError, AnalysisStore, BudgetExceededError, QueueFullError, StaleGenerationError, canonical_json
     import telegram_bridge as bridge
@@ -34,6 +35,7 @@ else:
     import analysis_evidence
     import analysis_rendering
     import analysis_pipeline
+    import analysis_telemetry
 
 from common import process as common_process
 from common import json_io as common_json_io
@@ -129,13 +131,23 @@ else:
 APP_DIR = Path(__file__).resolve().parent
 
 
-def _reduce_analysis_output(store, job, value, reason):
+def _verify_analysis_result(store, job_id, result, *, generation, deadline=None,
+                            monotonic_func=common_process.continuous_time):
+    value = analysis_evidence.verify_analysis_sources(store, job_id, result, generation=generation,
+        deadline=deadline, monotonic_func=monotonic_func)
+    store.record_source_verification(job_id, generation=generation,
+        counts=analysis_evidence.source_verification_counts(value))
+    return value
+
+
+def _reduce_analysis_output(store, job, value, reason, *, deadline=None, monotonic_func=common_process.continuous_time):
     value.update(partial=True, reasons=sorted(set(value.get("reasons", [])) | {reason}))
     if value.get("items"):
         value["items"].pop()
         value["summary"] = ""
         if not value["items"]:
-            value = analysis_evidence.verify_analysis_sources(store, job["job_id"], value, generation=job["generation"])
+            value = _verify_analysis_result(store, job['job_id'], value, generation=job['generation'],
+                deadline=deadline, monotonic_func=monotonic_func)
     elif value.get("summary"):
         value["summary"] = ""
     elif value.get("limitations"):
@@ -148,11 +160,19 @@ def _reduce_analysis_output(store, job, value, reason):
     return value
 
 
-def prepare_analysis_presentation(store, job_id, result, *, generation):
+def prepare_analysis_presentation(store, job_id, result, *, generation, deadline=None,
+                                   monotonic_func=common_process.continuous_time):
     job = store.require_running(job_id, generation=generation)
     limits = analysis_settings._synthesis_limits(job)
-    value = analysis_evidence.verify_analysis_sources(store, job_id, result, generation=generation)
+    value = _verify_analysis_result(store, job_id, result, generation=generation,
+        deadline=deadline, monotonic_func=monotonic_func)
     value.update(command=job["command"], detail=limits["detail"], query=job["request"]["request"].get("query"))
+    refs = job["checkpoint"].get("history", {}).get("refs", {})
+    titles = []
+    for requested in job["request"]["request"]["channels"]:
+        channel = store.source_channel(refs[requested]) if requested in refs else None
+        titles.append((channel.get("title") if channel else None) or requested)
+    value["channel_titles"] = titles
     if value.get("kind") == "budget_stop":
         value.update(partial=True, reasons=sorted(set(value.get("reasons", [])) | {value["reason"]}))
         manifest = job["checkpoint"].get("manifest", {})
@@ -184,7 +204,7 @@ def prepare_analysis_presentation(store, job_id, result, *, generation):
                 value.update(display_query="".join(prefix) + suffix, partial=True,
                     reasons=sorted(set(value.get("reasons", [])) | {reason}))
                 continue
-        value = _reduce_analysis_output(store, job, value, reason)
+        value = _reduce_analysis_output(store, job, value, reason, deadline=deadline, monotonic_func=monotonic_func)
         if value is None:
             raise ValueError("presentation_budget_too_small")
 
@@ -207,17 +227,19 @@ def resolve_analysis_artifact(job):
     return target, relative
 
 
-def render_full_analysis_markdown(store, job_id, *, generation):
+def render_full_analysis_markdown(store, job_id, *, generation, deadline=None,
+                                  monotonic_func=common_process.continuous_time):
     job = store.require_running(job_id, generation=generation)
     if job["request"]["request"]["detail"] != "full" or job["result"] is None:
         raise ValueError("Full result is not prepared")
-    value = prepare_analysis_presentation(store, job_id, job["result"], generation=generation)["result"]
+    value = prepare_analysis_presentation(store, job_id, job['result'], generation=generation,
+        deadline=deadline, monotonic_func=monotonic_func)['result']
     maximum = analysis_settings._synthesis_limits(job)["max_chars"]
     while True:
         text = analysis_rendering._full_analysis_markdown(job, value)
         if len(text) <= maximum:
             return {"text": text, "result": value}
-        value = _reduce_analysis_output(store, job, value, "max_chars")
+        value = _reduce_analysis_output(store, job, value, 'max_chars', deadline=deadline, monotonic_func=monotonic_func)
         if value is None:
             raise ValueError("markdown_budget_too_small")
 
@@ -254,12 +276,14 @@ def verify_full_analysis_artifact(job):
     return relative
 
 
-def write_full_analysis_artifact(store, job_id, *, generation, restore_missing=False):
+def write_full_analysis_artifact(store, job_id, *, generation, restore_missing=False, deadline=None,
+                                 monotonic_func=common_process.continuous_time):
     job = store.require_running(job_id, generation=generation)
     if job["request"]["request"]["detail"] != "full" or job["result"] is None:
         raise ValueError("Full result is not prepared")
     try:
-        analysis_evidence.verify_analysis_sources(store, job_id, job["result"], generation=generation)
+        _verify_analysis_result(store, job_id, job['result'], generation=generation,
+            deadline=deadline, monotonic_func=monotonic_func)
         target, relative = resolve_analysis_artifact(job)
         if job["full_path"] is not None:
             try:
@@ -272,7 +296,8 @@ def write_full_analysis_artifact(store, job_id, *, generation, restore_missing=F
             except FileNotFoundError:
                 if not restore_missing:
                     raise
-        rendered = render_full_analysis_markdown(store, job_id, generation=generation)
+        rendered = render_full_analysis_markdown(store, job_id, generation=generation,
+            deadline=deadline, monotonic_func=monotonic_func)
         content_hash = hashlib.sha256(rendered["text"].encode("utf-8")).hexdigest()
         maximum = job["request"]["settings"]["analysis"]["output"]["profiles"]["full"]["max_chars"]
         replace_owned = False
@@ -295,7 +320,8 @@ def write_full_analysis_artifact(store, job_id, *, generation, restore_missing=F
             common_json_io.write_text_atomic(target, rendered["text"])
         if _analysis_artifact_digest(target, maximum) != content_hash:
             raise OSError("Artifact read-back hash mismatch")
-        analysis_evidence.verify_analysis_sources(store, job_id, job["result"], generation=generation)
+        _verify_analysis_result(store, job_id, job['result'], generation=generation,
+            deadline=deadline, monotonic_func=monotonic_func)
         store.save_full_artifact(job_id, generation=generation, relative_path=relative, content_hash=content_hash,
             result_digest=hashlib.sha256(canonical_json(job["result"]).encode("utf-8")).hexdigest(),
             partial=rendered["result"]["partial"])
@@ -319,7 +345,8 @@ def deliver_analysis_result(store, job_id, *, generation, token, access_provider
     if not job["delivery"]:
         if job["result"] is None:
             raise ValueError("Analysis result is not prepared")
-        prepared = prepare_analysis_presentation(store, job_id, job["result"], generation=generation)
+        prepared = prepare_analysis_presentation(store, job_id, job['result'], generation=generation,
+            deadline=deadline, monotonic_func=monotonic_func)
         if prepared["detail"] == "full":
             if artifact_verifier is None or artifact_verifier(job) != job["full_path"]:
                 raise ValueError("Full artifact is not verified")
@@ -327,15 +354,18 @@ def deliver_analysis_result(store, job_id, *, generation, token, access_provider
             prepared["result"]["partial"] |= job["checkpoint"].get("artifact", {}).get("partial", False)
         try:
             store.prepare_delivery(job_id, generation=generation, chunks=prepared["chunks"], parse_mode=prepared["parse_mode"],
-                detail=prepared["detail"], analysis_partial=prepared["result"].get("partial", False))
+                detail=prepared["detail"], analysis_partial=prepared["result"].get("partial", False),
+                source_verification=analysis_evidence.source_verification_counts(prepared['result']))
         except BudgetExceededError as exc:
             if exc.reason != "max_intermediate_bytes" or prepared["detail"] == "full":
                 raise
             store.record_budget_stop(job_id, generation=generation, reason=exc.reason)
             fallback = store.budget_fallback(job_id, generation=generation, reason=exc.reason)
-            prepared = prepare_analysis_presentation(store, job_id, fallback, generation=generation)
+            prepared = prepare_analysis_presentation(store, job_id, fallback, generation=generation,
+                deadline=deadline, monotonic_func=monotonic_func)
             store.prepare_delivery(job_id, generation=generation, chunks=prepared["chunks"], parse_mode=prepared["parse_mode"],
-                detail=prepared["detail"], analysis_partial=True)
+                detail=prepared["detail"], analysis_partial=True,
+                source_verification=analysis_evidence.source_verification_counts(prepared['result']))
     while True:
         job = store.require_running(job_id, generation=generation)
         delivery = job["delivery"]
@@ -370,7 +400,8 @@ def deliver_analysis_result(store, job_id, *, generation, token, access_provider
                     raise ValueError("Full artifact changed")
             except (OSError, ValueError):
                 return store.stop_delivery(job_id, generation=generation, reason="artifact_unavailable")
-        analysis_evidence.verify_analysis_sources(store, job_id, job["result"], generation=generation)
+        _verify_analysis_result(store, job_id, job['result'], generation=generation,
+            deadline=deadline, monotonic_func=monotonic_func)
         remaining = deadline - monotonic_func()
         if remaining <= 0:
             return store.stop_delivery(job_id, generation=generation, reason="deadline_exceeded")
@@ -403,39 +434,13 @@ def _reused_settings(config: dict[str, Any]) -> dict[str, Any]:
                 key: history_client.require_int_config_value(config, "sync", key, min_value=0)
                 for key in ("sync_limit", "batch_size")
             },
-            "digest_ai": {
-                key: history_client.require_int_config_value(config, "digest_ai", key, min_value=1)
-                for key in ("messages_per_ai_pass", "message_block_max_chars")
-            },
         }
     except SystemExit as exc:
         raise ValueError(str(exc)) from exc
     if not settings["processing"]["model"]:
         raise ValueError("Missing processing.model")
-    ai = settings["digest_ai"]
-    # Keep the existing digest scalar fallbacks/clamps; no digest prompts, keys,
-    # per-profile sync limits or text truncation are needed by analytics.
-    for key, default in (("max_output_tokens", 1200), ("openai_timeout_seconds", 120), ("openai_retry_attempts", 3)):
-        try:
-            ai[key] = max(1, int(get(config, "digest_ai", key) or default))
-        except ValueError as exc:
-            raise ValueError(f"Invalid digest_ai.{key}") from exc
-    ai["openai_retry_attempts"] = min(5, ai["openai_retry_attempts"])
-    try:
-        backoff = float(get(config, "digest_ai", "openai_retry_backoff_seconds") or 1)
-        ai["openai_retry_backoff_seconds"] = min(60.0, max(0.0, backoff))
-    except ValueError as exc:
-        raise ValueError("Invalid digest_ai.openai_retry_backoff_seconds") from exc
-    for key, allowed in (
-        ("reasoning_effort", {"none", "low", "medium", "high", "xhigh", "max"}),
-        ("reasoning_summary", {"auto", "concise", "detailed", "none"}),
-    ):
-        value = get(config, "digest_ai", key).lower()
-        if value not in allowed:
-            raise ValueError(f"Missing or invalid digest_ai.{key}")
-        ai[key] = value
     # Match legacy permissive boolean parsing, without resolving any secrets.
-    for section, key, default in (("processing", "ocr", True), ("digest_ai", "store_prompt_text", False)):
+    for section, key, default in (("processing", "ocr", True),):
         raw = get(config, section, key).lower()
         value = default
         if raw in {"1", "true", "yes", "on"}:
@@ -519,7 +524,7 @@ def require_analysis_access(update: dict[str, Any], access: dict[str, frozenset[
 
 def admit_analysis_job(store: AnalysisStore, config: dict[str, Any], update: dict[str, Any], *,
                        access: dict[str, frozenset[str]], bot_namespace: str,
-                       now: datetime, config_dir: Path) -> tuple[dict[str, Any], bool]:
+                       now: datetime, config_dir: Path, cutoff_at: datetime | None = None) -> tuple[dict[str, Any], bool]:
     requester_id, destination = require_analysis_access(update, access)
     update_id = update.get("update_id")
     if type(update_id) is not int or update_id < 0 or not bot_namespace:
@@ -538,6 +543,10 @@ def admit_analysis_job(store: AnalysisStore, config: dict[str, Any], update: dic
     try:
         settings = resolve_analysis_settings(config, config_dir=config_dir)
         request = bridge.parse_analysis_request(raw, policy=settings, now=now)
+        if cutoff_at is not None:
+            if cutoff_at.tzinfo is None or cutoff_at > now or cutoff_at < request.since:
+                raise ValueError("Invalid recorded cutoff")
+            request = replace(request, cutoff_at=cutoff_at.astimezone(timezone.utc))
         payload = {
             "request": request.to_payload(), "settings": settings,
             "principal": {"namespace": bot_namespace, "username": bridge.extract_username(update) or None},
@@ -564,11 +573,18 @@ SEARCH_INDEX_ERRORS = {
 }
 
 
-def analysis_status_view(job: dict[str, Any]) -> dict[str, Any]:
+def analysis_status_view(job: dict[str, Any], *, phase_runs=None, now=None) -> dict[str, Any]:
     fields = ("job_id", "status", "generation", "cancel_requested", "accepted_at", "cutoff_at", "updated_at",
               "llm_calls", "provider_requests", "used_tokens", "reserved_tokens", "downloaded_messages",
               "intermediate_bytes", "evidence_records")
     view = {key: job[key] for key in fields}
+    current = now or datetime.now(timezone.utc)
+    end = datetime.fromisoformat(job["finished_at"]) if job["finished_at"] else current
+    view["elapsed_seconds"] = max(0, int((end - datetime.fromisoformat(job["accepted_at"])).total_seconds()))
+    active = next((row for row in reversed(phase_runs or [])
+                   if row["generation"] == job["generation"] and row["finished_at"] is None), None)
+    if active:
+        view["phase_elapsed_seconds"] = max(0, int((current - datetime.fromisoformat(active["started_at"])).total_seconds()))
     phase = job["phase"]
     view["phase"] = phase if phase in {"sync", "select", "extract", "link", "merge", "synthesize", "verify", "deliver"} else "unknown"
     outcome = job["delivery"].get("outcome", "pending")
@@ -592,7 +608,7 @@ def control_analysis_job(store: AnalysisStore, config: dict[str, Any], update: d
             or job["destination"] != destination):
         raise AnalysisRejection("not_found")
     if command == "status":
-        return analysis_status_view(job)
+        return analysis_status_view(job, phase_runs=store.phase_runs(job_id), now=now)
     try:
         if command == "cancel":
             return analysis_status_view(store.request_cancel(job_id, now=now))
@@ -696,6 +712,20 @@ def prepare_analysis_ocr(store, job_id, *, generation, runtime, deadline, monoto
 def execute_analysis_job(store, job, *, runtime=None, client=None, api_key=None, token=None,
                          capabilities=None, access_provider=None, urlopen_func=None, send_func=None,
                          deadline=None, monotonic_func=common_process.continuous_time, sleep_func=time.sleep):
+    job = store.require_running(job["job_id"], generation=job["generation"])
+    if job["request"]["settings"].get("algorithm_version") != analysis_settings.ANALYSIS_ALGORITHM_VERSION:
+        raise ValueError("analysis_policy_incompatible")
+    with analysis_telemetry.PhaseRecorder(store, job, monotonic_func=monotonic_func) as recorder:
+        return _execute_analysis_job(store, job, runtime=runtime, client=client, api_key=api_key,
+            token=token, capabilities=capabilities, access_provider=access_provider,
+            urlopen_func=urlopen_func, send_func=send_func, deadline=deadline,
+            monotonic_func=monotonic_func, sleep_func=sleep_func, phase_recorder=recorder)
+
+
+def _execute_analysis_job(store, job, *, runtime=None, client=None, api_key=None, token=None,
+                          capabilities=None, access_provider=None, urlopen_func=None, send_func=None,
+                          deadline=None, monotonic_func=common_process.continuous_time, sleep_func=time.sleep,
+                          phase_recorder):
     """Compose the bounded stages over one frozen job and one run deadline."""
     job_id, generation = job["job_id"], job["generation"]
     job = store.require_running(job_id, generation=generation)
@@ -713,6 +743,7 @@ def execute_analysis_job(store, job, *, runtime=None, client=None, api_key=None,
         if monotonic_func() >= deadline:
             raise TimeoutError("Analytic run deadline exceeded")
         store.set_analysis_phase(job_id, generation=generation, phase=value)
+        phase_recorder.enter(value)
 
     if job["result"] is None or job["checkpoint"].get("manifest", {}).get("input_changed"):
         if job["command"] == "search" and job["request"]["request"]["mode"] == "fast" and not job["checkpoint"].get("manifest"):
@@ -754,10 +785,12 @@ def execute_analysis_job(store, job, *, runtime=None, client=None, api_key=None,
         analysis_pipeline.synthesize_analysis_result(store, job_id, generation=generation, **transport)
     phase("verify")
     job = store.require_running(job_id, generation=generation)
-    analysis_evidence.verify_analysis_sources(store, job_id, job["result"], generation=generation)
+    _verify_analysis_result(store, job_id, job['result'], generation=generation,
+        deadline=deadline, monotonic_func=monotonic_func)
     if job["request"]["request"]["detail"] == "full":
         write_full_analysis_artifact(store, job_id, generation=generation,
-            restore_missing=job["checkpoint"].get("artifact", {}).get("restore_missing") is True)
+            restore_missing=job["checkpoint"].get("artifact", {}).get("restore_missing") is True,
+            deadline=deadline, monotonic_func=monotonic_func)
     job = store.require_running(job_id, generation=generation)
     if token is None and job["delivery"].get("outcome") not in {"confirmed", "unknown"}:
         token = bridge.require_token()

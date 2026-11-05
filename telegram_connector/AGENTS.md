@@ -33,6 +33,7 @@ It must stay operationally separate from `telegram_agent_bot`.
   - `analysis_rendering.py`: pure HTML/Markdown formatting of prepared data
   - `analysis_pipeline.py`: selection/manifest, physical provider requests, extraction/cache, relations, merge and synthesis
   - `analysis_store.py`: SQL, transactions, durable budgets and provenance ledger
+  - `analysis_telemetry.py`: phase-clock orchestration and read-only projections of the job/attempt/phase ledgers; SQL mutations remain in `analysis_store.py`
 - Internal analytics calls and dependency patches use the owning module, including evaluator capture hooks. Compatibility exports are for existing callers, not mutable lookup ownership.
 - Extracted history/digest owners must not import their entrypoints or bridge. Keep public facade calls compatible and apply [dependency lookup conventions](../CODE_CONVENTIONS.md#python-baseline) to runtime, tests and instrumentation.
 - Extracted analytics modules must not import the entrypoint or bridge. Settings and rendering remain independent of pipeline and persistence. Keep related pipeline algorithms together to avoid scattering state and limit handling; revisit this agreed boundary when responsibilities change.

@@ -178,7 +178,7 @@ def test_s20_detail_synthesis_source_edit_outside_detail_pack_interrupts_after_i
         change_setting(store, job, "analysis", "max_intermediate_bytes", 100000)
     evidence = analysis_pipeline._synthesis_evidence(store, store.get_job(job["job_id"]))
     guard = len(analysis.canonical_json(evidence["groups"])) + len(analysis.canonical_json(evidence["records"][0]))
-    change_setting(store, job, "digest_ai", "message_block_max_chars", guard)
+    change_setting(store, job, "analysis.ai", "message_block_max_chars", guard)
     delegate = synthesis_sender()
     def sender(req, timeout):
         response = delegate(req, timeout)
@@ -217,7 +217,7 @@ def test_s20_detail_synthesis_recounts_smaller_evidence_pack_and_labels_limited_
     def sender(req, timeout):
         data = json.loads(json.loads(req.data)["input"].split("Опорные записи: ", 1)[1])
         if req.full_url.endswith("input_tokens") and len(data["records"]) > 1:
-            return Response({"input_tokens": 20000})
+            return Response({"input_tokens": job["request"]["settings"]["analysis"]["max_input_tokens"] + 1})
         return delegate(req, timeout)
     result = synthesize(store, job, sender)
     assert result["partial"] is True and "synthesis_evidence_limited" in result["reasons"]
@@ -332,7 +332,7 @@ def test_s20_detail_synthesis_oversized_repair_remains_partial_without_another_i
     def sender(req, timeout):
         request = json.loads(req.data)
         if req.full_url.endswith("input_tokens"):
-            return Response({"input_tokens": 20000 if "Некорректный результат:" in request["input"] else 100})
+            return Response({"input_tokens": job["request"]["settings"]["analysis"]["max_input_tokens"] + 1 if "Некорректный результат:" in request["input"] else 100})
         return Response(model_response({"wrong": "shape"}))
     result = synthesize(store, job, sender)
     assert result["partial"] is True and "max_input_tokens" in result["reasons"]
@@ -417,7 +417,7 @@ def test_s38_synthesis_smaller_pack_keeps_distinct_ranked_groups(manifest_job):
     def sender(req, timeout):
         data = json.loads(json.loads(req.data)['input'].split('Опорные записи: ',1)[1])
         if req.full_url.endswith('input_tokens') and len(data['records']) > 2:
-            return Response({'input_tokens':20000})
+            return Response({'input_tokens':job["request"]["settings"]["analysis"]["max_input_tokens"] + 1})
         if not req.full_url.endswith('input_tokens'):
             seen.append({x['payload']['topic_key'] for x in data['records']})
         return delegate(req, timeout)
@@ -448,7 +448,7 @@ def test_s38_synthesis_keeps_source_facts_when_link_diagnostics_are_large(manife
         if req.full_url.endswith("input_tokens"):
             return Response({"input_tokens": 100})
         pair = json.loads(json.loads(req.data)["input"].split("Кандидаты: ", 1)[1])["pairs"][0]
-        return Response(model_response({"decisions": [{"left_id": pair[0], "right_id": pair[1],
+        return Response(model_response({"decisions": [{"pair_id": pair["pair_id"],
             "relation": "complements", "reason": "Объяснение решения классификатора. " * 1000}], "saturated": False}))
 
     link(store, job, linker)

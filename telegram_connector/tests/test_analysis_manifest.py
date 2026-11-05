@@ -62,7 +62,10 @@ def messages(store, job):
 
 def change_setting(store, job, section, field, value):
     payload = copy.deepcopy(store.get_job(job["job_id"])["request"])
-    payload["settings"][section][field] = value
+    target = payload["settings"]
+    for part in section.split("."):
+        target = target[part]
+    target[field] = value
     store.conn.execute("UPDATE analysis_jobs SET request_json=? WHERE job_id=?", (canonical_json(payload), job["job_id"]))
 
 
