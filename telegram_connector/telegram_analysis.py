@@ -19,7 +19,7 @@ import time
 from typing import Any, Callable
 
 if __package__:
-    from .analysis_store import AdmissionConflictError, AnalysisStore, BudgetExceededError, QueueFullError, StaleGenerationError, canonical_json
+    from .analysis_store import AdmissionConflictError, AnalysisStore, BudgetExceededError, QueueFullError, StaleGenerationError, canonical_json, result_evidence_ids, PRESENTATION_LIMIT_REASONS
     from . import telegram_bridge as bridge
     from . import telegram_history_client as history_client
     from . import analysis_settings
@@ -28,7 +28,7 @@ if __package__:
     from . import analysis_pipeline
     from . import analysis_telemetry
 else:
-    from analysis_store import AdmissionConflictError, AnalysisStore, BudgetExceededError, QueueFullError, StaleGenerationError, canonical_json
+    from analysis_store import AdmissionConflictError, AnalysisStore, BudgetExceededError, QueueFullError, StaleGenerationError, canonical_json, result_evidence_ids, PRESENTATION_LIMIT_REASONS
     import telegram_bridge as bridge
     import telegram_history_client as history_client
     import analysis_settings
@@ -142,6 +142,8 @@ def _verify_analysis_result(store, job_id, result, *, generation, deadline=None,
 
 def _reduce_analysis_output(store, job, value, reason, *, deadline=None, monotonic_func=common_process.continuous_time):
     value.update(partial=True, reasons=sorted(set(value.get("reasons", [])) | {reason}))
+    if reason in PRESENTATION_LIMIT_REASONS:
+        value['presentation_limit_reason'] = reason
     if value.get("items"):
         value["items"].pop()
         value["summary"] = ""
@@ -312,7 +314,9 @@ def write_full_analysis_artifact(store, job_id, *, generation, restore_missing=F
                 previous_hash = current_hash
         store.save_full_artifact(job_id, generation=generation, relative_path=relative, content_hash=content_hash,
             result_digest=hashlib.sha256(canonical_json(job["result"]).encode("utf-8")).hexdigest(),
-            partial=rendered["result"]["partial"], ready=False, previous_hash=previous_hash)
+            partial=rendered["result"]["partial"], ready=False, previous_hash=previous_hash,
+            presented_evidence_ids=result_evidence_ids(rendered['result']) if job['request']['settings']['algorithm_version'] >= 11 else None,
+            presentation_limit_reason=rendered['result'].get('presentation_limit_reason'))
         if target.exists() and not replace_owned:
             # A previous process may have stopped after replace, before metadata.
             common_json_io.sync_directory(target.parent)
@@ -324,7 +328,9 @@ def write_full_analysis_artifact(store, job_id, *, generation, restore_missing=F
             deadline=deadline, monotonic_func=monotonic_func)
         store.save_full_artifact(job_id, generation=generation, relative_path=relative, content_hash=content_hash,
             result_digest=hashlib.sha256(canonical_json(job["result"]).encode("utf-8")).hexdigest(),
-            partial=rendered["result"]["partial"])
+            partial=rendered["result"]["partial"],
+            presented_evidence_ids=result_evidence_ids(rendered['result']) if job['request']['settings']['algorithm_version'] >= 11 else None,
+            presentation_limit_reason=rendered['result'].get('presentation_limit_reason'))
         return verify_full_analysis_artifact(store.get_job(job_id))
     except Exception:
         current = store.get_job(job_id)
@@ -352,10 +358,17 @@ def deliver_analysis_result(store, job_id, *, generation, token, access_provider
                 raise ValueError("Full artifact is not verified")
             prepared.update(chunks=[job["full_path"]], parse_mode=None)
             prepared["result"]["partial"] |= job["checkpoint"].get("artifact", {}).get("partial", False)
+        presented = None
+        if job['request']['settings']['algorithm_version'] >= 11:
+            presented = (job['checkpoint'].get('artifact', {}).get('presented_evidence_ids')
+                         if prepared['detail'] == 'full' else result_evidence_ids(prepared['result']))
         try:
             store.prepare_delivery(job_id, generation=generation, chunks=prepared["chunks"], parse_mode=prepared["parse_mode"],
                 detail=prepared["detail"], analysis_partial=prepared["result"].get("partial", False),
-                source_verification=analysis_evidence.source_verification_counts(prepared['result']))
+                source_verification=analysis_evidence.source_verification_counts(prepared['result']),
+                presented_evidence_ids=presented,
+                presentation_limit_reason=(job['checkpoint'].get('artifact', {}).get('presentation_limit_reason')
+                    if prepared['detail'] == 'full' else prepared['result'].get('presentation_limit_reason')))
         except BudgetExceededError as exc:
             if exc.reason != "max_intermediate_bytes" or prepared["detail"] == "full":
                 raise
@@ -365,7 +378,9 @@ def deliver_analysis_result(store, job_id, *, generation, token, access_provider
                 deadline=deadline, monotonic_func=monotonic_func)
             store.prepare_delivery(job_id, generation=generation, chunks=prepared["chunks"], parse_mode=prepared["parse_mode"],
                 detail=prepared["detail"], analysis_partial=True,
-                source_verification=analysis_evidence.source_verification_counts(prepared['result']))
+                source_verification=analysis_evidence.source_verification_counts(prepared['result']),
+                presented_evidence_ids=[] if job['request']['settings']['algorithm_version'] >= 11 else None,
+                presentation_limit_reason=prepared['result'].get('presentation_limit_reason'))
     while True:
         job = store.require_running(job_id, generation=generation)
         delivery = job["delivery"]
@@ -505,6 +520,7 @@ class AnalysisRejection(ValueError):
         "unknown_delivery": "Исход доставки неизвестен. Автоматическая повторная отправка отключена; требуется решение оператора.",
         "already_complete": "Результат уже доставлен.",
         "policy_changed": "Настройки или версия анализа изменились. Создайте новую задачу.",
+        "policy_retired": "Продолжение этой версии анализа не поддерживается. История сохранена. Для нового анализа отправьте новую команду; автоматически она не запускается.",
         "state_changed": "Состояние задачи изменилось. Проверьте /status.",
     }
 
@@ -636,6 +652,8 @@ def control_analysis_job(store: AnalysisStore, config: dict[str, Any], update: d
                 or (job["status"] == "partial" and job["result"] is None and job["checkpoint"].get("resumable") is not True)):
             raise AnalysisRejection("not_resumable")
         frozen = job["request"]["settings"]
+        if not analysis_settings.supported_analysis_policy(frozen):
+            raise AnalysisRejection("policy_retired")
         last_change = datetime.fromisoformat(job["updated_at"])
         if now.astimezone(timezone.utc) - last_change > timedelta(days=frozen["analysis"]["retention_days"]):
             raise AnalysisRejection("expired")
@@ -645,9 +663,7 @@ def control_analysis_job(store: AnalysisStore, config: dict[str, Any], update: d
             raise AnalysisRejection("policy_changed") from exc
         # A changed prompt file does not silently rewrite a partially analysed job:
         # resume keeps its complete frozen bundle. Changed execution policy needs a new request.
-        informational = {"settings_sources", "analysis_prompts"}
-        if ({key: value for key, value in current.items() if key not in informational}
-                != {key: value for key, value in frozen.items() if key not in informational}):
+        if not analysis_settings.resume_policy_compatible(current, frozen):
             raise AnalysisRejection("policy_changed")
         policy = frozen["analysis"]
         if job["result"] is None and (job["llm_calls"] >= policy["max_llm_calls"]
@@ -713,7 +729,7 @@ def execute_analysis_job(store, job, *, runtime=None, client=None, api_key=None,
                          capabilities=None, access_provider=None, urlopen_func=None, send_func=None,
                          deadline=None, monotonic_func=common_process.continuous_time, sleep_func=time.sleep):
     job = store.require_running(job["job_id"], generation=job["generation"])
-    if job["request"]["settings"].get("algorithm_version") != analysis_settings.ANALYSIS_ALGORITHM_VERSION:
+    if not analysis_settings.supported_analysis_policy(job['request']['settings']):
         raise ValueError("analysis_policy_incompatible")
     with analysis_telemetry.PhaseRecorder(store, job, monotonic_func=monotonic_func) as recorder:
         return _execute_analysis_job(store, job, runtime=runtime, client=client, api_key=api_key,
@@ -993,8 +1009,7 @@ def validate_fts_backfill_job(job: dict[str, Any]) -> None:
     if (job["kind"] != "fts_backfill" or job["admission_key"] != history_client.FTS_INDEX_ADMISSION_KEY
             or job["requester_id"] is not None or job["destination"] is not None
             or job["request"].get("internal") != {"kind": "fts_backfill", "version": history_client.FTS_INDEX_VERSION}
-            or settings.get("schema_version") != analysis_settings.ANALYSIS_SCHEMA_VERSION
-            or settings.get("algorithm_version") != analysis_settings.ANALYSIS_ALGORITHM_VERSION):
+            or not analysis_settings.supported_analysis_policy(settings)):
         raise ValueError("Invalid internal index contract")
 
 

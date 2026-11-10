@@ -387,11 +387,15 @@ def test_s13_budget_ledger_fallback_sources_are_actual_processed_manifest_refs(b
     store.conn.execute("INSERT INTO channels VALUES (11,NULL,'fixture','Fixture','Channel','{}','now','now')")
     store.conn.execute("""INSERT INTO messages (channel_id,message_id,date_utc,text,raw_json,content_hash,imported_at)
         VALUES (11,1,?,'Источник','{}','legacy','now')""", (NOW.isoformat(),))
+    store.save_checkpoint(job['job_id'], {'history': {'refs': {'@fixture': 11},
+        'sources': {'11': {'mode': 'reuse', 'state': 'complete'}}}},
+        generation=job['generation'], max_bytes=100000)
+    analysis.build_all_messages_manifest(store, job['job_id'], generation=job['generation'])
     batch = plan(store, job, kind="extract", key="extract/cached-empty")
     _, digest = analysis_evidence._analysis_message_snapshot(store, 11, 1, 100000)
     store.conn.execute("""INSERT INTO analysis_inputs
         (batch_id,channel_id,message_id,fragment_start,fragment_end,role,date_utc,content_digest)
-        VALUES (?,11,1,0,0,'selected',?,?)""", (batch["batch_id"], NOW.isoformat(), digest))
+        VALUES (?,11,1,0,8,'selected',?,?)""", (batch["batch_id"], NOW.isoformat(), digest))
     store.conn.execute("UPDATE analysis_batches SET state='succeeded' WHERE batch_id=?", (batch["batch_id"],))
     result = store.record_budget_stop(job["job_id"], generation=job["generation"], reason="max_llm_calls")
     assert result["source_refs"] == [{"channel_id": 11, "message_id": 1, "content_digest": digest}]

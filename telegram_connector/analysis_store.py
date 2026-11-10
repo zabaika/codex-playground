@@ -44,6 +44,8 @@ SQLITE_INTEGER_MAX = (1 << 63) - 1
 BUDGET_REASONS = frozenset({"max_llm_calls", "max_provider_requests", "max_total_tokens", "max_input_tokens",
     "stage_output_limit", "max_intermediate_bytes", "max_evidence_records", "usage_overrun", "max_merge_depth", "max_split_depth"})
 DELIVERY_STOP_REASONS = frozenset({"forbidden", "deadline_exceeded", "artifact_unavailable"})
+PRESENTATION_LIMIT_REASONS = frozenset({'max_chars', 'max_telegram_messages'})
+LINK_OBSERVATION_FIELDS = ('input_pairs', 'input_unique_records', 'record_payload_bytes', 'serialized_payload_bytes')
 _COUNT_FIELDS = ("downloaded_messages", "llm_calls", "provider_requests", "used_tokens", "reserved_tokens", "evidence_records")
 # Fixed worker lifecycle; optional/repeated spans still pass normal accounting.
 _LIFECYCLE_PHASES = ("queue", "worker_start", "startup", "sync", "select", "extract", "link", "merge",
@@ -88,6 +90,36 @@ def _validate_source_verification(value):
     return dict(value)
 
 
+def result_evidence_ids(result):
+    return sorted({identity for item in (result or {}).get('items', [])
+                   for identity in item.get('evidence_ids', [])})
+
+
+def record_aliases(identities):
+    """Stable wire identities shared by producers and saved-output readers."""
+    return {key: f'r{index:03}' for index, key in enumerate(sorted(identities), 1)}
+
+
+def model_selection_ids(identities, scope):
+    """Resolve saved model references without inferring missing observations."""
+    if identities is None:
+        return None, None
+    if scope is None:
+        return None, identities
+    known = set(scope)
+    canonical = {alias: key for key, alias in record_aliases(scope).items() if alias not in known}
+    unresolved = sorted(key for key in identities if canonical.get(key, key) not in known)
+    selected = sorted({canonical.get(key, key) for key in identities if key not in unresolved})
+    return selected, unresolved
+
+
+def _presented_ids(job, values):
+    if (not isinstance(values, list) or any(not isinstance(value, str) for value in values)
+            or len(values) != len(set(values)) or not set(values) <= set(result_evidence_ids(job['result']))):
+        raise ValueError('Invalid presentation evidence scope')
+    return sorted(values)
+
+
 def completion_budget(settings, *, detail, roots):
     """Conservative one-attempt cost of the bounded, consecutive fan-in tree."""
     _budget_integer(roots, "completion roots")
@@ -116,6 +148,69 @@ def canonical_json(value: dict[str, Any] | list[Any]) -> str:
     except (TypeError, ValueError) as exc:
         raise ValueError("Invalid analytic JSON payload") from exc
     return encoded
+
+
+def _extraction_source_key(ref):
+    return tuple(ref[key] for key in ('channel_id', 'message_id', 'content_digest'))
+
+
+def _extraction_remaining_ranges(lower, upper, covered):
+    if lower == upper:
+        return [] if any(start <= lower <= end for start, end in covered) else [(lower, upper)]
+    remaining, cursor = [], lower
+    for start, end in sorted(covered):
+        if end <= cursor or start >= upper:
+            continue
+        if start > cursor:
+            remaining.append((cursor, min(start, upper)))
+        cursor = max(cursor, end)
+        if cursor >= upper:
+            break
+    if cursor < upper:
+        remaining.append((cursor, upper))
+    return remaining
+
+
+def _extraction_child_refs(parent_id, parent, child):
+    if (child is None or child['payload'].get('invalidated')
+            or child['payload'].get('plan', {}).get('parent_batch_id') != parent_id):
+        return None
+    refs = child['payload']['plan'].get('inputs', [])
+    parents = parent['payload'].get('plan', {}).get('inputs', [])
+    if not refs or any(type(ref.get(key)) is not int for ref in refs for key in ('fragment_start', 'fragment_end')):
+        return None
+    for ref in refs:
+        if not any(_extraction_source_key(ref) == _extraction_source_key(root)
+                   and 0 <= root['fragment_start'] <= ref['fragment_start'] <= ref['fragment_end'] <= root['fragment_end']
+                   for root in parents):
+            return None
+    return refs
+
+
+def _extraction_delegated_ranges(parent_id, parent, children):
+    payload = parent['payload']
+    progress = payload.get('extraction_progress')
+    wanted = ([progress['scope']['inputs'][key] for key in progress['unresolved_input_ids']]
+              if progress and progress['unresolved_input_ids'] else payload.get('plan', {}).get('inputs', []))
+    allowed, delegated = {}, {}
+    for ref in wanted:
+        allowed.setdefault(_extraction_source_key(ref), []).append((ref['fragment_start'], ref['fragment_end']))
+    ids = payload.get('split_children', [])
+    if len(set(ids)) != len(ids):
+        return None
+    for identity in ids:
+        refs = _extraction_child_refs(parent_id, parent, children.get(identity))
+        if refs is None:
+            return None
+        for ref in refs:
+            source = _extraction_source_key(ref)
+            if _extraction_remaining_ranges(ref['fragment_start'], ref['fragment_end'], allowed.get(source, [])):
+                return None
+            delegated.setdefault(source, []).append((ref['fragment_start'], ref['fragment_end']))
+    if any(_extraction_remaining_ranges(lower, upper, delegated.get(source, []))
+           for source, intervals in allowed.items() for lower, upper in intervals):
+        return None
+    return delegated
 
 
 def _same_channel_reply(raw, channel_id):
@@ -191,6 +286,8 @@ def _delivery_allowance(job):
         "plan_digest": "f" * 64, "artifact_hash": "f" * 64 if detail == "full" else None, "analysis_partial": False,
         "source_verification": {key: SQLITE_INTEGER_MAX for key in SOURCE_VERIFICATION_FIELDS},
         "outcome": "confirmed", "error": max(DELIVERY_STOP_REASONS, key=len), "parts": []}
+    future['presented_evidence_ids'] = result_evidence_ids(job['result'])
+    future['presentation_limit_reason'] = max(PRESENTATION_LIMIT_REASONS, key=len)
     part_bytes = len(canonical_json({"text": "", "outcome": "confirmed", "attempts": []}).encode("utf-8"))
     part_bytes += attempts * len(canonical_json(future_attempt).encode("utf-8")) + attempts - 1
     if delivery.get("parts"):
@@ -230,10 +327,17 @@ def _finalization_allowance(job):
         if job["request"].get("request", {}).get("detail") == "full":
             projection["artifact"] = {"result_digest": "f" * 64, "content_hash": "f" * 64,
                 "previous_hash": "f" * 64, "partial": False, "restore_missing": False}
+            projection['artifact']['presented_evidence_ids'] = result_evidence_ids(job['result'])
+            projection['artifact']['presentation_limit_reason'] = max(PRESENTATION_LIMIT_REASONS, key=len)
             relative = str(Path(policy["output"]["results_dir"]) / (job["job_id"] + ".md"))
             artifact_extra = max(0, len(relative.encode("utf-8")) + 64
                 - sum(len((job[key] or "").encode("utf-8")) for key in ("full_path", "full_hash")))
         projection["budget_stop"] = {"reason": max(BUDGET_REASONS, key=len), "phase": "synthesize"}
+        merge = checkpoint.get('merge', {'frontier': [], 'next_frontier': [], 'cursor': 0,
+            'depth': 0, 'reasons': [], 'group_order': 'unranked'})
+        # A budget stop must persist its merge checkpoint even at the byte cap.
+        projection['merge'] = {**merge, 'state': 'partial', 'partial': True,
+            'reasons': sorted(set(merge.get('reasons', [])) | BUDGET_REASONS)}
         if "manifest" in checkpoint:
             manifest = dict(checkpoint["manifest"])
             manifest.update(state="complete", partial=False, known_skipped=SQLITE_INTEGER_MAX,
@@ -281,6 +385,65 @@ def _telemetry_allowance(conn, job):
     return reserve
 
 
+def _closed_extraction_payload(batch, *, upper=False):
+    payload = copy.deepcopy(batch['payload'])
+    progress = payload['extraction_progress']
+    marker = progress.get('active_request')
+    if marker:
+        tail = batch['attempts'][marker['attempt_offset']:]
+        infer = [a for a in tail if a['request_kind'] == 'inference']
+        last = infer[-1] if infer else tail[-1] if tail else None
+        code = ('extraction_preflight_stop' if not infer else
+                'extraction_observation_missing' if last['state'] == 'succeeded' else
+                'extraction_provider_failure' if last['state'] == 'failed' else 'extraction_outcome_unknown')
+        progress['diagnostics'].append({'attempt_id': 'f' * 32 if upper else last['attempt_id'] if last else None,
+            'repair_index': marker['repair_index'], 'scope_sha256': marker['scope_sha256'],
+            'accepted': 0, 'unresolved': len(progress['unresolved_input_ids']),
+            'codes': ['extraction_observation_missing' if upper else code]})
+        progress['active_request'] = None
+    progress['closed'] = True
+    origins = [value['inferred_at'] for value in progress['accepted_records'].values()]
+    origins += [attempt['created_at'] for attempt in batch['attempts']
+                if attempt['request_kind'] == 'inference' and attempt['state'] == 'succeeded']
+    if origins:
+        payload['provenance'] = {
+            'inferred_at': min(origins),
+            'actual_model': None, 'cache_hit': False}
+    payload['completion_digest'] = hashlib.sha256(canonical_json(progress).encode()).hexdigest()
+    payload['outcome'] = ('partial' if progress['unresolved_input_ids'] or progress['record_errors']
+                          or progress.get('saturated') or marker else 'succeeded')
+    return payload
+
+
+def _extraction_closure_allowance(batch):
+    progress = batch['payload'].get('extraction_progress')
+    if progress is None or progress.get('closed') or batch['payload'].get('invalidated') or batch['payload'].get('outcome') == 'input_split':
+        return 0
+    future = _closed_extraction_payload(batch, upper=True)
+    reserve = max(0, len(canonical_json(future).encode()) - len(canonical_json(batch['payload']).encode()))
+    # Both active states (planned/running) occupy seven bytes; publication grows
+    # the persisted batch state as well as its JSON and child rows.
+    reserve += len('succeeded') - len('running')
+    for value in progress['accepted_records'].values():
+        record = value['record']
+        reserve += sum(len((text or '').encode()) for text in (
+            record['record_id'], batch['batch_id'], record['record_type'],
+            record['topic_key'], canonical_json(record['payload'])))
+    for ref in batch['payload']['plan']['inputs'] + batch['payload']['plan']['context']:
+        reserve += len(batch['batch_id'].encode()) + sum(len(str(ref[key]).encode()) for key in (
+            'channel_id', 'message_id', 'fragment_start', 'fragment_end', 'role', 'date_utc', 'content_digest'))
+    return reserve
+
+
+def _link_observation_allowance(payload):
+    if not payload.get('plan', {}).get('packing') or not payload.get('link_progress', {}).get('active_request'):
+        return 0
+    # Scalar metrics are known before dispatch; do not spend their space on
+    # other progress before the physical observation has been persisted.
+    future = {key: SQLITE_INTEGER_MAX for key in LINK_OBSERVATION_FIELDS}
+    return len(canonical_json(future).encode()) - 1
+
+
 def job_storage_usage(conn, job_id):
     """UTF-8 value bytes, excluding SQLite pages/WAL, plus unconsumed reserves."""
     cursor = conn.execute("SELECT * FROM analysis_jobs WHERE job_id=?", (job_id,))
@@ -299,13 +462,18 @@ def job_storage_usage(conn, job_id):
     for alias in _CHILD_VALUE_COLUMNS:
         expression = _value_bytes_sql(alias)
         logical += conn.execute(f"SELECT COALESCE(SUM({expression}),0) FROM {sources[alias]} WHERE b.job_id=?", (job_id,)).fetchone()[0]
-    receipts = 0
-    for entry in conn.execute("SELECT attempts_json FROM analysis_batches WHERE job_id=? AND kind!='select'", (job_id,)):
+    receipts, progress_reserve = 0, 0
+    for entry in conn.execute("SELECT attempts_json,batch_id,payload_json FROM analysis_batches WHERE job_id=? AND kind!='select'", (job_id,)):
         receipts += sum(item.get("receipt_allowance", _receipt_allowance(item)) for item in json.loads(entry[0]))
+        payload = json.loads(entry[2])
+        progress_reserve += _extraction_closure_allowance({'batch_id': entry[1],
+            'payload': payload, 'attempts': json.loads(entry[0])})
+        progress_reserve += _link_observation_allowance(payload)
     finalization = _finalization_allowance(job)
     telemetry = _telemetry_allowance(conn, job)
     return {"logical_bytes": logical, "receipt_reserve": receipts, "finalization_reserve": finalization,
-            "telemetry_reserve": telemetry, "allocated_bytes": logical + receipts + finalization + telemetry}
+            "telemetry_reserve": telemetry, "progress_reserve": progress_reserve,
+            "allocated_bytes": logical + receipts + finalization + telemetry + progress_reserve}
 
 
 def account_job_storage_no_tx(conn, job_id):
@@ -443,13 +611,14 @@ class AnalysisStore:
         return row[0] if row else None
 
     def record_provider_metrics(self, job_id, attempt_id, *, generation, phase_sequence,
-                                started_at, actual_model, cache_write_30m_tokens, cache_write_12h_tokens):
+                                started_at, actual_model, cache_write_30m_tokens, cache_write_12h_tokens,
+                                actual_service_tier=None):
         with common_sqlite.write_tx(self.conn):
             self.conn.execute("""UPDATE ai_usage_log SET generation=?,phase_sequence=?,started_at=?,
-                actual_model=?,cache_write_30m_tokens=?,cache_write_12h_tokens=?,
+                actual_model=?,cache_write_30m_tokens=?,cache_write_12h_tokens=?,actual_service_tier=?,
                 backoff_ms=0,backoff_requested_ms=0 WHERE job_id=? AND attempt_id=?""",
                 (generation, phase_sequence, started_at, actual_model, cache_write_30m_tokens,
-                 cache_write_12h_tokens, job_id, attempt_id))
+                 cache_write_12h_tokens, actual_service_tier, job_id, attempt_id))
 
     def record_provider_backoff(self, job_id, attempt_id, *, elapsed_ms, requested_ms):
         with common_sqlite.write_tx(self.conn):
@@ -581,6 +750,137 @@ class AnalysisStore:
                 return batch
         return None
 
+    def extraction_children_pending(self, job_id, batch_id):
+        """Published parent facts do not settle delegated child work."""
+        pending, seen, loaded, found = [(batch_id, None)], set(), {}, False
+        while pending:
+            identity, parent = pending.pop()
+            if identity in seen:
+                raise ValueError('Extraction split cycle')
+            seen.add(identity)
+            batch = loaded.get(identity) or self.get_batch(identity)
+            if batch is None or batch['job_id'] != job_id or batch['kind'] != 'extract':
+                raise ValueError('Extraction child outside job scope')
+            if parent and _extraction_child_refs(parent['batch_id'], parent, batch) is None:
+                raise ValueError('Extraction child outside parent scope')
+            if batch['payload'].get('invalidated'):
+                continue
+            if identity != batch_id and batch['state'] in {'planned', 'running'}:
+                found = True
+            children = batch['payload'].get('split_children', [])
+            loaded.update({key: self.get_batch(key) for key in children})
+            if children and _extraction_delegated_ranges(identity, batch, loaded) is None:
+                raise ValueError('Extraction child coverage outside residual scope')
+            pending.extend((key, batch) for key in children)
+        return found
+
+    def extraction_work_state(self, job_id, *, include_processed_sources=False):
+        """Read the current range obligations; no second durable coverage ledger."""
+        if __package__:
+            from .analysis_evidence import _analysis_message_snapshot, analysis_text_view
+        else:
+            from analysis_evidence import _analysis_message_snapshot, analysis_text_view
+        job = self.get_job(job_id)
+        if job is None:
+            raise StaleGenerationError('Analytic job was removed')
+        maximum = job['request']['settings']['analysis']['max_intermediate_bytes']
+        batches = {}
+        for row in self.conn.execute("SELECT batch_id,state,payload_json FROM analysis_batches WHERE job_id=? AND kind='extract'", (job_id,)):
+            payload = json.loads(row['payload_json'])
+            if not payload.get('invalidated'):
+                batches[row['batch_id']] = {'state': row['state'], 'payload': payload}
+        inputs, expected = {}, {}
+        for row in self.conn.execute('''SELECT i.*,b.kind FROM analysis_inputs i JOIN analysis_batches b USING(batch_id)
+                WHERE b.job_id=? AND b.kind IN ('select','extract') AND i.role='selected' ''', (job_id,)):
+            ref = dict(row)
+            if row['kind'] == 'select':
+                source = _extraction_source_key(ref)
+                if source in expected:
+                    continue
+                try:
+                    snapshot, digest = _analysis_message_snapshot(self, ref['channel_id'], ref['message_id'], maximum)
+                except ValueError:
+                    snapshot, digest = None, None
+                expected[source] = (0, len(analysis_text_view(snapshot))) if snapshot is not None and digest == ref['content_digest'] else None
+            elif row['batch_id'] in batches:
+                inputs.setdefault(row['batch_id'], []).append(ref)
+        return self._extraction_ranges_state(batches, inputs, expected,
+            include_processed_sources=include_processed_sources)
+
+    def _extraction_obligations(self, batches, inputs):
+        observations, pending, observed, errors = {}, 0, False, 0
+        priorities = {'represented': 0, 'duplicate': 1, 'irrelevant': 2, 'empty_text': 3,
+                      'legacy': 4, 'unresolved': 5, 'unaccounted': 6}
+        for identity, batch in batches.items():
+            payload = batch['payload']
+            refs = payload.get('plan', {}).get('inputs', inputs.get(identity, []))
+            progress = payload.get('extraction_progress')
+            observed |= bool(progress and refs)
+            children = payload.get('split_children', [])
+            delegated = _extraction_delegated_ranges(identity, batch, batches) if children else {}
+            missing = delegated is None
+            delegated = delegated or {}
+            errors += missing
+            if payload.get('outcome') == 'input_split':
+                continue  # Child plans and manifest gaps define the remaining work.
+            pending += bool(refs and not children and batch['state'] in {'planned', 'running'})
+            errors += bool(progress and not children and (progress.get('record_errors')
+                or progress.get('saturated') or progress.get('active_request')))
+            scoped = {(_extraction_source_key(ref), ref['fragment_start'], ref['fragment_end']): key
+                      for key, ref in progress['scope']['inputs'].items()} if progress else {}
+            for ref in refs:
+                source = _extraction_source_key(ref)
+                key = scoped.get((source, ref['fragment_start'], ref['fragment_end']))
+                decision = progress['dispositions'].get(key) if progress else None
+                status = decision['status'] if decision else ('unresolved' if progress and key in progress.get(
+                    'model_unresolved_input_ids', []) else 'legacy' if not progress and batch['state'] == 'succeeded' else 'unaccounted')
+                if missing:
+                    status = 'unaccounted'
+                for lower, upper in _extraction_remaining_ranges(ref['fragment_start'], ref['fragment_end'], delegated.get(source, [])):
+                    unit = (*source, lower, upper)
+                    previous = observations.get(unit)
+                    if previous is None or priorities[status] > priorities[previous]:
+                        observations[unit] = status
+        return observations, pending, observed, errors
+
+    def _extraction_ranges_state(self, batches, inputs, expected, *, include_processed_sources=False):
+        observations, pending, observed, errors = self._extraction_obligations(batches, inputs)
+        processed = {}
+        planned, unaccounted = {}, set()
+        for unit, status in observations.items():
+            planned.setdefault(unit[:3], []).append(unit[3:])
+            if status not in {'unaccounted', 'unresolved'}:
+                processed.setdefault(unit[:3], []).append(unit[3:])
+            else:
+                unaccounted.add(unit[:3])
+        accounted = {source for source, bounds in expected.items()
+                     if bounds is not None and not _extraction_remaining_ranges(*bounds, processed.get(source, []))
+                     and source not in unaccounted}
+        unknown_ranges = sum(bounds is None for bounds in expected.values())
+        for source, bounds in expected.items():
+            if bounds is None:
+                continue
+            lower, upper = bounds
+            for start, end in _extraction_remaining_ranges(lower, upper, planned.get(source, [])):
+                observations[(*source, start, end)] = 'unaccounted'
+        counts = {status + '_fragments': sum(value == status for value in observations.values())
+                  for status in ('represented', 'duplicate', 'irrelevant', 'empty_text', 'unresolved', 'unaccounted')}
+        unknown = counts['unresolved_fragments'] + counts['unaccounted_fragments']
+        legacy = sum(value == 'legacy' for value in observations.values())
+        result = {'observed': observed, 'incomplete': bool(errors or pending or unknown or unknown_ranges),
+                'processed_messages': len(accounted), 'pending_batches': pending, 'scope_errors': errors,
+                'unknown_range_messages': unknown_ranges,
+                'input_accounting_complete': not (errors or pending or unknown or legacy or unknown_ranges) if observed else None,
+                'accounted_messages': len(accounted) if observed else None,
+                'observed_messages': len({unit[:3] for unit in observations}) if observed else None,
+                'manifest_selected_messages': len(expected) if expected or observed else None,
+                'unplanned_messages': sum(source not in planned for source in expected) if observed else None,
+                'selected_fragments': len(observations) if observed else None,
+                **{key: value if observed else None for key, value in counts.items()}}
+        if include_processed_sources:
+            result['processed_sources'] = accounted
+        return result
+
     def reconcile_extraction_batches(self, job_id, *, generation, seen):
         with common_sqlite.write_tx(self.conn, immediate=True):
             job = self.require_running(job_id, generation=generation)
@@ -609,22 +909,35 @@ class AnalysisStore:
         return dict(row) if row else None
 
     def processed_source_refs(self, job_id, *, limit):
+        if limit == 0:
+            return []
+        processed = self.extraction_work_state(job_id, include_processed_sources=True)['processed_sources']
         rows = self.conn.execute("""SELECT i.channel_id,i.message_id,i.content_digest FROM analysis_inputs i
-            JOIN analysis_batches b USING(batch_id) WHERE b.job_id=? AND b.kind='extract'
-            AND b.state='succeeded' AND i.role='selected'
-            GROUP BY i.channel_id,i.message_id,i.content_digest ORDER BY MIN(i.date_utc),i.channel_id,i.message_id LIMIT ?""",
-            (job_id, limit))
-        return [dict(row) for row in rows]
+            JOIN analysis_batches b USING(batch_id) WHERE b.job_id=? AND b.kind='select' AND i.role='selected'
+            GROUP BY i.channel_id,i.message_id,i.content_digest ORDER BY MIN(i.date_utc),i.channel_id,i.message_id""",
+            (job_id,))
+        result = []
+        for row in rows:
+            if (row['channel_id'], row['message_id'], row['content_digest']) in processed:
+                result.append(dict(row))
+                if len(result) == limit:
+                    break
+        return result
 
-    def iter_leaf_evidence(self, job_id, *, page_size):
+    def iter_leaf_evidence(self, job_id, *, page_size, identifiers_only=False):
         after = ""
         while True:
-            rows = self.conn.execute("""SELECT e.* FROM analysis_evidence e JOIN analysis_batches b USING(batch_id)
+            columns = 'e.record_id' if identifiers_only else 'e.*'
+            rows = self.conn.execute(f"""SELECT {columns} FROM analysis_evidence e JOIN analysis_batches b USING(batch_id)
                 WHERE b.job_id=? AND b.kind='extract' AND b.state='succeeded' AND e.record_id>?
                 ORDER BY e.record_id LIMIT ?""", (job_id, after, page_size)).fetchall()
             if not rows:
                 return
             for row in rows:
+                if identifiers_only:
+                    after = row['record_id']
+                    yield after
+                    continue
                 value = dict(row)
                 value["payload"] = json.loads(value.pop("payload_json"))
                 after = value["record_id"]
@@ -759,10 +1072,194 @@ class AnalysisStore:
             self._sync_intermediate_no_tx(job_id)
             return self.get_batch(batch_id)
 
+    def _extraction_progress_batch(self, job_id, batch_id, generation, expected):
+        job = self.require_running(job_id, generation=generation)
+        batch = self.get_batch(batch_id)
+        if (batch is None or batch['job_id'] != job_id or batch['kind'] != 'extract'
+                or batch['state'] not in {'planned', 'running'} or batch['payload'].get('invalidated')):
+            raise ValueError('Extraction progress outside active batch')
+        if batch['payload'].get('extraction_progress') != expected:
+            raise StaleGenerationError('Extraction progress changed')
+        return job, batch
+
+    def extraction_ancestor_records(self, job_id, batch_id):
+        """Only active split ancestors may supply immutable retained facts."""
+        records, seen = {}, set()
+        batch = self.get_batch(batch_id)
+        while batch and batch['payload'].get('plan', {}).get('parent_batch_id'):
+            parent = batch['payload']['plan']['parent_batch_id']
+            if parent in seen:
+                raise ValueError('Extraction ancestor cycle')
+            seen.add(parent)
+            batch = self.get_batch(parent)
+            if (not batch or batch['job_id'] != job_id or batch['kind'] != 'extract'
+                    or batch['payload'].get('invalidated') or batch['state'] != 'succeeded'):
+                raise ValueError('Extraction ancestor outside active scope')
+            for row in self.conn.execute('SELECT * FROM analysis_evidence WHERE batch_id=?', (parent,)):
+                records[row['record_id']] = {**dict(row), 'payload': json.loads(row['payload_json'])}
+        return records
+
+    def begin_extraction_request(self, job_id, batch_id, *, generation, expected, scope):
+        """Claim the residual request before dispatch; a receipt alone is not an observation."""
+        with common_sqlite.write_tx(self.conn, immediate=True):
+            job, batch = self._extraction_progress_batch(job_id, batch_id, generation, expected)
+            progress = copy.deepcopy(expected) if expected is not None else {
+                'scope': scope, 'accepted_records': {}, 'dispositions': {
+                    key: {'status': 'empty_text', 'record_ids': [], 'reason': ''}
+                    for key in scope['empty_input_ids']},
+                'unresolved_input_ids': list(scope['model_input_ids']), 'record_errors': {},
+                'diagnostics': [], 'active_request': None, 'local_date_normalizations': 0}
+            if progress['scope'] != scope:
+                raise ValueError('Extraction scope changed')
+            if progress['active_request']:
+                return progress
+            repair = batch['payload'].get('repair_attempts', 0)
+            if progress['diagnostics']:
+                if repair >= job['request']['settings']['analysis']['max_repair_attempts']:
+                    return None
+                repair += 1
+                batch['payload']['repair_attempts'] = repair
+            if progress['unresolved_input_ids'] or progress['record_errors']:
+                addressed = {'inputs': progress['unresolved_input_ids'],
+                             'record_slots': sorted(progress['record_errors'])}
+                progress['active_request'] = {**addressed, 'attempt_offset': len(batch['attempts']),
+                    'repair_index': repair, 'scope_sha256': hashlib.sha256(canonical_json(addressed).encode()).hexdigest()}
+            batch['payload']['extraction_progress'] = progress
+            self.conn.execute('UPDATE analysis_batches SET payload_json=? WHERE batch_id=?',
+                              (canonical_json(batch['payload']), batch_id))
+            self._sync_intermediate_no_tx(job_id)
+            return copy.deepcopy(progress)
+
+    def initialize_extraction_scope(self, job_id, batch_id, *, generation, scope):
+        """Persist local accounting before count dispatch, without claiming repair."""
+        self.require_running(job_id, generation=generation)
+        batch = self.get_batch(batch_id)
+        if batch is None or batch['job_id'] != job_id or batch['kind'] != 'extract':
+            raise ValueError('Extraction initialization outside job scope')
+        progress = batch['payload'].get('extraction_progress')
+        if progress is not None:
+            if progress['scope'] != scope:
+                raise ValueError('Extraction scope changed')
+            return progress
+        # The request claim is only a marker until inference dispatch. Count
+        # attempts do not consume repair allowance or become observations.
+        return self.begin_extraction_request(job_id, batch_id, generation=generation, expected=None, scope=scope)
+
+    def save_extraction_progress(self, job_id, batch_id, *, generation, expected, classified, attempt_id):
+        with common_sqlite.write_tx(self.conn, immediate=True):
+            job, batch = self._extraction_progress_batch(job_id, batch_id, generation, expected)
+            marker = expected.get('active_request')
+            attempts = batch['attempts'][marker['attempt_offset']:] if marker else []
+            attempt = next((a for a in attempts if a['attempt_id'] == attempt_id
+                            and a['request_kind'] == 'inference' and a['state'] == 'succeeded'), None)
+            if attempt is None:
+                raise ValueError('Extraction progress requires a settled inference receipt')
+            if classified['scope'] != expected['scope']:
+                raise ValueError('Extraction observation outside scope')
+            progress = copy.deepcopy(expected)
+            ancestors = self.extraction_ancestor_records(job_id, batch_id)
+            inherited = set(classified.get('inherited_record_ids', []))
+            if not inherited <= set(ancestors):
+                raise ValueError('Unknown retained ancestor record')
+            progress['inherited_record_ids'] = sorted(set(progress.get('inherited_record_ids', [])) | inherited)
+            added = 0
+            for slot, record in classified['record_slots'].items():
+                if not any(ref['channel_id'] == source['channel_id'] and ref['message_id'] == source['message_id']
+                           and ref['content_digest'] == source['content_digest']
+                           and source['fragment_start'] <= ref['fragment_start'] <= ref['fragment_end'] <= source['fragment_end']
+                           for key in marker['inputs'] for source in [expected['scope']['inputs'][key]]
+                           for ref in record['payload']['source_refs']):
+                    raise ValueError('Extraction record outside residual scope')
+                previous = progress['accepted_records'].get(slot)
+                if previous and previous['record'] != record:
+                    raise ValueError('Accepted extraction record cannot be overwritten')
+                if previous is None:
+                    added += 1
+                    progress['accepted_records'][slot] = {'record': record, 'attempt_id': attempt_id,
+                        'inferred_at': attempt['created_at']}
+            for key, decision in classified['dispositions'].items():
+                if key not in expected['scope']['inputs']:
+                    raise ValueError('Extraction decision outside scope')
+                known_ids = {value['record']['record_id'] for value in progress['accepted_records'].values()}
+                known_ids.update(progress.get('inherited_record_ids', []))
+                if not set(decision['record_ids']) <= known_ids:
+                    raise ValueError('Extraction disposition references unknown record')
+                if key not in marker['inputs'] and key not in progress['dispositions']:
+                    raise ValueError('Extraction decision outside residual scope')
+                if key in progress['dispositions'] and progress['dispositions'][key] != decision:
+                    raise ValueError('Accepted extraction disposition cannot be overwritten')
+                progress['dispositions'][key] = decision
+            progress['unresolved_input_ids'] = [key for key in progress['scope']['inputs']
+                                                if key not in progress['dispositions']]
+            count = self.conn.execute('''SELECT COUNT(*) FROM analysis_evidence e
+                JOIN analysis_batches b USING(batch_id) WHERE b.job_id=?''', (job_id,)).fetchone()[0]
+            if count + len(progress['accepted_records']) > job['request']['settings']['analysis']['max_evidence_records']:
+                raise BudgetExceededError('max_evidence_records')
+            progress['record_errors'] = dict(classified['record_errors'])
+            progress['record_diagnostics'] = copy.deepcopy(classified.get('record_diagnostics', {}))
+            progress['rejected_records'] = copy.deepcopy(classified.get('rejected_records', {}))
+            progress['model_unresolved_input_ids'] = list(classified.get('model_unresolved_input_ids', []))
+            progress['saturated'] = classified.get('saturated', False)
+            progress['local_date_normalizations'] += classified.get('local_date_normalizations', 0)
+            progress['diagnostics'].append({'attempt_id': attempt_id,
+                'repair_index': marker['repair_index'], 'scope_sha256': marker['scope_sha256'],
+                'accepted': added,
+                'unresolved': len(progress['unresolved_input_ids']), 'codes': classified['reasons']})
+            progress['active_request'] = None
+            batch['payload']['extraction_progress'] = progress
+            self.conn.execute('UPDATE analysis_batches SET payload_json=? WHERE batch_id=?',
+                              (canonical_json(batch['payload']), batch_id))
+            self._sync_intermediate_no_tx(job_id)
+            return copy.deepcopy(progress)
+
+    def finish_extraction_progress(self, job_id, batch_id, *, generation, expected, children=None):
+        """Publish the validated subset without changing any physical attempt outcome."""
+        with common_sqlite.write_tx(self.conn, immediate=True):
+            job, batch = self._extraction_progress_batch(job_id, batch_id, generation, expected)
+            progress = copy.deepcopy(expected)
+            records = [value['record'] for value in progress['accepted_records'].values()]
+            count = self.conn.execute('''SELECT COUNT(*) FROM analysis_evidence e
+                JOIN analysis_batches b USING(batch_id) WHERE b.job_id=?''', (job_id,)).fetchone()[0]
+            if count + len(records) > job['request']['settings']['analysis']['max_evidence_records']:
+                raise BudgetExceededError('max_evidence_records')
+            for value in progress['accepted_records'].values():
+                receipt = next((a for a in batch['attempts'] if a['attempt_id'] == value['attempt_id']), None)
+                if receipt is None or receipt['state'] != 'succeeded':
+                    raise ValueError('Published extraction requires its settled receipt')
+                record = value['record']
+                self.conn.execute('INSERT INTO analysis_evidence VALUES (?,?,?,?,?)',
+                    (record['record_id'], batch_id, record['record_type'], record['topic_key'], canonical_json(record['payload'])))
+            for ref in batch['payload']['plan']['inputs'] + batch['payload']['plan']['context']:
+                self.conn.execute('''INSERT INTO analysis_inputs
+                    (batch_id,channel_id,message_id,fragment_start,fragment_end,role,date_utc,content_digest)
+                    VALUES (?,?,?,?,?,?,?,?)''', (batch_id, *(ref[key] for key in (
+                        'channel_id', 'message_id', 'fragment_start', 'fragment_end', 'role', 'date_utc', 'content_digest'))))
+            batch['payload'] = _closed_extraction_payload(batch)
+            self.conn.execute("UPDATE analysis_batches SET state='succeeded',payload_json=? WHERE batch_id=?",
+                              (canonical_json(batch['payload']), batch_id))
+            self.conn.execute('UPDATE analysis_jobs SET evidence_records=? WHERE job_id=?', (count + len(records), job_id))
+            if children:
+                self._split_extraction_no_tx(job_id, batch_id, generation=generation, children=children,
+                                              preserve_records=True)
+            self._sync_intermediate_no_tx(job_id)
+            return self.get_batch(batch_id)
+
     def incomplete_evidence_reasons(self, job_id):
-        return ["extraction_incomplete" if row[0] == "extract" else "relations_incomplete"
+        reasons = ["extraction_incomplete" if row[0] == "extract" else "relations_incomplete"
                 for row in self.conn.execute("""SELECT DISTINCT kind FROM analysis_batches
                     WHERE job_id=? AND kind IN ('extract','link') AND state='failed'""", (job_id,))]
+        for row in self.conn.execute("SELECT payload_json FROM analysis_batches WHERE job_id=? AND kind='extract'", (job_id,)):
+            payload = json.loads(row[0])
+            progress = payload.get('extraction_progress')
+            if (progress and not payload.get('invalidated') and not payload.get('split_children')
+                    and payload.get('outcome') != 'input_split' and
+                    (progress['unresolved_input_ids'] or progress['record_errors'] or progress['active_request']
+                     or progress.get('saturated'))):
+                reasons.append('extraction_coverage_incomplete')
+                break
+        if self.extraction_work_state(job_id)['incomplete']:
+            reasons.append('extraction_coverage_incomplete')
+        return sorted(set(reasons))
 
     def load_leaf_cache(self, job_id, cache_key, *, kind):
         if kind not in {"extract", "expand_query"}:
@@ -799,13 +1296,9 @@ class AnalysisStore:
             job = self.require_running(job_id, generation=generation)
             policy = job["request"]["settings"]["analysis"]
             limit = min(policy["output"]["sources_per_item"], policy["max_messages"])
-            rows = self.conn.execute("""SELECT i.channel_id,i.message_id,i.content_digest FROM analysis_inputs i
-                JOIN analysis_batches b USING(batch_id) JOIN messages m ON m.channel_id=i.channel_id AND m.message_id=i.message_id
-                WHERE b.job_id=? AND b.kind='extract' AND b.state='succeeded' AND i.role='selected'
-                GROUP BY i.channel_id,i.message_id,i.content_digest ORDER BY MIN(i.date_utc),i.channel_id,i.message_id LIMIT ?""",
-                (job_id, limit))
-            sources = [{"channel_id": row[0], "message_id": row[1], "content_digest": row[2]} for row in rows
-                       if len(row[2]) == 64 and all(char in "0123456789abcdef" for char in row[2])]
+            sources = [ref for ref in self.processed_source_refs(job_id, limit=limit)
+                       if len(ref['content_digest']) == 64
+                       and all(char in "0123456789abcdef" for char in ref['content_digest'])]
             fallback = _fallback_document(job, reason, sources)
             result = job["result"] if job["result"] is not None else fallback
             job["checkpoint"]["budget_stop"] = {"reason": reason, "phase": fallback["phase"]}
@@ -837,27 +1330,33 @@ class AnalysisStore:
             self._sync_intermediate_no_tx(job_id)
             return batch
 
-    def split_extraction_batch(self, job_id, batch_id, *, generation, children):
+    def split_extraction_batch(self, job_id, batch_id, *, generation, children, preserve_records=False):
         with common_sqlite.write_tx(self.conn, immediate=True):
-            job = self.require_running(job_id, generation=generation)
-            parent = self.get_batch(batch_id)
-            if parent is None or parent["job_id"] != job_id or parent["kind"] != "extract" or parent["state"] != "running" or len(children) != 2:
-                raise ValueError("Invalid extraction split")
-            planned = []
-            now = datetime.now(timezone.utc).isoformat(timespec="microseconds")
-            for index, child in enumerate(children):
-                child_id = uuid.uuid4().hex
-                encoded = encode_payload({"plan": {**child["plan"], "parent_batch_id": batch_id}},
-                    max_bytes=job["request"]["settings"]["analysis"]["max_intermediate_bytes"])
-                self.conn.execute("""INSERT INTO analysis_batches
-                    (batch_id,job_id,step_key,kind,payload_json,input_digest,cache_key,created_at,updated_at)
-                    VALUES (?,?,?,'extract',?,?,?,?,?)""", (child_id, job_id, parent["step_key"] + f"/output/{index}",
-                    encoded, child["input_digest"], child.get("cache_key"), now, now))
-                planned.append(child_id)
-            parent["payload"].update(outcome="split", split_children=planned)
-            self.conn.execute("UPDATE analysis_batches SET state='skipped',payload_json=? WHERE batch_id=?", (canonical_json(parent["payload"]), batch_id))
-            self._sync_intermediate_no_tx(job_id)
-            return planned
+            return self._split_extraction_no_tx(job_id, batch_id, generation=generation,
+                                                children=children, preserve_records=preserve_records)
+
+    def _split_extraction_no_tx(self, job_id, batch_id, *, generation, children, preserve_records):
+        job = self.require_running(job_id, generation=generation)
+        parent = self.get_batch(batch_id)
+        allowed = {'succeeded'} if preserve_records else {'running'}
+        if parent is None or parent["job_id"] != job_id or parent["kind"] != "extract" or parent["state"] not in allowed or len(children) != 2:
+            raise ValueError("Invalid extraction split")
+        planned = []
+        now = datetime.now(timezone.utc).isoformat(timespec="microseconds")
+        for index, child in enumerate(children):
+            child_id = uuid.uuid4().hex
+            encoded = encode_payload({"plan": {**child["plan"], "parent_batch_id": batch_id}},
+                max_bytes=job["request"]["settings"]["analysis"]["max_intermediate_bytes"])
+            self.conn.execute("""INSERT INTO analysis_batches
+                (batch_id,job_id,step_key,kind,payload_json,input_digest,cache_key,created_at,updated_at)
+                VALUES (?,?,?,'extract',?,?,?,?,?)""", (child_id, job_id, parent["step_key"] + f"/output/{index}",
+                encoded, child["input_digest"], child.get("cache_key"), now, now))
+            planned.append(child_id)
+        parent["payload"].update(outcome="split", split_children=planned)
+        self.conn.execute("UPDATE analysis_batches SET state=?,payload_json=? WHERE batch_id=?",
+            ('succeeded' if preserve_records else 'skipped', canonical_json(parent["payload"]), batch_id))
+        self._sync_intermediate_no_tx(job_id)
+        return planned
 
     def claim_repair(self, job_id, batch_id, *, generation):
         with common_sqlite.write_tx(self.conn, immediate=True):
@@ -914,6 +1413,9 @@ class AnalysisStore:
             if batch["kind"] == "link" and batch["payload"].get("link_progress"):
                 batch["payload"]["link_progress"]["active_request"] = None
                 batch["payload"]["outcome"] = "input_split"
+            if batch['kind'] == 'extract' and batch['payload'].get('extraction_progress'):
+                batch['payload']['extraction_progress'].update(active_request=None, closed=True)
+                batch['payload']['outcome'] = 'input_split' if batch['payload']['plan']['inputs'] else 'local_preflight'
             self.conn.execute("UPDATE analysis_batches SET state='skipped',payload_json=? WHERE batch_id=?",
                               (canonical_json(batch["payload"]), batch_id))
             self._sync_intermediate_no_tx(job_id)
@@ -940,6 +1442,12 @@ class AnalysisStore:
             raise ValueError("Invalid token reservation")
         if request_kind == "token_count" and (input_tokens or output_tokens):
             raise ValueError("Token count does not reserve inference tokens")
+        # Verification may persist an input-change interruption. It must run
+        # outside the reservation transaction, before any attempt is charged.
+        current = self.require_running(job_id, generation=generation)
+        planned = self.get_batch(batch_id)
+        eligible_roots = (self._eligible_completion_roots(current)
+                          if planned and planned['kind'] in {'extract', 'link'} else None)
         with common_sqlite.write_tx(self.conn, immediate=True):
             job = self.require_running(job_id, generation=generation)
             batch = self.get_batch(batch_id)
@@ -962,7 +1470,8 @@ class AnalysisStore:
                     detail=job["request"]["request"]["detail"])
                 if output_tokens > output_cap:
                     raise BudgetExceededError("stage_output_limit")
-            protected = self._completion_reserve_no_tx(job, batch, request_kind=request_kind)
+            protected = self._completion_reserve_no_tx(job, batch, request_kind=request_kind,
+                                                       eligible_roots=eligible_roots)
             calls = int(request_kind == "inference")
             for reason, used, delta in (("max_llm_calls", job["llm_calls"], calls + protected["llm_calls"]),
                                        ("max_provider_requests", job["provider_requests"], 1 + protected["provider_requests"]),
@@ -983,14 +1492,31 @@ class AnalysisStore:
             self._sync_intermediate_no_tx(job_id)
             return attempt
 
-    def _completion_reserve_no_tx(self, job, batch, *, request_kind):
+    def _eligible_completion_roots(self, job):
+        if job['command'] != 'topics':
+            return None
+        if __package__:
+            from .analysis_evidence import record_source_eligible
+        else:
+            from analysis_evidence import record_source_eligible
+        return sum(not row['payload'].get('source_refs') or record_source_eligible(self, job, row['payload'])
+                   for row in self.iter_leaf_evidence(job['job_id'],
+                       page_size=max(1, job['request']['settings']['sync']['batch_size'])))
+
+    def _completion_reserve_no_tx(self, job, batch, *, request_kind, eligible_roots=None):
         roots = 0
         if batch["kind"] in {"extract", "link"}:
             # Merge starts from individual evidence records, not one node per
             # extraction request. A request can yield several independent facts.
-            roots = self.conn.execute("""SELECT COUNT(*) FROM analysis_evidence e
-                JOIN analysis_batches b ON b.batch_id=e.batch_id
-                WHERE b.job_id=? AND b.kind='extract'""", (job["job_id"],)).fetchone()[0]
+            if job['command'] == 'topics':
+                # Reserve the same eligible frontier used by the reducer. Keep
+                # excluded evidence intact; it cannot consume a future merge.
+                # Unknown legacy payloads are conservatively included.
+                roots = self._eligible_completion_roots(job) if eligible_roots is None else eligible_roots
+            else:
+                roots = self.conn.execute("""SELECT COUNT(*) FROM analysis_evidence e
+                    JOIN analysis_batches b ON b.batch_id=e.batch_id
+                    WHERE b.job_id=? AND b.kind='extract'""", (job["job_id"],)).fetchone()[0]
             roots += int(batch["kind"] == "extract")
         elif batch["kind"] == "merge":
             state = job["checkpoint"].get("merge")
@@ -1061,7 +1587,7 @@ class AnalysisStore:
         self._sync_intermediate_no_tx(job_id)
         return attempt, overrun
 
-    def complete_batch(self, job_id, batch_id, *, generation, records, inputs, attempt_id=None, usage=None, provenance=None, json_output=None, merge_transition=None, final_result=None):
+    def complete_batch(self, job_id, batch_id, *, generation, records, inputs, attempt_id=None, usage=None, provenance=None, json_output=None, merge_transition=None, final_result=None, extraction_progress=None):
         """Persist validated output atomically; output failure cannot erase incurred cost."""
         output = {"records": records, "inputs": inputs, "attempt_id": attempt_id, "usage": usage}
         if provenance is not None:
@@ -1074,6 +1600,8 @@ class AnalysisStore:
             output["json_output"] = json_output
         if final_result is not None:
             output["final_result"] = final_result
+        if extraction_progress is not None:
+            output['extraction_progress'] = extraction_progress
         digest = hashlib.sha256(canonical_json(output).encode("utf-8")).hexdigest()
         try:
             with common_sqlite.write_tx(self.conn, immediate=True):
@@ -1124,6 +1652,9 @@ class AnalysisStore:
                     batch["payload"]["provenance"] = provenance
                 if json_output is not None:
                     batch["payload"]["output"] = json_output
+                if extraction_progress is not None:
+                    batch['payload']['extraction_progress'] = extraction_progress
+                    batch['payload']['outcome'] = 'succeeded'
                 self.conn.execute("UPDATE analysis_batches SET state='succeeded',payload_json=? WHERE batch_id=?",
                     (canonical_json(batch["payload"]), batch_id))
                 self.conn.execute("UPDATE analysis_jobs SET evidence_records=? WHERE job_id=?", (count + len(records), job_id))
@@ -1158,7 +1689,8 @@ class AnalysisStore:
                               (canonical_json(job['checkpoint']), job_id))
             self._sync_intermediate_no_tx(job_id)
 
-    def save_full_artifact(self, job_id, *, generation, relative_path, content_hash, result_digest, partial, ready=True, previous_hash=None):
+    def save_full_artifact(self, job_id, *, generation, relative_path, content_hash, result_digest, partial, ready=True, previous_hash=None,
+                           presented_evidence_ids=None, presentation_limit_reason=None):
         with common_sqlite.write_tx(self.conn, immediate=True):
             job = self.require_running(job_id, generation=generation)
             expected = (Path(job["request"]["settings"]["analysis"]["output"]["results_dir"]) / (job_id + ".md")).as_posix()
@@ -1169,7 +1701,17 @@ class AnalysisStore:
             actual = hashlib.sha256(canonical_json(job["result"]).encode("utf-8")).hexdigest()
             if result_digest != actual:
                 raise ValueError("Artifact result changed")
-            job["checkpoint"]["artifact"] = {"result_digest": result_digest, "content_hash": content_hash, "partial": partial}
+            previous = job['checkpoint'].get('artifact', {})
+            metadata = {"result_digest": result_digest, "content_hash": content_hash, "partial": partial}
+            if presented_evidence_ids is not None:
+                metadata['presented_evidence_ids'] = _presented_ids(job, presented_evidence_ids)
+                if presentation_limit_reason is not None and presentation_limit_reason not in PRESENTATION_LIMIT_REASONS:
+                    raise ValueError('Invalid presentation limit reason')
+                metadata['presentation_limit_reason'] = presentation_limit_reason
+            elif previous.get('content_hash') == content_hash and 'presented_evidence_ids' in previous:
+                metadata['presented_evidence_ids'] = previous['presented_evidence_ids']
+                metadata['presentation_limit_reason'] = previous.get('presentation_limit_reason')
+            job['checkpoint']['artifact'] = metadata
             if not ready:
                 if previous_hash is not None:
                     if not isinstance(previous_hash, str) or len(previous_hash) != 64 or any(c not in "0123456789abcdef" for c in previous_hash):
@@ -1192,7 +1734,8 @@ class AnalysisStore:
             (canonical_json(delivery), datetime.now(timezone.utc).isoformat(), job_id))
         self._sync_intermediate_no_tx(job_id)
 
-    def prepare_delivery(self, job_id, *, generation, chunks, parse_mode, detail, analysis_partial, source_verification=None):
+    def prepare_delivery(self, job_id, *, generation, chunks, parse_mode, detail, analysis_partial, source_verification=None,
+                         presented_evidence_ids=None, presentation_limit_reason=None):
         with common_sqlite.write_tx(self.conn, immediate=True):
             job = self.require_running(job_id, generation=generation)
             settings = job["request"]["settings"]
@@ -1211,6 +1754,11 @@ class AnalysisStore:
                         "analysis_partial": analysis_partial, "artifact_hash": job["full_hash"] if detail == "full" else None}
             if source_verification is not None:
                 identity['source_verification'] = _validate_source_verification(source_verification)
+            if presented_evidence_ids is not None:
+                identity['presented_evidence_ids'] = _presented_ids(job, presented_evidence_ids)
+                if presentation_limit_reason is not None and presentation_limit_reason not in PRESENTATION_LIMIT_REASONS:
+                    raise ValueError('Invalid presentation limit reason')
+                identity['presentation_limit_reason'] = presentation_limit_reason
             digest = hashlib.sha256(canonical_json(identity).encode("utf-8")).hexdigest()
             if job["delivery"]:
                 if job["delivery"].get("plan_digest") != digest:
@@ -1221,6 +1769,9 @@ class AnalysisStore:
                 "parts": [{"text": text, "outcome": "pending", "attempts": []} for text in chunks]}
             if source_verification is not None:
                 delivery['source_verification'] = dict(source_verification)
+            if presented_evidence_ids is not None:
+                delivery['presented_evidence_ids'] = identity['presented_evidence_ids']
+                delivery['presentation_limit_reason'] = presentation_limit_reason
             self._write_delivery_no_tx(job_id, delivery)
             return delivery
 
@@ -1303,9 +1854,7 @@ class AnalysisStore:
             return delivery
 
     def processed_analysis_messages(self, job_id):
-        return self.conn.execute("""SELECT COUNT(*) FROM (SELECT i.channel_id,i.message_id FROM analysis_inputs i
-            JOIN analysis_batches b USING(batch_id) WHERE b.job_id=? AND b.kind='extract' AND b.state='succeeded'
-            AND i.role='selected' GROUP BY i.channel_id,i.message_id)""", (job_id,)).fetchone()[0]
+        return self.extraction_work_state(job_id)['processed_messages']
 
     def complete_merge_batch(self, job_id, batch_id, *, generation, expected_state, next_state, output, attempt_id, usage):
         if attempt_id is None:
@@ -1636,20 +2185,28 @@ class AnalysisStore:
         return self.conn.execute(f"""SELECT COALESCE(SUM({_cache_bytes_sql()}),0)
             FROM analysis_batches b JOIN analysis_jobs j USING(job_id) WHERE {_CACHE_ELIGIBLE}""").fetchone()[0]
 
+    def _expire_reuse_no_tx(self, job_id):
+        """Reuse is evictable; the recorded job and its provenance are history."""
+        self.conn.execute('UPDATE analysis_batches SET cache_key=NULL WHERE job_id=? AND cache_key IS NOT NULL',
+                          (job_id,))
+        self._sync_intermediate_no_tx(job_id)
+
     def maintain_analysis_storage(self, *, now, max_cache_bytes):
         _budget_integer(max_cache_bytes, "cache byte cap")
         if now.tzinfo is None:
             raise ValueError("Cache maintenance requires an aware clock")
-        pruned, evicted, after = 0, 0, ""
+        evicted, after = 0, ""
         while True:
             row = self.conn.execute("""SELECT job_id FROM analysis_jobs WHERE kind='analysis'
-                AND status NOT IN ('queued','running') AND job_id>? ORDER BY job_id LIMIT 1""", (after,)).fetchone()
+                AND status NOT IN ('queued','running','stopping') AND job_id>?
+                AND EXISTS(SELECT 1 FROM analysis_batches b WHERE b.job_id=analysis_jobs.job_id AND b.cache_key IS NOT NULL)
+                ORDER BY job_id LIMIT 1""", (after,)).fetchone()
             if row is None:
                 break
             after = row[0]
             with common_sqlite.write_tx(self.conn, immediate=True):
                 job = self.get_job(after)
-                if job is None or job["status"] in {"queued", "running"}:
+                if job is None or job["status"] in {"queued", "running", "stopping"}:
                     continue
                 try:
                     retention = job["request"]["settings"]["analysis"]["retention_days"]
@@ -1660,8 +2217,7 @@ class AnalysisStore:
                 except (KeyError, TypeError, ValueError):
                     continue  # Legacy rows without policy are not silently expired.
                 if finished.tzinfo is not None and (now - finished).total_seconds() > retention * 24 * 60 * 60:
-                    self.conn.execute("DELETE FROM analysis_jobs WHERE job_id=?", (after,))
-                    pruned += 1
+                    self._expire_reuse_no_tx(after)
         remaining = self.cache_storage_bytes()
         while remaining > max_cache_bytes:
             with common_sqlite.write_tx(self.conn, immediate=True):
@@ -1670,31 +2226,22 @@ class AnalysisStore:
                     ORDER BY b.updated_at,b.batch_id LIMIT 1""").fetchone()
                 if row is None:
                     break
-                batch = self.get_batch(row[0])
-                job = self.get_job(row[1])
-                # Reuse is evictable; a retained result and failed-job resume
-                # still own their evidence, input hashes and batch lineage.
-                if job["result"] is not None or job["status"] == "failed":
-                    self.conn.execute("UPDATE analysis_batches SET cache_key=NULL WHERE batch_id=?", (row[0],))
-                else:
-                    payload = {"evicted": True}
-                    if "provenance" in batch["payload"]:
-                        payload["provenance"] = batch["payload"]["provenance"]
-                    self.conn.execute("DELETE FROM analysis_evidence WHERE batch_id=?", (row[0],))
-                    self.conn.execute("DELETE FROM analysis_inputs WHERE batch_id=?", (row[0],))
-                    self.conn.execute("UPDATE analysis_batches SET cache_key=NULL,payload_json=? WHERE batch_id=?", (canonical_json(payload), row[0]))
-                self.conn.execute("""UPDATE analysis_jobs SET evidence_records=(SELECT COUNT(*) FROM analysis_evidence e
-                    JOIN analysis_batches b USING(batch_id) WHERE b.job_id=?) WHERE job_id=?""", (row[1], row[1]))
+                self.conn.execute("UPDATE analysis_batches SET cache_key=NULL WHERE batch_id=?", (row[0],))
                 self._sync_intermediate_no_tx(row[1])
                 remaining -= row[2]
                 evicted += 1
-        return {"pruned_jobs": pruned, "evicted_batches": evicted, "cache_bytes": self.cache_storage_bytes()}
+        return {"pruned_jobs": 0, "evicted_batches": evicted, "cache_bytes": self.cache_storage_bytes()}
 
     def prune_expired_analysis_jobs(self, *, before: datetime) -> int:
+        """Expire reuse at a cutoff; the number of deleted historical jobs is zero."""
         with common_sqlite.write_tx(self.conn, immediate=True):
-            return self.conn.execute("""DELETE FROM analysis_jobs WHERE kind='analysis'
-                AND status NOT IN ('queued','running') AND COALESCE(finished_at,updated_at)<?""",
-                (before.astimezone(timezone.utc).isoformat(),)).rowcount
+            rows = self.conn.execute("""SELECT DISTINCT j.job_id FROM analysis_jobs j
+                JOIN analysis_batches b USING(job_id) WHERE j.kind='analysis' AND b.cache_key IS NOT NULL
+                AND j.status NOT IN ('queued','running','stopping') AND COALESCE(j.finished_at,j.updated_at)<?""",
+                (before.astimezone(timezone.utc).isoformat(),)).fetchall()
+            for row in rows:
+                self._expire_reuse_no_tx(row[0])
+            return 0
 
     def finish_job(self, job_id: str, *, generation: int, status: str, now: datetime) -> None:
         if status not in {"completed", "partial", "failed", "timed_out", "cancelled", "interrupted"}:

@@ -232,7 +232,7 @@ def test_s02_settings_and_prompts_versioned_bundle(legacy_config, tmp_path):
     settings = module.resolve_analysis_settings(legacy_config, config_dir=CONFIG_DIR)
     bundle = settings["analysis_prompts"]
     assert bundle["file"] == "analysis_prompts.toml"
-    assert bundle["version"] == "11"
+    assert bundle["version"] == tomllib.loads((CONFIG_DIR / "analysis_prompts.toml").read_text())["analysis_prompts"]["version"]
     assert len(bundle["hash"]) == 64
     assert set(bundle["templates"]) == {"prepare_query", "extract", "link", "merge", "synthesize", "repair"}
     assert set(bundle["commands"]) == {"topics", "search", "qa"}

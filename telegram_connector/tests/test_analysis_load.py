@@ -27,7 +27,10 @@ if str(ROOT) not in sys.path:
 
 import pytest
 
+from telegram_connector.tests.analysis_fixtures import CURRENT_EVIDENCE_FORMAT, CURRENT_SYNTHESIS_FORMAT
 from common import json_io, sqlite as common_sqlite
+from telegram_connector.tests.analysis_fixtures import extraction_inputs, owned_response_from_records
+
 from telegram_connector import telegram_analysis as analysis, telegram_history_client as history
 from telegram_connector.analysis_store import AnalysisStore
 from telegram_connector.tests.test_analysis_engine import EngineHistoryClient
@@ -60,21 +63,16 @@ def bounded_provider(job, stats):
         stats["inference_calls"] += 1
         stats["max_inference_input_units"] = max(stats["max_inference_input_units"], units)
         kind = data["text"]["format"]["name"]
-        if kind == "telegram_evidence_v1":
-            fragments = json.loads(data["input"].split("Сообщения: ", 1)[1])
+        if kind == CURRENT_EVIDENCE_FORMAT:
+            fragments = extraction_inputs(data)
             stats["max_batch_messages"] = max(stats["max_batch_messages"], len(fragments))
             records = []
             chosen = fragments[:1] if len(fragments) == 1 else [fragments[0], fragments[-1]]
             for fragment in chosen:
                 ref = fragment["input"]
                 quote = fragment["message"]["text"][:64]
-                records.append({"record_type": "answer" if job["command"] == "qa" else "event" if job["command"] == "topics" else "claim",
-                    "claim": quote, "details": [], "entities": ["Uno"], "topic_key": "документы",
-                    "conditions": [], "exceptions": [], "event_at": None,
-                    "source_refs": [{**{key: ref[key] for key in ("channel_id", "message_id", "content_digest", "fragment_start")},
-                        "fragment_end": ref["fragment_start"] + len(quote), "quote": quote}],
-                    "related_message_refs": [], "assertion_kind": "reported", "support_status": "reported"})
-            output = {"records": records, "saturated": False}
+                records.append({'record_type': 'answer' if job['command'] == 'qa' else 'event' if job['command'] == 'topics' else 'claim', 'claim': quote, 'details': [], 'entities': ['Uno'], 'topic_key': 'документы', 'source_refs': [{**{key: ref.get(key, '' if key == 'content_digest' else 0) for key in ('channel_id', 'message_id', 'content_digest', 'fragment_start')}, 'fragment_end': ref.get('fragment_start', 0) + len(quote), 'quote': quote}], 'related_message_refs': [], 'assertion_kind': 'reported', 'support_status': 'reported'})
+            output = owned_response_from_records(data, {"records": records, "saturated": False})
         elif kind == "telegram_relations_v2":
             pairs = json.loads(data["input"].split("Кандидаты: ", 1)[1])["pairs"]
             output = {"decisions": [{"pair_id": pair["pair_id"], "relation": "complements", "reason": "Synthetic repeated condition"}
@@ -85,14 +83,18 @@ def bounded_provider(job, stats):
             output = {"groups": [{"title": "Документы Uno", "summary": "Повторяющиеся условия подачи", "input_ids": ids}],
                 "dispositions": [{"input_id": key, "disposition": "merged", "reason": "Сохранено"} for key in ids], "saturated": False}
         else:
-            assert kind == "telegram_synthesis_v1"
+            assert kind == CURRENT_SYNTHESIS_FORMAT
             values = json.loads(data["input"].split("Опорные записи: ", 1)[1])["records"]
-            output = {"summary": "Условия из синтетического корпуса", "items": [{"title": "Какие документы нужны?" if job["command"] == "qa" else "Документы Uno",
-                "text": "Паспорт; 1250 EUR, срок 30 дней.", "conditions": [], "exceptions": [], "contradictions": [],
-                "evidence_ids": [values[0]["record_id"]]}] if values else [], "limitations": [],
+            output = {"summary": "Условия из синтетического корпуса", "items": [{'title': 'Какие документы нужны?' if job['command'] == 'qa' else 'Документы Uno', 'text': 'Паспорт; 1250 EUR, срок 30 дней.', 'contradictions': [], 'evidence_ids': [values[0]['record_id']]}] if values else [], "limitations": [],
                 "insufficient_information": not values, "saturated": False}
+        output = output
         text = analysis.canonical_json(output)
         output_units = (len(text.encode("utf-8")) + 3) // 4
+        while kind == CURRENT_EVIDENCE_FORMAT and output_units > data['max_output_tokens'] and output['input_dispositions']:
+            output['input_dispositions'].popitem()
+            output['saturated'] = True
+            text = analysis.canonical_json(output)
+            output_units = (len(text.encode('utf-8')) + 3) // 4
         stats["max_output_units"] = max(stats["max_output_units"], output_units)
         assert output_units <= data["max_output_tokens"], "Synthetic output must respect the real configured output cap"
         return Response({"status": "completed", "output": [{"type": "message", "content": [{"type": "output_text", "text": text}]}],

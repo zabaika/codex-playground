@@ -583,7 +583,8 @@ def test_s12_fts_backfill_ready_checkpoint_survives_ordinary_retention(db):
         VALUES ('expired','analysis','topics','{}','hash',?,?,?,?,'completed')""", (NOW.isoformat(),) * 4)
     prune = getattr(store, "prune_expired_analysis_jobs", None)
     assert callable(prune), "Ordinary retention must preserve the durable service readiness record"
-    assert prune(before=NOW + timedelta(days=30)) == 1
+    assert prune(before=NOW + timedelta(days=30)) == 0
+    assert store.get_job("expired")["status"] == "completed"
     assert require_ready(db)["state"] == "ready"
 
 

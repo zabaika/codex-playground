@@ -197,7 +197,7 @@ openai_api_key = "keychain://telegram-connector/openai_api_key"
 
 # Analytics defaults below are also the compatibility defaults for older local
 # configs. New values are validated (not silently clamped). Integer caps are
-# positive except overlap_messages/max_repair_attempts, which permit 0.
+# positive except documented zero-valued modes below.
 [analysis]
 max_channels = 32 # Explicit raw source entries per request, before peer resolution.
 max_messages = 200000 # Unique manifest messages/job, including context.
@@ -209,7 +209,7 @@ max_evidence_records = 20000 # Persisted intermediate records/job.
 max_intermediate_bytes = 67108864 # Logical serialized manifest/steps/evidence/lineage bytes/job.
 max_running_jobs = 1 # Concurrent analytic and FTS workers; one AI request/worker.
 max_queued_jobs = 8 # Queued analytics jobs; bounds durable admission backlog.
-retention_days = 7 # Inactive jobs/checkpoints; FTS readiness and full files have separate lifetimes.
+retention_days = 7 # Checkpoint resume/reuse window; saved history is retained independently.
 telegram_retry_attempts = 3 # Total attempts/logical history page, inside outer TTL.
 history_page_size = 100 # Messages/logical API page; independent of sync.batch_size DB flush.
 telegram_request_timeout_seconds = 60 # Seconds/page or peer lookup; excludes startup.
@@ -219,7 +219,7 @@ max_repair_attempts = 1 # Extra structure-repair calls/step; refusals are not re
 merge_fan_in = 8 # Groups/reducer request; >=2, reduced further by the input token cap.
 max_merge_depth = 8 # Levels/merge tree; reducer must decrease its representation.
 relation_candidates_per_record = 20 # Persisted candidates/record before semantic verification.
-link_pairs_per_request = 48 # Candidate pairs/AI request; also bounded by input/output tokens.
+link_pairs_per_request = 0 # 0=adaptive; positive=fixed pair ceiling. Token/schema/budget caps always apply.
 max_relation_pairs = 20000 # Semantic candidate pairs checked/job; exhaustion is visible.
 progress_min_interval_seconds = 15 # Seconds between coalesced Telegram progress edits.
 

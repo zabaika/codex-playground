@@ -251,14 +251,15 @@ def test_s15_bounded_payloads_resume_skips_completed_outputs_and_preserves_conte
     assert store.get_job(job["job_id"])["provider_requests"] == requests
 
 
-def test_s15_bounded_payloads_minimal_prompt_error_is_configuration_failure(manifest_job):
+def test_nonempty_payload_that_cannot_fit_stops_without_inference(manifest_job):
     store, job = manifest_job
     seed(store, 22, [1], text="x")
     change_setting(store, job, "analysis", "max_input_tokens", 10)
     build(store, job)
-    with pytest.raises(ValueError, match="minimal_payload_does_not_fit"):
-        list(batches(store, job))
-    assert store.get_job(job["job_id"])["llm_calls"] == 0
+    assert not list(batches(store, job))
+    saved = store.get_job(job['job_id'])
+    assert saved['llm_calls'] == 0 and saved['provider_requests'] == 1
+    assert saved['result']['reason'] == 'max_split_depth'
 
 
 @pytest.mark.parametrize("capabilities", [None, {}, {**CAPABILITY, "model": "other"}, {**CAPABILITY, "max_output_tokens": 1}])
@@ -270,19 +271,20 @@ def test_s15_bounded_payloads_unverified_or_incompatible_model_fails_before_coun
     assert store.get_job(job["job_id"])["provider_requests"] == 0
 
 
-def test_s15_bounded_payloads_first_yield_does_not_materialize_remaining_history(transport_job, monkeypatch):
-    store, job = transport_job
+def test_s15_bounded_payloads_first_yield_does_not_materialize_remaining_history(manifest_job, monkeypatch):
+    store, job = manifest_job
+    seed(store, 22, range(1, 4001), text='x')
     request = copy.deepcopy(store.get_job(job["job_id"])["request"])
     request["settings"]["analysis"]["ai"]["messages_per_ai_pass"] = 2
     store.conn.execute("UPDATE analysis_jobs SET request_json=? WHERE job_id=?", (analysis.canonical_json(request), job["job_id"]))
+    build(store, job)
     consumed = []
+    original = analysis_pipeline.iter_analysis_manifest_messages
 
     def source(*args, **kwargs):
-        for number in range(1, 4001):
-            consumed.append(number)
-            yield {"message": {"channel_id": 22, "message_id": number, "text": "x", "media": []},
-                   "input": {"channel_id": 22, "message_id": number, "date_utc": "2026-10-12T00:00:00+00:00",
-                             "fragment_start": 0, "fragment_end": 0, "content_digest": "a" * 64}}
+        for value in original(*args, **kwargs):
+            consumed.append(value['input']['message_id'])
+            yield value
 
     monkeypatch.setattr(analysis_pipeline, "iter_analysis_manifest_messages", source)
     stream = batches(store, job)

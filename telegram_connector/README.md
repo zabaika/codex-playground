@@ -12,12 +12,6 @@ Local Telegram toolkit for channel history ingestion, OCR, CSV export, scheduled
 - [../telegram_shared/README.md](../telegram_shared/README.md): shared Telegram helper boundaries and retry semantics
 - `--help` on the Python entrypoints: exact CLI syntax
 
-For history, digest and analytics maintenance, use the [module ownership map](./AGENTS.md#architecture).
-History and digest entrypoints preserve the CLI and public calls while configuration,
-storage, session adapters, rendering and pipelines have dedicated local owners.
-`telegram_analysis.py` remains the public worker CLI and composition root;
-settings, evidence validation, rendering and pipeline stages have dedicated owners.
-
 ## What It Does
 
 - reads channel history through a Telegram user session with Telethon
@@ -33,17 +27,15 @@ settings, evidence validation, rendering and pipeline stages have dedicated owne
 
 Create `config/runtime.local.toml` from [config/runtime.example.toml](./config/runtime.example.toml). Keep local secrets and machine-specific paths out of git.
 
-The README intentionally does not restate every config key. Use `runtime.example.toml` for the complete schema, comments, and clamped ranges. The operator-facing settings most often changed are:
+Use the example config for the complete schema, defaults and validated ranges.
+Common setup areas are:
 
-- `telethon.*`, `auth.default_mode`, and `channels.default_list` for account access and default channel selection
-- `bridge.allowed_chat_ids`, `bridge.allowed_user_ids`, and `bridge.allowed_usernames` for bot command access control
-- `bridge.worker_process_timeout_seconds` for bridge-launched command lifetime
-- `bridge.send_message_retry_attempts` and `bridge.send_message_retry_backoff_seconds` for transient Telegram `sendMessage` failures, including network errors, timeouts, and Telegram HTTP 5xx
-- `digest.*`, `digest_ai.*`, and `digest_limits.*` for scheduled digest window, AI batching, sync budget, process TTL, and bounded OpenAI retry delays
-- `digest_prompts.file` for the prompt bundle used by digest
-- `analysis.*` and `analysis_prompts.file` for analytics budgets, detail profiles, and local templates; missing new keys use the tracked example defaults, while invalid new values fail validation
-- `sync.sync_limit` and `sync.batch_size` for non-digest sync runs
-- `ocr.*` for OCR defaults and subprocess timeout
+- `telethon`, `auth` and `channels` for account access and default channels
+- `bridge.allowed_chat_ids`, `bridge.allowed_user_ids` and `bridge.allowed_usernames` for command access control
+- `digest`, `digest_ai` and `digest_limits` for the scheduled digest
+- `analysis` for separate analytics budgets, AI settings and output profiles
+- `digest_prompts` and `analysis_prompts` for local prompt bundles
+- `sync` and `ocr` for history ingestion and image recognition
 
 `telegram.default_chat_id` can stay empty until you send one message to the bot and discover the chat id through `listen`.
 
@@ -80,21 +72,6 @@ bash telegram_connector/scripts/install_launch_agent.sh
 
 The installer prepares a service-local venv through the shared
 [Python runtime owner](../common/README.md#python-runtime-selection).
-`BASE_PYTHON_BIN` selects its base; `PYTHON_BIN` selects an existing environment.
-Optional `[python].executable` in the local runtime config overrides discovery.
-Policy and dependency validation happen before replacement. Invalid overrides fail.
-
-The requirements include a repository-owned PyAES wheel for clean binary-only
-installation. Its local index supplies the SHA-256 checked by pip, so no manual
-`PIP_FIND_LINKS` or source build is required. See its
-[provenance and checkout reproduction](./third_party/pyaes/AUDIT.md).
-
-To inspect a copied runtime without loading or restarting services, pass
-`--staging-root /absolute/path/to/staging`. The installer writes the runtime and
-plists there and does not call `launchctl`; this is a fixture check, not a live
-deployment. Configured relative digest/analysis prompt bundles are copied at
-their configured paths. Absolute prompt paths remain external references;
-relative paths must resolve inside the service root.
 
 Reload only the already-installed bridge LaunchAgent:
 
@@ -104,13 +81,8 @@ bash telegram_connector/scripts/restart_launch_agent.sh
 
 Use the installer after code changes, `telegram_shared` changes, runtime config changes, prompt-bundle changes, or scheduled digest config changes. Use restart only when installed code and config are already current.
 
-The installer preserves existing launchd logs and the latest digest audit. Clear them only when explicitly required:
-
-```bash
-bash telegram_connector/scripts/clear_launch_logs.sh
-```
-
-Each digest run initializes and migrates its SQLite schema before reading or writing usage data; no separate manual migration command is required after an installed upgrade.
+The installer preserves existing logs and the latest digest audit. Installed
+upgrades initialize the database automatically; no manual migration is required.
 
 Launchd logs:
 
@@ -138,7 +110,7 @@ Bot command quick reference:
   InfoExt monitor; `infoext` without `/` also works.
   See [setup and query behavior](../infoext-monitor/README.md#check-from-telegram).
 - `/agent-stats`: recent local Digest AI usage and prompt-cache summary; see [shared metric definitions](../telegram_shared/README.md#ai-usage-metrics)
-- `/top-models [limit] [debug]`: configured external free-model ranking
+- `/top-models [limit]`: configured external free-model ranking
 - `/backfill [channel] [limit] [since=...] [until=...] [media] [bot|user|auto]`: historical load into SQLite
 - `/tail [channel] [limit] [since=...] [until=...] [media|ocr|read] [bot|user|auto]`: latest window sync
 - `/update [channel] [limit] [since=...] [until=...] [media|ocr|read] [bot|user|auto]`: import only newer messages
@@ -175,12 +147,10 @@ Command notes:
 
 ## Analytics Commands
 
-All three commands use the same bounded history, extraction, grouping and synthesis
-workflow over SQLite. Missing requested history is downloaded in pages; messages and
-intermediate records are never submitted as one unbounded model request. All AI-stage
-instructions come from `analysis_prompts.file`; the model and reasoning settings reuse
-`processing.model` and `digest_ai.*`. Ordinary channel history is in scope; comments in
-linked discussion groups are excluded.
+Analytics run over explicitly selected channel history with bounded AI budgets.
+Missing requested history is downloaded before analysis. Comments in linked
+discussion groups are excluded. Analytics use their own `analysis.ai` settings;
+digest AI settings do not change new analytic jobs.
 
 ```text
 /topics @channel1,@channel2 since=week --detail short
@@ -209,72 +179,35 @@ Topics describes events and their development. QA extracts practical questions a
 solutions, including standalone answers and personal experience without reply links;
 an unanswered question is insufficient evidence. Results retain source references,
 conditions and conflicting accounts rather than filling gaps with external knowledge.
+Conditions and exceptions are included when composing each item's text, without
+separate blocks or automatically appended detail lists.
 
 The bridge queues requests durably and remains responsive. One separate progress
 message per job is updated at the configured interval; `/status <job_id>` shows stage,
 coverage and cumulative usage. Controls require the original owner and current ACL.
-`/cancel` requests a bounded worker stop; `/resume` keeps checkpoints and spent budgets.
+`/cancel` requests a bounded worker stop; `/resume` keeps checkpoints and spent budgets
+for supported frozen policies. Retired policies remain readable as history and cannot
+start a new analysis automatically. Checkpoint expiry and cache cleanup preserve saved
+results, prepared texts, usage receipts, delivery records and phase telemetry.
 Failed jobs with retained checkpoints may resume after repair. Cancelled jobs remain
 terminal, and an unknown send outcome requires inspection rather than automatic resend.
 
-Changed source data invalidates dependent analysis and any unsent delivery plan. If a
-part was confirmed or its send outcome is unknown, automatic recomputation stops and
-preserves the old result and receipts. An explicit `/resume` can restore a missing full
-report from retained data without repeating a confirmed Telegram send; user-edited files
-are preserved. Cache eviction removes cross-job reuse eligibility while retaining result
-and failed-job recovery dependencies until job retention expires.
+If source data changes, the job stops and requires inspection. Resume preserves
+the original scope and spent budgets. Incompatible saved jobs require a fresh
+request. A supported job's missing full report can be restored from retained data without
+repeating a confirmed Telegram send; user-edited files are preserved.
 
-The public worker CLI applies the saved bridge hard TTL on each launch, including
-resume, with shared TERM/grace/KILL process-group cleanup. Copied-runtime upgrades use
-the canonical installer. Jobs retain frozen prompt/schema/algorithm identities;
-incompatible execution-policy changes require a fresh request.
+Topics omit digest-only items. An additional digest does not block an item when
+standalone posts support all its published content. QA and search can use unique information from
+digests and prefer supporting standalone posts when available. QA omits answers
+without supporting sources. Partial results keep usable content and explain
+coverage, source or budget limitations before the main content.
 
-Analytics use their own `[analysis.ai]` policy for provider timeouts, retries,
-reasoning, batching and intermediate output caps. Digest settings do not change
-new analytic jobs. Final output still follows the chosen detail profile.
-Each item ends with a single separator line; Telegram source labels such as
-`1 источник` are clickable across the whole label.
-The first Telegram part starts with channel titles, the UTC period and selected
-message count. A partial-status block precedes the command heading and content.
-Item and section headings use one newline before their content.
-Conditions and source entries use single newlines within their blocks. A separator
-also follows a nonempty introduction when result items follow it.
-Link requests use application-owned pair IDs and preserve accepted decisions in
-durable progress. Repairs contain only unresolved pairs; an extra pair cannot
-enter the graph or erase valid decisions. Request scope, conflicts and repair
-diagnostics appear in the read-only report alongside physical-attempt usage.
-A valid merge level can keep distinct events separate without becoming partial.
-Unranked groups pass explicitly to final synthesis for global selection when its
-complete input fits; omitted evidence and independent failures remain partial.
-Algorithm v9 and prompt bundle v11 version these contracts. Older frozen jobs
-require a fresh request rather than silently switching policy; historical
-responses retain an explicit legacy decoder for offline inspection.
-Topics exclude sources with explicit digest headings or tags and omit digest-only
-items. QA/search allow unique digest facts within the analyzed frozen selection,
-label those sources, and prefer complete standalone equivalents from validated
-evidence. Incomplete selection/extraction/relations cannot establish uniqueness.
-QA source limits must retain support for every answer, ahead of question links;
-unsupported composite answers are omitted. Search keeps representative standalone
-references and mandatory references for unique digest facts. Original evidence
-remains auditable; unrelated posts and unverified message references cannot supply
-replacement links. Dropping a QA/search item also clears its unverified summary.
-Standalone replacement requires matching nonempty normalized entities and complete
-fact qualifiers. Incompatible/unknown subjects cannot bridge duplicate components;
-an explicit non-duplicate relation prevents replacement through another path.
-Source coverage first uses the existing greedy path, then a bounded alternative
-search before declaring a composite answer unsupported. The frozen
-`analysis.output.source_cover_max_states` (default 50000) is shared across all
-items in one verification; work includes failed candidate/branch inspections.
-Search distinguishes found, proven impossible and resource-limited outcomes.
-The last outcome preserves `source_selection_incomplete`; it is not proof that
-no cover exists. Verification reuses the worker deadline through presentation,
-full artifacts and delivery, without opening a new time window.
-Bounded source-verification counters and search duration appear in the checkpoint,
-delivery intent and reporter; historical missing measurements remain unknown.
-Admission and resume reserve the fixed lifecycle's phase storage, including close
-and finalization. A queued job unable to start under its frozen storage cap fails
-without stopping the supervisor. Invalidated link batches remain in the attempt
-history but cannot enter the active graph or its planned/accepted pair counts.
+Topics keep an event's characteristics together and separate independent
+announcements. Headlines name the event; the following text adds details.
+A shared digest alone does not create a relation candidate. Shared entities,
+topics, ordinary posts, explicit replies and exact duplicates remain valid hints.
+Resumed jobs retain their frozen relation policy.
 
 For a read-only timing and usage report, without new API requests:
 
@@ -282,81 +215,56 @@ For a read-only timing and usage report, without new API requests:
 python3 telegram_connector/scripts/report_analysis.py --db telegram_connector/data/telegram_history.sqlite3 --job-id JOB_ID
 ```
 
-The report correlates phases and physical provider attempts, including retries,
-backoff, interruptions and unknown usage. Historical jobs can lack phase timings;
-missing measurements remain unknown. `--pricing` accepts a reviewed JSON snapshot
-of USD rates per million tokens (`input`, `cached_input`, `cache_write_30m`,
-`cache_write_12h`, `output`). Without rates or complete usage, cost stays unknown.
+The report shows phase timings, retries, usage and input accounting without
+changing the database. Missing historical measurements remain unknown. Input
+accounting does not establish that every relevant fact was extracted.
+Selection compares model choices with the saved synthesis input, independently
+of later filtering. Unresolved model references are listed separately and leave
+the count of omitted records unknown.
+
+Optional `--pricing` accepts a reviewed JSON snapshot of USD rates per million
+tokens (`input`, `cached_input`, `cache_write_30m`, `cache_write_12h`, `output`),
+plus `model` and `service_tier`. Incomplete usage leaves cost unknown or produces
+a conditional range; this is not an invoice. See the
+[shared usage metric definitions](../telegram_shared/README.md#ai-usage-metrics).
 
 ## Digest Behavior
 
-Digest runs are per channel: prep-sync, optional OCR, AI analysis, and Telegram delivery are isolated by channel where possible.
+The installed LaunchAgent schedules digest runs; `/digest` and the CLI can also
+start a one-shot run. Each channel is synchronized, optionally processed with OCR,
+analyzed and delivered to `telegram.default_chat_id`.
 
-- output is delivered to `telegram.default_chat_id`
-- The scheduled digest uses the shared runner's `--sleep-policy pause`: it resumes after host sleep, and `digest.run_total_timeout_seconds` limits elapsed awake time rather than including sleep. This is an intentional exception to the default sleep-inclusive TTL; waits and retries while awake still consume the budget.
-- Telethon connection budgets live in `[telethon]` (see the example config). Sleep is excluded; transient failures retry with a fresh client after cleanup. Permanent errors or failed cleanup stop retries. Logs contain only failures and recovery; final failures reach the audit and Telegram.
-- Digest reuses HTTP connections separately for AI requests and Telegram delivery
-  during each run, closing the pools on exit. Existing request timeouts and retry
-  policies still apply; processing and delivery remain sequential.
-  Pool initialization failures are recorded as failed runs in the latest digest audit.
-- channels below `digest.min_messages_for_ai` send a short loaded-without-analysis note
-- channels that fit `digest_ai.*` budgets use one direct OpenAI request; larger windows fall back to chronological batches and a final summary
-- history reads start at the selected period's upper boundary, so newer posts do not spend its `sync_limit`; exhausting the cap before proving the lower boundary produces an incomplete-coverage warning, including for empty local results
-- transient OpenAI network/OS failures, `408`, retryable `429`, `500`/`502`/`503`/`504`, and edge/origin `520`–`525`/`530` use bounded retries; retryable rate limits honor `Retry-After`
-- `digest.openai_timeout_seconds` can override the shared AI network timeout per attempt for digest only; when omitted or blank, it inherits `digest_ai.openai_timeout_seconds`. Analytics keeps the shared timeout. See the example config for units and bounds.
-- failed OpenAI analysis for one channel is recorded with safe HTTP or network diagnostics, retry outcome, and a copyable channel selector for a manual rerun, then produces `status=partial` while the remaining channels continue
-- transient delivery failures are recorded as per-channel errors and produce `status=partial`
-- permanent delivery failures, such as invalid chat ids or revoked tokens, fail the run and write `status=failed`
-- final error summary delivery is best-effort
+- Host sleep pauses the scheduled run's lifetime budget; time spent waiting and
+  retrying while awake still counts.
+- Channels with too few messages send a loaded-without-analysis note. Large
+  windows use bounded batches and a final summary.
+- Exhausted history coverage produces a warning, including for empty local results.
+- Transient AI and Telegram failures use bounded retries. A failed channel makes
+  the run partial while other channels continue; invalid delivery credentials or
+  destinations fail the run. Inspect the latest digest audit before a manual rerun.
 
 ## Storage
 
-Analytics jobs, checkpoints, batches, evidence, and input references use the same
-history database. Initialization adds their tables idempotently without requiring
-FTS5 or changing stored messages. Keep the database when rolling back code; after
-writes by an older runtime, use `index-history --rebuild` before returning to fast
-search in the upgraded runtime.
+History, analytics state and AI usage share the configured SQLite database.
+Preserve it across code upgrades and rollbacks. Analytics in user auth mode require
+an already authorized session; background jobs do not prompt for phone/OTP login.
 
-Sync, digest, and message export use `open_telethon_session()` to serialize the
-canonical session file. Lease waits reuse the connection timeout; uncertain
-cleanup retains ownership until the worker exits.
+Closed UTC days reuse local history and are not routinely refreshed for remote
+edits or deletions. The current day's edge is refreshed up to the job cutoff.
+With OCR enabled, pending downloaded images in the selected channel/window are
+processed before analysis. Unprocessed or failed images make coverage partial.
 
-Analytics history loading separates API pages from SQLite flushes. A pending page
-survives restart; download allowance is reserved before the request and remains
-charged if its outcome is unknown. User-mode analytics requires an already
-authorized session and never starts an interactive phone/OTP login.
-Closed UTC days reuse the local archive; today's edge is refreshed up to the
-admitted cutoff. Retained successful empty ranges and unfinished cursors are
-reused across jobs. An unknown empty requested window triggers bounded backfill;
-surrounding archive dates or a previous reuse-only record do not prove it was fetched.
-This pragmatic policy accepts smaller internal holes and does not routinely rescan
-closed days for remote edits or deletions.
+Fast search needs an FTS index. With the bridge listener running, queue or resume
+its build from the repository root:
 
-The bot's `/help` includes analytics syntax, options, examples and job controls;
-unlike the history commands, `/topics`, `/search` and `/qa` require explicit channels.
+```bash
+python3 telegram_connector/telegram_history_client.py index-history
+```
 
-Analytics selection persists whole-message IDs and SHA-256 digests in paged
-select steps before extraction. The reader verifies current text and ordered
-OCR/media metadata; changed or removed inputs interrupt the job. Resume repairs
-existing manifest pages without adding late inputs or resetting AI budgets.
-With `processing.ocr=true`, pending downloaded images in the explicit channel/window
-scope are processed before selection. `ocr.pending_default_limit` caps OCR assets
-across the job; `ocr.tesseract_timeout_seconds` bounds each recognition. Remaining
-pending or failed OCR makes coverage partial. Resume preserves an existing manifest.
-
-When FTS5 is available, initialization creates the optional `unicode61` index.
-Message, OCR and deletion writers update it in the same transaction as the source.
-Creating this table does not backfill old history or establish search readiness;
-from the Connector directory, run `python3 telegram_history_client.py index-history`
-to queue or resume its build through the existing bridge `listen` supervisor.
-Fast analytics checks readiness before query expansion; `/status` explains index
-errors and offers `--mode full`. Candidates prioritize original terms and include
-bounded same-channel context; the result identifies this as a candidate selection.
-Use `index-history --rebuild` after VACUUM, a legacy writer, or a readiness error
-requiring rebuild. The command invalidates readiness immediately; the worker
-clears and rebuilds the index in bounded pages under the shared TTL. Interrupted
-or timed-out builds resume with `index-history`; ordinary job retention preserves
-the service checkpoint. Indexing needs no LLM model or Telegram session.
+Use `index-history --rebuild` after VACUUM, writes from an older runtime, or a
+readiness error requiring rebuild. Indexing needs no AI model or Telegram session.
+If FTS is unavailable or not ready, `/status` explains the problem; use search
+`--mode full` to scan the available window without lexical preselection.
 
 Primary local runtime paths:
 
@@ -368,52 +276,12 @@ Primary local runtime paths:
 
 ## Dependencies
 
-Required runtime dependencies:
+Use Python 3 with the dependencies in [requirements.txt](./requirements.txt).
+Image OCR additionally needs Tesseract. For Python environment setup, use the
+[shared setup instructions](../common/README.md#python-runtime-selection).
+Developer checks belong to [AGENTS.md](./AGENTS.md#testing).
 
-- `Telethon`
-- `tesseract`
-
-Python setup:
-
-```bash
-bash common/setup_python.sh tests
-```
-
-## Tests
-
-Fixture tests cover parsing/admission, history and OCR, FTS, bounded extraction and
-multi-stage merge, source support, profile-specific generation, ACL, cancellation,
-delivery receipts, cache retention and full-file recovery. Fault cases exercise
-source edits after delivery preparation, cache eviction before report restoration,
-pending OCR before selection, and hard-TTL cleanup of a hung evaluation process.
-Worker diagnostics retain only bounded exception categories and application locations.
-Fixtures prove these mechanics; model quality and real deployment are separate checks.
-
-Preferred local regression run:
-
-```bash
-.venv-test-gap-detection/bin/python -m pytest telegram_connector/tests -q
-```
-
-When changing `telegram_shared`, run the shared suite as well:
-
-```bash
-.venv-test-gap-detection/bin/python -m pytest --import-mode=importlib common/tests telegram_shared/tests telegram_connector/tests telegram_agent_bot/tests -q
-```
-
-Fallback runner:
-
-```bash
-python3 telegram_connector/run_tests.py
-```
-
-### Resource and model checks
-
-The three large `test_analysis_load.py` cases are opt-in (`RUN_TELEGRAM_ANALYSIS_LOAD=1`).
-They measure bounded manifests, indexes, storage, RSS and explicit partial stops at
-10k/100k/200k messages with a synthetic provider. They do not measure real model latency
-or full semantic processing of 200k messages. Keep workload/interpreter/source hashes
-with the measurements and freeze the RSS acceptance budget before optimization.
+## Local Quality Evaluation
 
 The local quality evaluator uses an annotated synthetic corpus, isolated SQLite and
 local delivery capture; it never publishes to Telegram. From the repo root:
@@ -432,9 +300,7 @@ python3 telegram_connector/scripts/evaluate_analysis.py --output scratch/analyti
 python3 telegram_connector/scripts/evaluate_analysis.py --output scratch/analytics-eval-new score --case CASE_ID
 ```
 
-Complete the generated claim/source review before scoring; a mock response or successful
-API call does not establish semantic quality. `--case all` stops at the first incomplete
-case. The whole invocation uses the configured bridge worker TTL and shared outer
-limiter; `evaluation.last_attempt.json` records a timeout. The private `--worker-inner`
-route is only for that supervisor. An uncaptured interrupted case requires inspection,
-not a blind replay. Captured results can be reviewed/scored without new model calls.
+Complete the generated claim/source review before scoring; a mock response or
+successful API call does not establish semantic quality. Inspect an interrupted
+case before rerunning it. Captured results can be reviewed and scored without
+new model calls.

@@ -30,18 +30,15 @@ def test_pair_format_limits_addresses_to_application_owned_scope():
     props = value["schema"]["properties"]["decisions"]["items"]["properties"]
     assert props["pair_id"]["enum"] == list(pairs)
     assert "left_id" not in props and "right_id" not in props
-    assert evidence.relation_format()["name"] == "telegram_relations_v1"
 
 
 @pytest.mark.parametrize("repair,accepted,missing", [(False, 47, 1), (True, 48, 0)])
-def test_legacy_scope_error_preserves_requested_decisions(repair, accepted, missing):
+def test_scope_error_preserves_requested_decisions(repair, accepted, missing):
     pairs = scope()
-    values = [{"left_id": left, "right_id": right, "relation": "unrelated", "reason": "Разные события."}
-              for left, right in list(pairs.values())[int(not repair):]]
-    values.append({"left_id": pairs["p001"][0], "right_id": pairs["p002"][1],
-                   "relation": "unrelated", "reason": "Незапрошенная комбинация."})
+    values = [decision(key) for key in list(pairs)[int(not repair):]]
+    values.append(decision('foreign', reason='Незапрошенная комбинация.'))
     result = evidence.classify_relation_document({"decisions": values, "saturated": False}, pairs,
-                                                 legacy=True, max_bytes=100000)
+                                                 max_bytes=100000)
     assert len(result["accepted_decisions"]) == accepted
     assert len(result["unresolved_pair_ids"]) == missing
     assert result["diagnostics"]["extra"] == 1

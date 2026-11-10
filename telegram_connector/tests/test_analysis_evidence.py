@@ -4,7 +4,7 @@ import sqlite3
 
 import pytest
 
-from telegram_connector import telegram_analysis as analysis
+from telegram_connector import telegram_analysis as analysis, analysis_evidence
 from telegram_connector.tests.test_analysis_batching import batches
 from telegram_connector.tests.test_analysis_manifest import manifest_job, seed, build, change_setting
 from telegram_connector.tests.test_analysis_transport import Response
@@ -20,10 +20,10 @@ def evidence_batch(manifest_job):
 
 def document(batch):
     ref = batch["messages"][0]["input"]
-    return {"records": [{"record_type": "claim", "claim": "Минимум 1250 EUR, срок 30 дней.",
-        "details": ["Сведения из обсуждения"], "entities": ["EUR"], "topic_key": "условия",
-        "conditions": ["Не менее 1250 EUR"], "exceptions": ["нерезиденты"], "event_at": None,
-        "source_refs": [{key: ref[key] for key in ("channel_id", "message_id", "content_digest", "fragment_start", "fragment_end")}
+    return {"records": [{"record_type": "claim", "claim": batch["messages"][0]["message"]["text"],
+        "details": [], "entities": ["EUR"], "topic_key": "условия",
+        "source_refs": [{key: ref[key] if key in ref else ("" if key == "content_digest" else 0)
+                         for key in ("channel_id", "message_id", "content_digest", "fragment_start", "fragment_end")}
                         | {"quote": batch["messages"][0]["message"]["text"]}],
         "related_message_refs": [], "assertion_kind": "reported", "support_status": "reported"}], "saturated": False}
 
@@ -32,7 +32,8 @@ def validate(store, job, batch, data):
     function = getattr(analysis, "validate_evidence_records", None)
     assert callable(function), "Evidence requires strict structure, application IDs and authoritative supporting spans"
     return function(store, job["job_id"], batch["batch_id"], generation=job["generation"],
-                    document=data, fragments=batch["messages"] + batch["context"])
+                    document=data, fragments=batch["messages"] + batch["context"],
+                    record_schema_version=analysis_evidence.record_schema_version(job["request"]["settings"]))
 
 
 def test_s16_evidence_contract_preserves_concrete_facts_and_assigns_stable_application_ids(evidence_batch):
@@ -44,9 +45,16 @@ def test_s16_evidence_contract_preserves_concrete_facts_and_assigns_stable_appli
     assert records == validate(store, job, batch, data)
     assert records[0]["record_id"] and records[0]["record_type"] == "claim"
     value = records[0]["payload"]
-    assert value["conditions"] == ["Не менее 1250 EUR"] and value["exceptions"] == ["нерезиденты"]
+    assert "Не менее 1250 EUR" in value["claim"] and "нерезиденты" in value["claim"]
     assert value["reported_at"] == batch["messages"][0]["input"]["date_utc"]
     assert value["related_record_ids"] == []
+
+
+def test_canonical_validation_defaults_to_current_evidence_contract(evidence_batch):
+    store, job, batch = evidence_batch
+    records = analysis_evidence.validate_evidence_records(store, job['job_id'], batch['batch_id'],
+        generation=job['generation'], document=document(batch), fragments=batch['messages'])
+    assert records[0]['payload']['schema_version'] == analysis_evidence.record_schema_version(job['request']['settings'])
 
 
 @pytest.mark.parametrize("change", ["extra_id", "confidence", "missing", "wrong_type", "enum", "forged_source", "quote", "offset", "related", "date"])
@@ -56,8 +64,8 @@ def test_s16_evidence_contract_rejects_invalid_or_forged_model_records(evidence_
     item = data["records"][0]
     if change == "extra_id": item["record_id"] = "model-forged-id"
     if change == "confidence": item["confidence"] = 1.0
-    if change == "missing": del item["conditions"]
-    if change == "wrong_type": item["exceptions"] = "none"
+    if change == "missing": del item["details"]
+    if change == "wrong_type": item["details"] = "none"
     if change == "enum": item["record_type"] = "fact"
     if change == "forged_source": item["source_refs"][0]["channel_id"] = 999
     if change == "quote": item["source_refs"][0]["quote"] = "Не менее 9999 EUR"
@@ -77,12 +85,21 @@ def test_s16_evidence_contract_source_edit_after_inference_interrupts_before_com
     assert store.get_job(job["job_id"])["status"] == "interrupted"
 
 
+def owned_document(batch):
+    """Author a current owned response before a test applies its negative mutations."""
+    record = document(batch)['records'][0]
+    record = {key: value for key, value in record.items()
+              if key not in {'source_refs', 'related_message_refs'}}
+    record.update(supporting_input_ids=[], related_input_ids=[])
+    return dict(saturated=False, input_dispositions={'i0000': dict(status='represented',
+        records=[record], retained_record_ids=[], reason='')})
+
+
 def extract(store, job, batch, send):
-    function = getattr(analysis, "extract_analysis_batch", None)
-    assert callable(function), "A counted extraction must validate and atomically persist supported records"
-    return function(store, job["job_id"], batch, generation=job["generation"], api_key="fixture-key",
-                    capabilities={"model": "fixture-model", "context_window": 128000, "max_output_tokens": 128000, "source": "fixture"},
-                    deadline=100, monotonic_func=lambda: 0, urlopen_func=send, sleep_func=lambda _: None)
+    return analysis.extract_analysis_batch(store, job['job_id'], batch, generation=job['generation'],
+        api_key='fixture-key', capabilities=dict(model='fixture-model', context_window=128000,
+        max_output_tokens=128000, source='fixture'), deadline=100, monotonic_func=lambda: 0,
+        urlopen_func=send, sleep_func=lambda _: None)
 
 
 def model_response(data):
@@ -98,7 +115,7 @@ def test_s16_evidence_contract_extraction_uses_toml_schema_and_persists_facts_at
         if req.full_url.endswith("input_tokens"):
             return Response({"input_tokens": 100})
         sent.append(json.loads(req.data))
-        return Response(model_response(document(batch)))
+        return Response(model_response(owned_document(batch)))
 
     result = extract(store, job, batch, send)
     assert result["outcome"] == "succeeded"
@@ -111,41 +128,8 @@ def test_s16_evidence_contract_extraction_uses_toml_schema_and_persists_facts_at
     assert bundle["commands"]["topics"] in sent[0]["input"]
 
 
-def test_s36_model_source_metadata_is_bound_from_exact_quote_without_repair(evidence_batch):
-    store, job, batch = evidence_batch
-    data = document(batch)
-    proposed = data["records"][0]["source_refs"][0]
-    proposed.update(content_digest="model-corrupted-hash", fragment_start=0, fragment_end=0, quote="1250 EUR")
-    before = copy.deepcopy(data)
-    calls = []
-    def send(req, timeout):
-        if req.full_url.endswith("input_tokens"):
-            return Response({"input_tokens": 100})
-        calls.append(json.loads(req.data))
-        return Response(model_response(data))
-    result = extract(store, job, batch, send)
-    assert result["outcome"] == "succeeded" and len(calls) == 1
-    saved = next(store.iter_leaf_evidence(job["job_id"], page_size=10))["payload"]["source_refs"][0]
-    original = batch["messages"][0]
-    start = original["message"]["text"].index("1250 EUR") + original["input"]["fragment_start"]
-    assert saved["content_digest"] == original["input"]["content_digest"]
-    assert (saved["fragment_start"], saved["fragment_end"], saved["quote"]) == (start, start + 8, "1250 EUR")
-    assert data == before
 
 
-@pytest.mark.parametrize("change", ["unknown_source", "invented_quote", "ambiguous_quote"])
-def test_s36_model_source_binding_rejects_unsupported_or_ambiguous_citations(evidence_batch, change):
-    store, job, batch = evidence_batch
-    data = document(batch)
-    ref = data["records"][0]["source_refs"][0]
-    if change == "unknown_source": ref["channel_id"] = 999
-    if change == "invented_quote": ref["quote"] = "1250 USD"
-    if change == "ambiguous_quote": ref["quote"] = "е"
-    def send(req, timeout):
-        return Response({"input_tokens": 100} if req.full_url.endswith("input_tokens") else model_response(data))
-    result = extract(store, job, batch, send)
-    assert result["outcome"] == "invalid_schema"
-    assert store.get_job(job["job_id"])["evidence_records"] == 0
 
 
 def test_s16_evidence_contract_refusal_is_not_empty_success_or_repair(evidence_batch):
@@ -161,7 +145,7 @@ def test_s16_evidence_contract_refusal_is_not_empty_success_or_repair(evidence_b
     result = extract(store, job, batch, send)
     assert result["outcome"] == "refused" and result["partial"] is True
     assert requests == [1]
-    assert store.get_batch(batch["batch_id"])["state"] == "failed"
+    assert store.get_batch(batch["batch_id"])["state"] == "succeeded"
     assert store.get_job(job["job_id"])["evidence_records"] == 0
 
 
@@ -173,12 +157,13 @@ def test_s16_evidence_contract_invalid_shape_gets_one_counted_toml_repair(eviden
         if req.full_url.endswith("input_tokens"):
             return Response({"input_tokens": 100})
         requests.append(json.loads(req.data))
-        return Response(model_response({"bad": "shape"} if len(requests) == 1 else document(batch)))
+        return Response(model_response({"bad": "shape"} if len(requests) == 1 else owned_document(batch)))
 
     result = extract(store, job, batch, send)
     assert result["outcome"] == "succeeded"
     assert len(requests) == 2
-    assert "bad" in requests[1]["input"] and "shape" in requests[1]["input"]
+    assert "original_task" in requests[1]["input"] and "i0000" in requests[1]["input"]
+    assert list(requests[1]['text']['format']['schema']['properties']['input_dispositions']['properties']) == ['i0000']
     assert batch["messages"][0]["message"]["text"] in requests[1]["input"]
     assert store.get_batch(batch["batch_id"])["payload"]["repair_attempts"] == 1
     assert store.get_job(job["job_id"])["llm_calls"] == 2
@@ -195,7 +180,7 @@ def test_s16_evidence_contract_invalid_repair_stops_without_records(evidence_bat
         return Response(model_response({"bad": "shape"}))
 
     result = extract(store, job, batch, send)
-    assert result["outcome"] == "invalid_schema" and result["partial"] is True
+    assert result["outcome"] == "partial" and result["partial"] is True
     assert len(sends) == 2
     assert store.get_job(job["job_id"])["evidence_records"] == 0
 
@@ -222,14 +207,14 @@ def test_s16_evidence_contract_saturation_splits_and_commits_only_child_records(
         data = json.loads(req.data)
         sends.append(data)
         if len(sends) == 1:
-            return Response(model_response({"records": [], "saturated": True}))
-        selected = json.loads(data["input"].split("Сообщения: ", 1)[1])
-        return Response(model_response(document({"messages": selected})))
+            return Response(model_response({"input_dispositions": {}, "saturated": True}))
+        selected = json.loads(data["input"].split("Сообщения: ", 1)[1])["inputs"]
+        return Response(model_response(owned_document({"messages": selected})))
 
     result = extract(store, job, batch, send)
     assert result["outcome"] == "split" and result["partial"] is False
     assert len(sends) == 3
-    assert store.get_batch(batch["batch_id"])["state"] == "skipped"
+    assert store.get_batch(batch["batch_id"])["state"] == "succeeded"
     assert store.get_job(job["job_id"])["evidence_records"] == 2
     assert store.conn.execute("SELECT COUNT(*) FROM analysis_evidence WHERE batch_id=?", (batch["batch_id"],)).fetchone()[0] == 0
     children = store.get_batch(batch["batch_id"])["payload"]["split_children"]
@@ -248,15 +233,15 @@ def test_s38_oversized_extraction_repair_splits_or_stops_with_paid_usage(manifes
 
     def send(req, timeout):
         data = json.loads(req.data)
-        repair = '"invalid_output"' in data["input"]
+        repair = '"original_task"' in data["input"]
         if req.full_url.endswith("input_tokens"):
             return Response({"input_tokens": job["request"]["settings"]["analysis"]["max_input_tokens"] + 1 if repair else 100})
         assert not repair, "Oversized repair must never reach inference"
         sends.append(data)
         if len(sends) == 1:
             return Response(model_response({"bad": "shape"}))
-        selected = json.loads(data["input"].split("Сообщения: ", 1)[1])
-        return Response(model_response(document({"messages": selected})))
+        selected = json.loads(data["input"].split("Сообщения: ", 1)[1])["inputs"]
+        return Response(model_response(owned_document({"messages": selected})))
 
     result = extract(store, job, batch, send)
     assert result["outcome"] == ("split" if split_allowed else "max_split_depth")
@@ -299,7 +284,8 @@ def test_s16_evidence_contract_incomplete_split_depth_is_bounded_without_repair(
     assert result["outcome"] == "split" and result["partial"] is True and len(sends) == 3
     assert store.get_job(job["job_id"])["evidence_records"] == 0
     children = store.get_batch(batch["batch_id"])["payload"]["split_children"]
-    assert all(store.get_batch(child)["payload"]["outcome"] == "max_split_depth" for child in children)
+    assert all(store.get_batch(child)["payload"]["extraction_progress"]["closed"] for child in children)
+    assert store.incomplete_evidence_reasons(job["job_id"])
     assert all(store.get_batch(child)["payload"].get("repair_attempts", 0) == 0 for child in children)
 
 
@@ -316,20 +302,22 @@ def test_s16_evidence_contract_split_resume_does_not_repeat_committed_child(mani
         data = json.loads(req.data)
         sends.append(data)
         if len(sends) == 1:
-            return Response(model_response({"records": [], "saturated": True}))
-        return Response(model_response(document({"messages": json.loads(data["input"].split("Сообщения: ", 1)[1])})))
+            return Response(model_response({"input_dispositions": {}, "saturated": True}))
+        return Response(model_response(owned_document({"messages": json.loads(data["input"].split("Сообщения: ", 1)[1])["inputs"]})))
 
-    original = store.complete_batch
+    original = store.finish_extraction_progress
 
     def crash_after_commit(*args, **kwargs):
-        original(*args, **kwargs)
-        raise RuntimeError("fixture crash after first child commit")
+        result = original(*args, **kwargs)
+        if args[1] != batch["batch_id"]:
+            raise RuntimeError("fixture crash after first child commit")
+        return result
 
-    monkeypatch.setattr(store, "complete_batch", crash_after_commit)
+    monkeypatch.setattr(store, "finish_extraction_progress", crash_after_commit)
     with pytest.raises(RuntimeError, match="fixture crash"):
         extract(store, job, batch, send)
     assert len(sends) == 2 and store.get_job(job["job_id"])["evidence_records"] == 1
-    monkeypatch.setattr(store, "complete_batch", original)
+    monkeypatch.setattr(store, "finish_extraction_progress", original)
     assert extract(store, job, batch, send)["partial"] is False
     assert len(sends) == 3 and store.get_job(job["job_id"])["evidence_records"] == 2
 
@@ -340,7 +328,7 @@ def test_s16_evidence_contract_malformed_envelope_is_bounded_invalid_result(evid
     def send(req, timeout):
         return Response({"input_tokens": 100} if req.full_url.endswith("input_tokens") else {"status": "completed", "output": output})
     result = extract(store, job, batch, send)
-    assert result["outcome"] == "invalid_schema" and result["partial"] is True
+    assert result["outcome"] == "partial" and result["partial"] is True
     assert store.get_job(job["job_id"])["evidence_records"] == 0
 
 
@@ -352,8 +340,8 @@ def test_s16_evidence_contract_duplicate_json_keys_are_not_silent_empty_success(
         return Response({"status": "completed", "output": [{"type": "message", "content": [{"type": "output_text",
                          "text": '{"records":[{}],"records":[],"saturated":false}'}]}]})
     result = extract(store, job, batch, send)
-    assert result["outcome"] == "invalid_schema"
-    assert store.get_batch(batch["batch_id"])["state"] == "failed"
+    assert result["outcome"] == "partial"
+    assert store.get_batch(batch["batch_id"])["state"] == "succeeded"
 
 
 def test_s16_evidence_contract_split_transaction_failure_has_no_orphan_children(evidence_batch):
@@ -361,7 +349,7 @@ def test_s16_evidence_contract_split_transaction_failure_has_no_orphan_children(
     store.conn.execute("""CREATE TEMP TRIGGER reject_second_split BEFORE INSERT ON analysis_batches
         WHEN NEW.step_key LIKE '%/output/1' BEGIN SELECT RAISE(ABORT,'fixture split failure'); END""")
     def send(req, timeout):
-        return Response({"input_tokens": 100} if req.full_url.endswith("input_tokens") else model_response({"records": [], "saturated": True}))
+        return Response({"input_tokens": 100} if req.full_url.endswith("input_tokens") else model_response({"input_dispositions": {}, "saturated": True}))
     with pytest.raises(sqlite3.IntegrityError, match="fixture split failure"):
         extract(store, job, batch, send)
     assert store.get_batch(batch["batch_id"])["state"] == "running"
@@ -374,7 +362,7 @@ def test_s16_evidence_contract_atomic_commit_failure_preserves_usage_not_facts(e
     store.conn.execute("""CREATE TEMP TRIGGER reject_fact BEFORE INSERT ON analysis_evidence
                           BEGIN SELECT RAISE(ABORT,'fixture record failure'); END""")
     def send(req, timeout):
-        return Response({"input_tokens": 100} if req.full_url.endswith("input_tokens") else model_response(document(batch)))
+        return Response({"input_tokens": 100} if req.full_url.endswith("input_tokens") else model_response(owned_document(batch)))
     with pytest.raises(sqlite3.IntegrityError, match="fixture record failure"):
         extract(store, job, batch, send)
     assert store.get_job(job["job_id"])["used_tokens"] == 200
@@ -385,7 +373,7 @@ def test_s16_evidence_contract_atomic_commit_failure_preserves_usage_not_facts(e
 def test_s16_evidence_contract_valid_empty_result_differs_from_refusal(evidence_batch):
     store, job, batch = evidence_batch
     def send(req, timeout):
-        return Response({"input_tokens": 100} if req.full_url.endswith("input_tokens") else model_response({"records": [], "saturated": False}))
+        return Response({"input_tokens": 100} if req.full_url.endswith("input_tokens") else model_response({"saturated": False, "input_dispositions": {"i0000": dict(status="irrelevant", records=[], retained_record_ids=[], reason="Нет релевантного факта.")}}))
     assert extract(store, job, batch, send)["outcome"] == "succeeded"
     assert store.get_batch(batch["batch_id"])["state"] == "succeeded"
     assert store.get_job(job["job_id"])["evidence_records"] == 0
@@ -413,7 +401,7 @@ def test_s16_evidence_contract_output_split_inherits_input_split_depth(manifest_
         if req.full_url.endswith("input_tokens"):
             return Response({"input_tokens": 100})
         sends.append(1)
-        return Response(model_response({"records": [], "saturated": True}))
+        return Response(model_response({"input_dispositions": {}, "saturated": True}))
     assert extract(store, job, batch, send)["outcome"] == "max_split_depth"
     assert len(sends) == 1
     stream.close()
@@ -433,7 +421,7 @@ def test_s16_evidence_contract_untrusted_source_cannot_change_instructions_or_co
         assert attack not in data["instructions"] and attack in data["input"]
         assert "tools" not in data
         return Response(model_response({"records": [], "saturated": False, "max_total_tokens": 999999}))
-    assert extract(store, job, batch, send)["outcome"] == "invalid_schema"
+    assert extract(store, job, batch, send)["outcome"] == "partial"
     assert store.get_job(job["job_id"])["request"] == frozen
 
 
@@ -445,10 +433,11 @@ def test_s16_evidence_contract_budget_stop_is_never_treated_as_schema_repair(evi
         if req.full_url.endswith("input_tokens"):
             return Response({"input_tokens": 100})
         sends.append(1)
-        return Response({"status": "completed", "output": [{"type": "message", "content": [{"type": "refusal"}]}]})
+        return Response(model_response(owned_document(batch)))
     def no_space(*args, **kwargs):
         raise BudgetExceededError("max_intermediate_bytes")
-    monkeypatch.setattr(store, "set_batch_outcome", no_space)
+    # Current extraction persists the observation before reserved finalization.
+    monkeypatch.setattr(store, "save_extraction_progress", no_space)
     assert extract(store, job, batch, send)["outcome"] == "budget_exhausted"
     assert len(sends) == 1
     assert store.get_batch(batch["batch_id"])["payload"].get("repair_attempts", 0) == 0
@@ -456,8 +445,10 @@ def test_s16_evidence_contract_budget_stop_is_never_treated_as_schema_repair(evi
 
 def test_s16_evidence_contract_source_growing_beyond_cap_is_input_changed(evidence_batch):
     store, job, batch = evidence_batch
-    change_setting(store, job, "analysis", "max_intermediate_bytes", 65536)
-    store.conn.execute("UPDATE messages SET text=? WHERE channel_id=22 AND message_id=1", ("x" * 65537,))
+    # Keep room for the already frozen metadata; the source still exceeds cap.
+    maximum = max(65536, 2 * store.storage_usage(job['job_id'])['allocated_bytes'])
+    change_setting(store, job, "analysis", "max_intermediate_bytes", maximum)
+    store.conn.execute("UPDATE messages SET text=? WHERE channel_id=22 AND message_id=1", ("x" * (maximum + 1),))
     with pytest.raises(ValueError, match="input_changed"):
         validate(store, job, batch, document(batch))
     assert store.get_job(job["job_id"])["status"] == "interrupted"

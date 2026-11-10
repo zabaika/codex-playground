@@ -1,9 +1,13 @@
+from telegram_connector.tests.analysis_fixtures import CURRENT_EVIDENCE_FORMAT, CURRENT_SYNTHESIS_FORMAT
+from telegram_connector.tests.analysis_fixtures import expand_wire_quotes
 import copy
 import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
+
+from telegram_connector.tests.analysis_fixtures import extraction_inputs, owned_response_from_records
 
 from telegram_connector import telegram_analysis as analysis
 from telegram_connector import analysis_pipeline
@@ -565,8 +569,8 @@ def search_answer(search_job, runtime, tmp_path, monkeypatch):
             kind = data["text"]["format"]["name"]
             if kind == "telegram_query_terms_v1":
                 return Response(model_response({"terms": []}))
-            if kind == "telegram_evidence_v1":
-                fragments = json.loads(data["input"].split("Сообщения: ", 1)[1])
+            if kind == CURRENT_EVIDENCE_FORMAT:
+                fragments = extraction_inputs(data)
                 records = []
                 for fragment in fragments:
                     message = fragment["message"]
@@ -574,13 +578,13 @@ def search_answer(search_job, runtime, tmp_path, monkeypatch):
                         continue
                     value = document({"messages": [fragment]})["records"][0]
                     value.update(claim=message["text"], entities=["Residencia"], topic_key="documentos",
-                        conditions=["cita obligatoria"] if "cita obligatoria" in message["text"] else [],
-                        exceptions=["estudiantes exentos"] if "estudiantes exentos" in message["text"] else [],
+                        details=[*(["cita obligatoria"] if "cita obligatoria" in message["text"] else []),
+                                 *(["estudiantes exentos"] if "estudiantes exentos" in message["text"] else [])],
                         assertion_kind="experience" if "Experiencia personal" in message["text"] else "reported")
                     records.append(value)
-                return Response(model_response({"records": records, "saturated": False}))
+                return Response(model_response(owned_response_from_records(data, {"records": records, "saturated": False})))
             if kind == "telegram_relations_v2":
-                pairs = json.loads(data["input"].split("Кандидаты: ", 1)[1])
+                pairs = expand_wire_quotes(json.loads(data["input"].split("Кандидаты: ", 1)[1]))
                 by_id = {r["record_id"]: r["payload"] for r in pairs["records"]}
                 decisions = []
                 for pair in pairs["pairs"]:
@@ -590,13 +594,10 @@ def search_answer(search_job, runtime, tmp_path, monkeypatch):
                     decisions.append({"pair_id": pair["pair_id"], "relation": "contradicts" if contrary else "complements",
                         "reason": "Fixture-labelled compatibility of conditions"})
                 return Response(model_response({"decisions": decisions, "saturated": False}))
-            if kind == "telegram_synthesis_v1":
-                evidence = json.loads(data["input"].split("Опорные записи: ", 1)[1])
-                claims = [r["payload"]["claim"] for r in evidence["records"]]
-                return Response(model_response({"summary": "В обсуждениях приведены условия и противоречащие суммы.",
-                    "items": [{"title": "Условия оформления", "text": " ".join(claims), "conditions": [], "exceptions": [],
-                        "contradictions": [], "evidence_ids": [r["record_id"] for r in evidence["records"]]}],
-                    "limitations": [], "insufficient_information": False, "saturated": False}))
+            if kind == CURRENT_SYNTHESIS_FORMAT:
+                evidence = expand_wire_quotes(json.loads(data["input"].split("Опорные записи: ", 1)[1]))
+                claims = [text for r in evidence['records'] for text in [r['payload']['claim'], *r['payload']['details']]]
+                return Response(model_response({'summary': 'В обсуждениях приведены условия и противоречащие суммы.', 'items': [{'title': 'Условия оформления', 'text': ' '.join(claims), 'contradictions': [], 'evidence_ids': [r['record_id'] for r in evidence['records']]}], 'limitations': [], 'insufficient_information': False, 'saturated': False}))
             return base(req, timeout)
         status = analysis.execute_analysis_job(store, current, runtime=runtime, client=EngineHistoryClient(store, {22: [], 11: []}),
             api_key="fixture", token="fixture", access_provider=engine_access,
@@ -613,9 +614,10 @@ def test_s29_full_search_answer_all_batches_channels_and_lexical_misses(search_a
     assert status == "completed" and saved["result"]["coverage"]["processed_messages"] == 6
     item = saved["result"]["items"][0]
     assert all(text in item["text"] for text in ("1250 EUR", "1500 EUR", "30 días", "aceptaron NIE", "Rectificación"))
-    assert "cita obligatoria" in item["conditions"] and "estudiantes exentos" in item["exceptions"]
+    assert 'cita obligatoria' in item['text'] and 'estudiantes exentos' in item['text']
+    assert not {'conditions', 'exceptions'} & item.keys()
     assert item["contradictions"] and len(item["evidence_ids"]) == 4
-    assert len([data for data in calls if data["text"]["format"]["name"] == "telegram_evidence_v1"]) >= 3
+    assert len([data for data in calls if data["text"]["format"]["name"] == CURRENT_EVIDENCE_FORMAT]) >= 3
     assert not any(data["text"]["format"]["name"] == "telegram_query_terms_v1" for data in calls)
     sources = [store.leaf_evidence(saved["job_id"], key)["payload"] for key in item["evidence_ids"]]
     assert {ref["channel_id"] for record in sources for ref in record["source_refs"]} == {11, 22}
@@ -628,7 +630,8 @@ def test_s29_full_search_answer_normalizes_each_ai_stage_but_keeps_original_ques
     saved, status, calls, sent = run(query=raw)
     assert saved["result"]["query"] == raw
     assert {data["text"]["format"]["name"] for data in calls} >= {
-        "telegram_evidence_v1", "telegram_relations_v2", "telegram_merge_v1", "telegram_synthesis_v1"}
+        CURRENT_EVIDENCE_FORMAT, "telegram_relations_v2", CURRENT_SYNTHESIS_FORMAT}
+    assert all(data['text']['format']['name'] != 'telegram_merge_v1' for data in calls)
     assert all("Условия ВНЖ в España?" in data["input"] for data in calls)
 
 
@@ -648,7 +651,7 @@ def test_s29_full_search_answer_zero_fast_candidates_is_not_corpus_absence(searc
     assert coverage["selection_mode"] == "candidates" and coverage["selected_messages"] == 0
     assert coverage["candidate_messages"] == coverage["context_messages"] == 0
     assert "В предварительной выборке" in "\n".join(sent)
-    assert not any(data["text"]["format"]["name"] == "telegram_evidence_v1" for data in calls)
+    assert not any(data["text"]["format"]["name"] == CURRENT_EVIDENCE_FORMAT for data in calls)
 
 
 def test_s29_full_search_answer_candidate_and_context_counts_are_distinct(search_answer):
@@ -667,7 +670,7 @@ def test_s29_full_search_answer_full_without_evidence_reports_insufficiency(sear
     assert saved["result"]["coverage"]["processed_messages"] == 6
     assert saved["result"]["insufficient_information"] and saved["result"]["items"] == []
     assert "В выбранной истории недостаточно сведений" in "\n".join(sent)
-    assert not any(data["text"]["format"]["name"] == "telegram_synthesis_v1" for data in calls)
+    assert not any(data["text"]["format"]["name"] == CURRENT_SYNTHESIS_FORMAT for data in calls)
 
 
 def test_s29_full_search_answer_full_budget_stop_is_not_empty_complete(search_answer):
@@ -690,11 +693,11 @@ def test_s29_full_search_answer_unsupported_free_summary_is_not_an_answer(search
 
 def test_s29_full_search_answer_requires_brief_when_supported_details_exist(search_job):
     store, job = search_job
-    evidence = {"records": [{"record_id": "supported", "payload": {"claim": "1250 EUR", "conditions": [], "exceptions": []}}],
+    evidence = {"records": [{"record_id": "supported", "payload": {'claim': '1250 EUR', 'details': []}}],
         "relations": [], "reasons": [], "partial": False, "coverage": {"selection_mode": "all_messages"}}
     with pytest.raises(ValueError, match="search_answer_missing_summary"):
         analysis_pipeline._synthesis_result(job, evidence, {"summary": "", "items": [{"title": "Условия", "text": "1250 EUR",
-            "conditions": [], "exceptions": [], "contradictions": [], "evidence_ids": ["supported"]}],
+            "contradictions": [], "evidence_ids": ["supported"]}],
             "limitations": [], "insufficient_information": False, "saturated": False})
 
 
@@ -736,7 +739,7 @@ def search_journey(listener, config, access, runtime, tmp_path, monkeypatch):
                 state["before_inference"](job, data)
             if kind == "telegram_query_terms_v1":
                 return Response(model_response({"terms": ["NIE"]}))
-            if kind == "telegram_evidence_v1" and state.pop("refuse_batch", False):
+            if kind == CURRENT_EVIDENCE_FORMAT and state.pop("refuse_batch", False):
                 return Response({"status": "completed", "output": [{"type": "message", "content": [
                     {"type": "refusal", "refusal": "fixture"}]}]})
             return base(req, timeout)
@@ -787,7 +790,7 @@ def test_s30_search_journey_mode_and_detail_are_independent(search_journey, mode
     assert job["result"]["coverage"]["selection_mode"] == ("candidates" if mode == "fast" else "all_messages")
     calls = [data for identity, data in state["calls"] if identity == job["job_id"]]
     assert any(data["text"]["format"]["name"] == "telegram_query_terms_v1" for data in calls) == (mode == "fast")
-    assert next(data for data in calls if data["text"]["format"]["name"] == "telegram_synthesis_v1")["max_output_tokens"] == tokens
+    assert next(data for data in calls if data["text"]["format"]["name"] == CURRENT_SYNTHESIS_FORMAT)["max_output_tokens"] == tokens
     sent = [text for identity, text, parse_mode in state["sent"] if identity == job["job_id"]]
     if detail == "full":
         target, relative = analysis.resolve_analysis_artifact(job)
@@ -817,12 +820,12 @@ def test_s30_search_journey_query_scoped_cache_and_history_reuse(search_journey)
     second = state["run"](number=43)
     assert second["status"] == "completed" and second["downloaded_messages"] == 0 and not state["client"].calls
     repeated = [data["text"]["format"]["name"] for identity, data in state["calls"] if identity == second["job_id"]]
-    assert "telegram_query_terms_v1" not in repeated and "telegram_evidence_v1" not in repeated
+    assert "telegram_query_terms_v1" not in repeated and CURRENT_EVIDENCE_FORMAT not in repeated
     assert second["llm_calls"] < first["llm_calls"]
     third = state["run"]('/search @two,@one since=yesterday until=yesterday "Сроки документов"', number=44)
     changed = [data for identity, data in state["calls"] if identity == third["job_id"]]
     assert third["status"] == "completed" and third["downloaded_messages"] == 0
-    assert {data["text"]["format"]["name"] for data in changed} >= {"telegram_query_terms_v1", "telegram_evidence_v1"}
+    assert {data["text"]["format"]["name"] for data in changed} >= {"telegram_query_terms_v1", CURRENT_EVIDENCE_FORMAT}
     assert all("Сроки документов" in data["input"] for data in changed)
 
 

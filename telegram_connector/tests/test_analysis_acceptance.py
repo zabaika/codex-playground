@@ -1,3 +1,4 @@
+from telegram_connector.tests.analysis_fixtures import CURRENT_EVIDENCE_FORMAT, CURRENT_SYNTHESIS_FORMAT
 """Cross-command fault boundaries and derived progress, with no external calls."""
 
 import copy
@@ -245,7 +246,7 @@ def test_s34_fault_boundaries_source_edit_after_inference_interrupts_without_del
     state = command_journey
     changed = []
     def mutate(job, data):
-        if changed or data["text"]["format"]["name"] != "telegram_evidence_v1":
+        if changed or data["text"]["format"]["name"] != CURRENT_EVIDENCE_FORMAT:
             return
         changed.append(True)
         conn = common_sqlite.connect_sqlite(config["paths"]["history_db"])
@@ -283,12 +284,12 @@ def test_s34_fault_boundaries_forged_model_evidence_cannot_become_a_source(comma
 
 def test_s34_fault_boundaries_extraction_commit_failure_keeps_provider_cost(command_journey, monkeypatch):
     state = command_journey
-    original = AnalysisStore.complete_batch
+    original = AnalysisStore.finish_extraction_progress
     def fail(self, job_id, batch_id, **kwargs):
         if self.get_batch(batch_id)["kind"] == "extract":
             raise sqlite3.OperationalError("fixture private commit error")
         return original(self, job_id, batch_id, **kwargs)
-    monkeypatch.setattr(AnalysisStore, "complete_batch", fail)
+    monkeypatch.setattr(AnalysisStore, "finish_extraction_progress", fail)
     job = state["run"]()
     assert job["status"] == "failed" and not state["sent"] and job["result"] is None
     assert job["llm_calls"] > 0 and job["used_tokens"] >= 200
@@ -296,7 +297,7 @@ def test_s34_fault_boundaries_extraction_commit_failure_keeps_provider_cost(comm
 
 def test_s34_fault_boundaries_crash_after_extraction_commit_resumes_without_repeating_batch(command_journey, config, monkeypatch):
     state = command_journey
-    original = AnalysisStore.complete_batch
+    original = AnalysisStore.finish_extraction_progress
     stopped = []
     def interrupt(self, job_id, batch_id, **kwargs):
         saved = original(self, job_id, batch_id, **kwargs)
@@ -304,10 +305,10 @@ def test_s34_fault_boundaries_crash_after_extraction_commit_resumes_without_repe
             stopped.append(True)
             raise InterruptedError("fixture crash after commit")
         return saved
-    monkeypatch.setattr(AnalysisStore, "complete_batch", interrupt)
+    monkeypatch.setattr(AnalysisStore, "finish_extraction_progress", interrupt)
     first = state["run"]()
     assert first["status"] == "interrupted" and not state["sent"]
-    first_extraction = next(data["input"] for identity, data in state["calls"] if data["text"]["format"]["name"] == "telegram_evidence_v1")
+    first_extraction = next(data["input"] for identity, data in state["calls"] if data["text"]["format"]["name"] == CURRENT_EVIDENCE_FORMAT)
     count = len(state["calls"])
     state["listener"]["events"] = [update(43, "/resume " + first["job_id"])]
     assert bridge.cmd_listen(state["listener"]["args"]) == 0
@@ -322,7 +323,7 @@ def test_s34_fault_boundaries_crash_after_extraction_commit_resumes_without_repe
             conn.close()
     resumed = next(job for job in state["listener"]["jobs"]() if job["job_id"] == first["job_id"])
     assert resumed["status"] == "completed" and resumed["delivery"]["outcome"] == "confirmed"
-    later_extraction = [data["input"] for identity, data in state["calls"][count:] if data["text"]["format"]["name"] == "telegram_evidence_v1"]
+    later_extraction = [data["input"] for identity, data in state["calls"][count:] if data["text"]["format"]["name"] == CURRENT_EVIDENCE_FORMAT]
     assert first_extraction not in later_extraction and resumed["used_tokens"] >= first["used_tokens"]
 
 
@@ -343,4 +344,4 @@ def test_s34_fault_boundaries_untrusted_history_cannot_change_instruction_or_too
     assert "tools" not in payload and payload["model"] == "fixture-model" and payload["store"] is False
     assert payload["text"]["format"]["strict"] is True
     sources = json.loads(payload["input"].split("Сообщения: ", 1)[1])
-    assert sources[0]["message"]["text"] == attack
+    assert sources["inputs"][0]["message"]["text"] == attack

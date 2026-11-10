@@ -1,3 +1,5 @@
+from telegram_connector.tests.analysis_fixtures import CURRENT_EVIDENCE_FORMAT, CURRENT_SYNTHESIS_FORMAT
+from telegram_connector.tests.analysis_fixtures import expand_wire_quotes
 """QA fixtures verify application contracts; semantic quality needs model evals."""
 
 import copy
@@ -7,11 +9,13 @@ from pathlib import Path
 
 import pytest
 
+from telegram_connector.tests.analysis_fixtures import extraction_inputs, owned_response_from_records
+
 from telegram_connector import telegram_analysis as analysis
 from telegram_connector import analysis_pipeline
 from telegram_connector.tests.test_analysis_manifest import manifest_job, seed, build, change_setting
 from telegram_connector.tests.test_analysis_batching import batches
-from telegram_connector.tests.test_analysis_evidence import document, extract, model_response
+from telegram_connector.tests.test_analysis_evidence import document, model_response, extract
 from telegram_connector.tests.test_analysis_transport import Response
 from telegram_connector.tests.test_analysis_relations import records_fixture, link, link_sender
 from telegram_connector.tests.test_analysis_merge import merge, merge_sender
@@ -89,17 +93,15 @@ def qa_records(qa_job):
         if req.full_url.endswith("input_tokens"):
             return Response({"input_tokens": 100})
         calls.append(data)
-        fragments = json.loads(data["input"].split("Сообщения: ", 1)[1])
+        fragments = extraction_inputs(data)
         values = []
         for fragment in fragments:
             number = fragment["message"]["message_id"]
             for kind, assertion in QA_CASES[number][1]:
                 value = document({"messages": [fragment]})["records"][0]
-                value.update(record_type=kind, claim=fragment["message"]["text"], entities=["Uno"],
-                    topic_key="документы" if number < 4 else str(number), assertion_kind=assertion,
-                    conditions=["только по записи"] if number == 2 else [], exceptions=[])
+                value.update(record_type=kind, claim=fragment['message']['text'], entities=['Uno'], topic_key='документы' if number < 4 else str(number), assertion_kind=assertion, details=[*(['только по записи'] if number == 2 else [])])
                 values.append(value)
-        return Response(model_response({"records": values, "saturated": False}))
+        return Response(model_response(owned_response_from_records(data, {"records": values, "saturated": False})))
     for batch in batches(store, job):
         extract(store, job, batch, send)
     saved = list(store.iter_leaf_evidence(job["job_id"], page_size=2))
@@ -111,10 +113,10 @@ def evidence(records):
         "coverage": {"selection_mode": "all_messages"}}
 
 
-def final_document(ids, *, text="Принесите паспорт; 1250 EUR, срок 30 дней."):
-    return {"summary": "Практические ответы участников", "items": [{"title": "Как подать документы?", "text": text,
-        "conditions": [], "exceptions": [], "contradictions": [], "evidence_ids": ids}],
-        "limitations": [], "insufficient_information": False, "saturated": False}
+def final_document(ids, *, text="Принесите паспорт; 1250 EUR, срок 30 дней.", records=()):
+    text = ' '.join([text, *(detail for record in records if record['record_id'] in ids
+        for detail in record['payload']['details'] if detail not in text)])
+    return {'summary': 'Практические ответы участников', 'items': [{'title': 'Как подать документы?', 'text': text, 'contradictions': [], 'evidence_ids': ids}], 'limitations': [], 'insufficient_information': False, 'saturated': False}
 
 
 def test_s31_qa_extraction_preserves_unmatched_questions_and_standalone_solutions(qa_records):
@@ -130,7 +132,7 @@ def test_s31_qa_extraction_preserves_unmatched_questions_and_standalone_solution
     assert {record["record_type"] for record in by_message[3]} == {"problem", "answer"}
     answer = by_message[2][0]["payload"]
     assert all(value in answer["claim"] for value in ("1250 EUR", "30 дней", "паспорт"))
-    assert answer["conditions"] == ["только по записи"] and answer["assertion_kind"] == "experience"
+    assert 'только по записи' in answer['details'] and answer['assertion_kind'] == 'experience'
     assert all(job["request"]["settings"]["analysis_prompts"]["commands"]["qa"].strip() in call["input"] for call in calls)
     assert store.processed_analysis_messages(job["job_id"]) == 7
 
@@ -148,7 +150,7 @@ def test_s31_qa_extraction_personal_solution_supports_generalized_question(qa_re
     store, job, records, calls = qa_records
     answer = next(record for record in records if record["record_type"] == "answer"
         and record["payload"]["source_refs"][0]["message_id"] == message)
-    value = analysis_pipeline._synthesis_result(job, evidence(records), final_document([answer["record_id"]], text=answer["payload"]["claim"]))
+    value = analysis_pipeline._synthesis_result(job, evidence(records), final_document([answer["record_id"]], text=answer["payload"]["claim"], records=records))
     assert value["items"][0]["evidence_ids"] == [answer["record_id"]] and not value["partial"]
     assert value["items"][0]["text"] == answer["payload"]["claim"]
     assert answer["payload"]["assertion_kind"] == "experience"
@@ -182,10 +184,8 @@ def test_s31_qa_extraction_bounded_repair_cannot_turn_question_into_answer(qa_jo
 @pytest.mark.parametrize("answer_first", [False, True])
 def test_s32_cross_batch_qa_links_without_reply_in_either_order(qa_job, answer_first):
     store, job = qa_job
-    question = {"record_type": "question", "claim": "Что нужно для подачи в Uno?", "entities": ["Uno"], "topic_key": "вопрос",
-        "conditions": [], "exceptions": []}
-    answer = {"record_type": "answer", "claim": "Я принёс паспорт, заплатил 1250 EUR; ответ через 30 дней.",
-        "entities": ["Uno"], "topic_key": "документы", "assertion_kind": "experience", "conditions": ["только по записи"], "exceptions": ["студенты освобождены"]}
+    question = {'record_type': 'question', 'claim': 'Что нужно для подачи в Uno?', 'entities': ['Uno'], 'topic_key': 'вопрос', 'details': []}
+    answer = {'record_type': 'answer', 'claim': 'Я принёс паспорт, заплатил 1250 EUR; ответ через 30 дней.', 'entities': ['Uno'], 'topic_key': 'документы', 'assertion_kind': 'experience', 'details': ['только по записи', 'студенты освобождены']}
     filler = [{"claim": f"Постороннее событие {n}", "entities": ["Театр"], "topic_key": "культура"} for n in range(5)]
     records = records_fixture(store, job, [answer if answer_first else question, *filler, question if answer_first else answer])
     with pytest.raises(ValueError, match="fts_not_ready"):
@@ -201,13 +201,13 @@ def test_s32_cross_batch_qa_links_without_reply_in_either_order(qa_job, answer_f
         data = json.loads(req.data)
         if req.full_url.endswith("input_tokens"):
             return Response({"input_tokens": 100})
-        supplied = json.loads(data["input"].split("Опорные записи: ", 1)[1])
+        supplied = expand_wire_quotes(json.loads(data["input"].split("Опорные записи: ", 1)[1]))
         calls.append(supplied)
-        return Response(model_response(final_document(ids, text=answer["claim"])))
+        return Response(model_response(final_document(ids, text=answer["claim"], records=records)))
     result = synthesize(store, job, send)
     assert not result["partial"] and len(result["items"]) == 1
-    assert result["items"][0]["conditions"] == ["только по записи"]
-    assert "студенты освобождены" in result["items"][0]["exceptions"]
+    assert 'только по записи' in result['items'][0]['text']
+    assert 'студенты освобождены' in result['items'][0]['text']
     assert set(calls[0]["records"][0]) == {"record_id", "record_type", "payload"}
     verified = analysis.verify_analysis_sources(store, job["job_id"], result, generation=job["generation"])
     assert {s["message_id"] for s in verified["items"][0]["sources"]} == {1, 7}
@@ -257,28 +257,28 @@ def test_s32_cross_batch_qa_saved_result_rechecks_support_before_delivery(qa_job
 def test_s32_cross_batch_qa_contrary_results_keep_conditions_and_both_sources(qa_job):
     store, job = qa_job
     records = records_fixture(store, job, [
-        {"record_type": "question", "claim": "Сколько стоит подача?", "conditions": [], "exceptions": []},
-        {"record_type": "answer", "claim": "Я заплатил 1250 EUR в Uno.", "assertion_kind": "experience",
-         "conditions": ["подача в отделении"], "exceptions": []},
-        {"record_type": "answer", "claim": "За тот же пакет запросили 1500 EUR.", "assertion_kind": "experience",
-         "conditions": ["без зарплатных поступлений"], "exceptions": ["студенты освобождены"]}])
+        {'record_type': 'question', 'claim': 'Сколько стоит подача?', 'details': []},
+        {'record_type': 'answer', 'claim': 'Я заплатил 1250 EUR в Uno.', 'assertion_kind': 'experience', 'details': ['подача в отделении']},
+        {'record_type': 'answer', 'claim': 'За тот же пакет запросили 1500 EUR.', 'assertion_kind': 'experience', 'details': ['без зарплатных поступлений', 'студенты освобождены']}])
     ids = [r["record_id"] for r in records]
     supplied = evidence(records)
     def send(req, timeout):
         data = json.loads(req.data)
         if req.full_url.endswith("input_tokens"):
             return Response({"input_tokens": 100})
-        pairs = json.loads(data["input"].split("Кандидаты: ", 1)[1])["pairs"]
+        wire = expand_wire_quotes(json.loads(data["input"].split("Кандидаты: ", 1)[1]))
+        pairs = wire["pairs"]
+        questions = {r["record_id"] for r in wire["records"] if r["payload"]["record_type"] == "question"}
         return Response(model_response({"decisions": [{"pair_id": pair["pair_id"],
-            "relation": "answers" if ids[0] in (pair["left_id"], pair["right_id"]) else "contradicts", "reason": "Fixture-labelled practical case"}
+            "relation": "answers" if questions.intersection((pair["left_id"], pair["right_id"])) else "contradicts", "reason": "Fixture-labelled practical case"}
             for pair in pairs], "saturated": False}))
     link(store, job, send)
     supplied["relations"] = list(store.iter_link_decisions(job["job_id"]))
-    result = analysis_pipeline._synthesis_result(job, supplied, final_document(ids[:2], text="Суммы в личных кейсах различаются."))
+    result = analysis_pipeline._synthesis_result(job, supplied, final_document(ids, text="Суммы в личных кейсах различаются.", records=records))
     item = result["items"][0]
     assert set(item["evidence_ids"]) == set(ids)
-    assert set(item["conditions"]) == {"подача в отделении", "без зарплатных поступлений"}
-    assert item["exceptions"] == ["студенты освобождены"]
+    assert all(value in item['text'] for value in ('подача в отделении', 'без зарплатных поступлений', 'студенты освобождены'))
+    assert not {'conditions', 'exceptions'} & item.keys()
     assert all(value in " ".join(item["contradictions"]) for value in ("1250 EUR", "1500 EUR"))
     verified = analysis.verify_analysis_sources(store, job["job_id"], result, generation=job["generation"])
     assert {source["message_id"] for source in verified["items"][0]["sources"]} == {1, 2, 3}
@@ -296,10 +296,10 @@ def test_s32_cross_batch_qa_answer_after_cutoff_never_enters_analysis(qa_job):
         calls.append(data)
         if req.full_url.endswith("input_tokens"):
             return Response({"input_tokens": 100})
-        fragments = json.loads(data["input"].split("Сообщения: ", 1)[1])
+        fragments = extraction_inputs(data)
         result = document({"messages": fragments})
-        result["records"][0].update(record_type="question", claim="Какие документы нужны?", conditions=[], exceptions=[])
-        return Response(model_response(result))
+        result['records'][0].update(record_type='question', claim='Какие документы нужны?')
+        return Response(model_response(owned_response_from_records(data, result)))
     for batch in batches(store, job):
         extract(store, job, batch, send)
     link(store, job, lambda *a, **k: pytest.fail("One question has no pair to verify"))
@@ -353,8 +353,8 @@ def qa_journey(listener, config, access, runtime, tmp_path, monkeypatch):
             state["calls"].append((job["job_id"], data))
             if state.get("before_inference"):
                 state["before_inference"](job, data)
-            if kind == "telegram_evidence_v1":
-                fragments = json.loads(data["input"].split("Сообщения: ", 1)[1])
+            if kind == CURRENT_EVIDENCE_FORMAT:
+                fragments = extraction_inputs(data)
                 records = []
                 for fragment in fragments:
                     message = fragment["message"]
@@ -364,12 +364,12 @@ def qa_journey(listener, config, access, runtime, tmp_path, monkeypatch):
                     kind = "question" if pair == (22, 1) or state.get("only_questions") else "answer"
                     value = document({"messages": [fragment]})["records"][0]
                     value.update(record_type=kind, claim=message["text"], entities=["Uno"] if pair != (22, 3) else ["Запись"],
-                        topic_key="документы" if pair != (22, 3) else "запись", conditions=["только по записи"] if pair == (11, 1) else [],
-                        exceptions=[], assertion_kind="experience" if kind == "answer" else "reported")
+                        topic_key="документы" if pair != (22, 3) else "запись", details=["только по записи"] if pair == (11, 1) else [],
+                        assertion_kind="experience" if kind == "answer" else "reported")
                     records.append(value)
-                return Response(model_response({"records": records, "saturated": False}))
+                return Response(model_response(owned_response_from_records(data, {"records": records, "saturated": False})))
             if kind == "telegram_relations_v2":
-                supplied = json.loads(data["input"].split("Кандидаты: ", 1)[1])
+                supplied = expand_wire_quotes(json.loads(data["input"].split("Кандидаты: ", 1)[1]))
                 by_id = {record["record_id"]: record["payload"] for record in supplied["records"]}
                 decisions = []
                 for pair in supplied["pairs"]:
@@ -378,8 +378,8 @@ def qa_journey(listener, config, access, runtime, tmp_path, monkeypatch):
                     decisions.append({"pair_id": pair["pair_id"], "relation": "answers" if types == {"question", "answer"} else "unrelated",
                         "reason": "Fixture-labelled answer to the document question"})
                 return Response(model_response({"decisions": decisions, "saturated": False}))
-            if kind == "telegram_synthesis_v1":
-                supplied = json.loads(data["input"].split("Опорные записи: ", 1)[1])
+            if kind == CURRENT_SYNTHESIS_FORMAT:
+                supplied = expand_wire_quotes(json.loads(data["input"].split("Опорные записи: ", 1)[1]))
                 by_id = {record["record_id"]: record["payload"] for record in supplied["records"]}
                 items = []
                 for key, record in by_id.items():
@@ -390,11 +390,9 @@ def qa_journey(listener, config, access, runtime, tmp_path, monkeypatch):
                         pair = [relation["left_id"], relation["right_id"]]
                         if relation["relation"] == "answers" and key in pair:
                             ids.extend(identity for identity in pair if identity not in ids)
-                    title = "Как подать документы?" if record["topic_key"] == "документы" else "Как восстановить запись?"
-                    items.append({"title": title, "text": "Личный опыт: " + record["claim"], "conditions": [], "exceptions": [],
-                        "contradictions": [], "evidence_ids": ids})
-                return Response(model_response({"summary": "Практические решения из обсуждения" if items else "",
-                    "items": items, "limitations": [], "insufficient_information": not items, "saturated": False}))
+                    title = "Как подать документы?" if "Uno" in record["entities"] else "Как восстановить запись?"
+                    items.append({'title': title, 'text': 'Личный опыт: ' + record['claim'], 'contradictions': [], 'evidence_ids': ids})
+                return Response(model_response({'summary': 'Практические решения из обсуждения' if items else '', 'items': items, 'limitations': [], 'insufficient_information': not items, 'saturated': False}))
             return base(req, timeout)
         def deliver(token, chat, text, parse_mode, **kw):
             state["sent"].append((job["job_id"], text, parse_mode))
@@ -450,7 +448,7 @@ def test_s33_qa_journey_three_outputs_with_semantic_cross_channel_answers(qa_jou
     missing = [value for value in ("Вопрос", "Ответ", "паспорт", "1250 EUR", "30 дней", "2 дня", "только по записи", "Личный опыт") if value not in text]
     assert not missing, missing
     assert "https://t.me/peer22/1" in text and "https://t.me/peer11/1" in text
-    synthesis = next(data for identity, data in state["calls"] if data["text"]["format"]["name"] == "telegram_synthesis_v1")
+    synthesis = next(data for identity, data in state["calls"] if data["text"]["format"]["name"] == CURRENT_SYNTHESIS_FORMAT)
     assert synthesis["max_output_tokens"] == tokens and "telegram_query_terms_v1" not in [
         data["text"]["format"]["name"] for identity, data in state["calls"]]
 
@@ -469,10 +467,10 @@ def test_s33_qa_journey_reuses_compatible_cache_and_keeps_search_isolated(qa_jou
     second = state["run"]("/qa @two,@one since=yesterday until=yesterday --detail short", number=43)
     assert second["status"] == "completed" and second["downloaded_messages"] == 0 and not state["client"].calls
     repeated = [data["text"]["format"]["name"] for identity, data in state["calls"] if identity == second["job_id"]]
-    assert "telegram_evidence_v1" not in repeated and second["llm_calls"] < first["llm_calls"]
+    assert CURRENT_EVIDENCE_FORMAT not in repeated and second["llm_calls"] < first["llm_calls"]
     third = state["run"]('/search @two,@one since=yesterday until=yesterday "Документы" --mode full', number=44)
     assert third["status"] == "completed"
-    assert any(identity == third["job_id"] and data["text"]["format"]["name"] == "telegram_evidence_v1" for identity, data in state["calls"])
+    assert any(identity == third["job_id"] and data["text"]["format"]["name"] == CURRENT_EVIDENCE_FORMAT for identity, data in state["calls"])
 
 
 def test_s33_qa_journey_partial_source_retains_standalone_solution(qa_journey):

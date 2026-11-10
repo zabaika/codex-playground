@@ -151,9 +151,7 @@ def command_job(fixture, command, sources=1):
 
 
 def answer_result(records):
-    return {'summary': 'Нужен паспорт.', 'items': [{'title': 'Документы', 'text': 'Нужен паспорт.',
-        'conditions': [], 'exceptions': [], 'contradictions': [],
-        'evidence_ids': [r['record_id'] for r in records]}], 'limitations': [],
+    return {'summary': 'Нужен паспорт.', 'items': [{'title': 'Документы', 'text': 'Нужен паспорт.', 'contradictions': [], 'evidence_ids': [r['record_id'] for r in records]}], 'limitations': [],
         'partial': False, 'reasons': [], 'coverage': {'selected_messages': 2}}
 
 
@@ -187,7 +185,9 @@ def test_equivalent_standalone_answer_outside_item_replaces_digest(manifest_job,
     def provider(req, timeout):
         if req.full_url.endswith('input_tokens'):
             return Response({'input_tokens': 100})
-        _, pairs = request_pairs(req)
+        wire = json.loads(json.loads(req.data)['input'].split('Кандидаты: ', 1)[1])
+        pairs = wire['pairs']
+        types = {row['record_id']: row['payload']['record_type'] for row in wire['records']}
         return Response(model_response({'decisions': [decision(pair['pair_id'],
             'answers' if 'question' in {types[pair['left_id']], types[pair['right_id']]} else 'duplicate')
             for pair in pairs], 'saturated': False}))
@@ -225,14 +225,15 @@ def test_composite_answer_does_not_publish_question_link_when_answer_sources_do_
 
 
 @pytest.mark.parametrize('command', ['qa', 'search'])
-@pytest.mark.parametrize('field', ['conditions', 'exceptions', 'details'])
-def test_unique_digest_detail_is_not_replaced_by_incomplete_standalone(manifest_job, command, field):
+@pytest.mark.parametrize('detail', ['Подача только по предварительной записи.',
+    'Для студентов справка не требуется.', 'Срок подачи — тридцать дней.'])
+def test_unique_digest_detail_is_not_replaced_by_incomplete_standalone(manifest_job, command, detail):
     store, job = command_job(manifest_job, command)
     records = records_fixture(store, job, [
-        {'record_type': 'answer', 'claim': 'Нужен паспорт.', 'text': 'Дайджест\nНужен паспорт.',
-         field: ['Особое условие из дайджеста']},
-        {'record_type': 'answer', 'claim': 'Нужен паспорт.', field: []}])
-    link(store, job, link_sender('duplicate'))
+        {'record_type': 'answer', 'claim': 'Нужен паспорт.', 'text': 'Дайджест\nНужен паспорт. ' + detail,
+         'details': [detail]},
+        {'record_type': 'answer', 'claim': 'Нужен паспорт.', 'details': []}])
+    link(store, job, link_sender('complements'))
     result = analysis.verify_analysis_sources(store, job['job_id'], answer_result(records[:1]), generation=job['generation'])
     assert [s['message_id'] for s in result['items'][0]['sources']] == [1]
     assert result['items'][0]['sources'][0]['is_digest']
@@ -330,7 +331,8 @@ def test_pending_extraction_cannot_establish_digest_uniqueness(manifest_job):
         {'record_type': 'claim', 'claim': 'Отдельное сообщение ещё требует повторной extraction.'}])
     extraction = store.leaf_evidence(job['job_id'], records[1]['record_id'])['batch_id']
     store.invalidate_batch_dependencies(job['job_id'], extraction, generation=job['generation'])
-    assert not store.incomplete_evidence_reasons(job['job_id'])  # No failed row.
+    # A missing active range is incomplete even without a failed batch row.
+    assert 'extraction_coverage_incomplete' in store.incomplete_evidence_reasons(job['job_id'])
     result = analysis.verify_analysis_sources(store, job['job_id'], answer_result(records[:1]), generation=job['generation'])
     assert not result['items'] and 'source_selection_incomplete' in result['reasons']
 

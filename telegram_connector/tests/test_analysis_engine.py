@@ -1,9 +1,13 @@
+from telegram_connector.tests.analysis_fixtures import CURRENT_EVIDENCE_FORMAT, CURRENT_SYNTHESIS_FORMAT
+from telegram_connector.tests.analysis_fixtures import expand_wire_quotes
 import copy
 import json
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import pytest
+
+from telegram_connector.tests.analysis_fixtures import extraction_inputs, owned_response_from_records
 
 from telegram_connector import telegram_analysis as analysis
 from telegram_connector import analysis_pipeline
@@ -114,14 +118,14 @@ def engine_provider(store, job, calls):
             return Response({"input_tokens": 100})
         kind = data["text"]["format"]["name"]
         calls.append(kind)
-        if kind == "telegram_evidence_v1":
-            fragments = json.loads(data["input"].split("Сообщения: ", 1)[1])
+        if kind == CURRENT_EVIDENCE_FORMAT:
+            fragments = extraction_inputs(data)
             records = []
             for fragment in fragments:
                 value = document({"messages": [fragment]})["records"][0]
-                value.update(claim=fragment["message"]["text"], conditions=[], exceptions=[])
+                value.update(claim=fragment['message']['text'])
                 records.append(value)
-            output = {"records": records, "saturated": False}
+            output = owned_response_from_records(data, {"records": records, "saturated": False})
         elif kind == "telegram_relations_v2":
             pairs = json.loads(data["input"].split("Кандидаты: ", 1)[1])["pairs"]
             output = {"decisions": [{"pair_id": pair["pair_id"], "relation": "unrelated", "reason": "Разные факты"} for pair in pairs], "saturated": False}
@@ -131,10 +135,9 @@ def engine_provider(store, job, calls):
             output = {"groups": [{"title": "Условия", "summary": "Все факты сохранены в lineage", "input_ids": ids}],
                 "dispositions": [{"input_id": key, "disposition": "merged", "reason": "Включено"} for key in ids], "saturated": False}
         else:
-            assert kind == "telegram_synthesis_v1"
-            records = json.loads(data["input"].split("Опорные записи: ", 1)[1])["records"]
-            output = {"summary": "Условия из истории", "items": [{"title": "Факт", "text": r["payload"]["claim"],
-                "conditions": [], "exceptions": [], "contradictions": [], "evidence_ids": [r["record_id"]]} for r in records],
+            assert kind in {"telegram_synthesis_v1", CURRENT_SYNTHESIS_FORMAT}
+            records = expand_wire_quotes(json.loads(data["input"].split("Опорные записи: ", 1)[1]))["records"]
+            output = {"summary": "Условия из истории", "items": [{'title': 'Факт', 'text': r['payload']['claim'], 'contradictions': [], 'evidence_ids': [r['record_id']]} for r in records],
                 "limitations": [], "insufficient_information": not records, "saturated": False}
         return Response(model_response(output))
     return send
@@ -252,8 +255,9 @@ def test_s24_engine_wiring_actual_stage_trace_and_first_middle_last_facts(manife
     assert saved["status"] == "completed" and saved["delivery"]["outcome"] == "confirmed"
     text = "\n".join(sent)
     assert all(f"Факт {n}: сумма {n * 100} EUR" in text for n in (1, 3, 6))
-    assert calls.count("telegram_evidence_v1") >= 3
-    assert {"telegram_relations_v2", "telegram_merge_v1", "telegram_synthesis_v1"} <= set(calls)
+    assert calls.count(CURRENT_EVIDENCE_FORMAT) >= 3
+    assert {"telegram_relations_v2", CURRENT_SYNTHESIS_FORMAT} <= set(calls)
+    assert "telegram_merge_v1" not in calls
     phases = [row[0] for row in store.conn.execute("SELECT phase FROM engine_phases")]
     unique = [p for i, p in enumerate(phases) if i == 0 or phases[i-1] != p]
     assert unique == ["sync", "select", "extract", "link", "merge", "synthesize", "verify", "deliver"]
@@ -542,7 +546,7 @@ def test_s24_engine_wiring_partial_inputs_keep_successful_facts(manifest_job, ru
     def send(req, timeout):
         data = json.loads(req.data)
         if (failure == "batch_refusal" and req.full_url.endswith("responses")
-                and data["text"]["format"]["name"] == "telegram_evidence_v1" and not refused):
+                and data["text"]["format"]["name"] == CURRENT_EVIDENCE_FORMAT and not refused):
             refused.append(True)
             return Response({"status": "completed", "output": [{"type": "message", "content": [
                 {"type": "refusal", "refusal": "fixture refusal"}]}], "usage": {"input_tokens": 100, "output_tokens": 10}})

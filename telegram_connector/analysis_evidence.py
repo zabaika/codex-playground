@@ -18,7 +18,11 @@ else:
 from telegram_shared.formatting import build_message_link
 from common import process as common_process
 
-EVIDENCE_SCHEMA_VERSION = 1
+EVIDENCE_SCHEMA_VERSION = 3
+ADDRESSED_EVIDENCE_FORMATS = {5: 'telegram_evidence_v5'}
+# Structured Outputs protocol bounds; not additional operator ceilings.
+MODEL_SCHEMA_LIMITS = {'properties': 5000, 'enum_values': 1000,
+                       'string_chars': 120000, 'depth': 10}
 
 
 def _object(properties):
@@ -36,8 +40,7 @@ EVIDENCE_SCHEMA = _object({
     "records": _array(_object({
         "record_type": {"type": "string", "enum": ["event", "claim", "problem", "question", "answer", "experience", "opinion"]},
         "claim": {"type": "string", "minLength": 1}, "details": _STRINGS, "entities": _STRINGS,
-        "topic_key": {"type": ["string", "null"]}, "conditions": _STRINGS, "exceptions": _STRINGS,
-        "event_at": {"type": ["string", "null"]},
+        "topic_key": {"type": ["string", "null"]},
         "source_refs": _array(_object({**_MESSAGE_REF, "content_digest": _STRING,
             "fragment_start": {"type": "integer"}, "fragment_end": {"type": "integer"},
             "quote": {"type": "string", "minLength": 1}})),
@@ -47,16 +50,18 @@ EVIDENCE_SCHEMA = _object({
     })),
     "saturated": {"type": "boolean"},
 })
+EVIDENCE_SCHEMAS = {EVIDENCE_SCHEMA_VERSION: EVIDENCE_SCHEMA}
+
+
+def record_schema_version(settings):
+    return EVIDENCE_SCHEMA_VERSION
+
+
 QUERY_TERMS_SCHEMA = _object({"terms": _STRINGS})
-RELATION_SCHEMA = _object({
-    "decisions": _array(_object({"left_id": _STRING, "right_id": _STRING,
-        "relation": {"type": "string", "enum": ["duplicate", "complements", "contradicts", "answers", "unrelated"]},
-        "reason": {"type": "string", "minLength": 1}})),
-    "saturated": {"type": "boolean"},
-})
+_RELATION_KIND = {"type": "string", "enum": ["duplicate", "complements", "contradicts", "answers", "unrelated"]}
 RELATION_PAIR_SCHEMA = _object({
     "decisions": _array(_object({"pair_id": {"type": "string", "minLength": 1},
-        "relation": copy.deepcopy(RELATION_SCHEMA["properties"]["decisions"]["items"]["properties"]["relation"]),
+        "relation": copy.deepcopy(_RELATION_KIND),
         "reason": {"type": "string", "minLength": 1}})),
     "saturated": {"type": "boolean"},
 })
@@ -74,8 +79,6 @@ SYNTHESIS_SCHEMA = _object({
     "summary": _STRING,
     "items": _array(_object({"title": {"type": "string", "minLength": 1},
         "text": {"type": "string", "minLength": 1},
-        # These display arrays are filled from supporting evidence by the app.
-        "conditions": {**_STRINGS, "maxItems": 0}, "exceptions": {**_STRINGS, "maxItems": 0},
         "contradictions": _STRINGS, "evidence_ids": _STRINGS})),
     "limitations": _STRINGS, "insufficient_information": {"type": "boolean"},
     "saturated": {"type": "boolean"},
@@ -86,27 +89,51 @@ def query_terms_format():
     return {"type": "json_schema", "name": "telegram_query_terms_v1", "strict": True, "schema": copy.deepcopy(QUERY_TERMS_SCHEMA)}
 
 
-def synthesis_format():
-    return {"type": "json_schema", "name": "telegram_synthesis_v1", "strict": True, "schema": copy.deepcopy(SYNTHESIS_SCHEMA)}
+def synthesis_format(*, topic_groups=None):
+    schema = copy.deepcopy(SYNTHESIS_SCHEMA)
+    item = schema['properties']['items']['items']['properties']
+    if topic_groups and sum(map(len, topic_groups)) + _schema_enum_values(schema) <= MODEL_SCHEMA_LIMITS['enum_values']:
+        item['evidence_ids'] = {'anyOf': [
+            {'type': 'array', 'items': {'type': 'string', 'enum': group}, 'minItems': 1}
+            for group in topic_groups]}
+    schema['properties']['limitations'] = {**schema['properties']['limitations'], 'maxItems': 0}
+    return {"type": "json_schema", "name": "telegram_synthesis_v4", "strict": True, "schema": schema}
 
 
 def merge_format():
     return {"type": "json_schema", "name": "telegram_merge_v1", "strict": True, "schema": copy.deepcopy(MERGE_SCHEMA)}
 
 
-def relation_format(pair_map=None):
-    if pair_map is None:
-        return {"type": "json_schema", "name": "telegram_relations_v1", "strict": True, "schema": copy.deepcopy(RELATION_SCHEMA)}
-    if not 1 <= len(pair_map) <= RELATION_PAIR_ENUM_LIMIT:
+def relation_duplicate_error(left, right):
+    return duplicate_context_error((_source_subject(left), _source_fact_key(left, claim=False)),
+                                   (_source_subject(right), _source_fact_key(right, claim=False)))
+
+
+def relation_format(pair_map, *, record_payloads=None):
+    if not 1 <= len(pair_map) <= RELATION_PAIR_ENUM_LIMIT - (4 if record_payloads is not None else 0):
         raise ValueError("relation_pair_enum_limit")
     schema = copy.deepcopy(RELATION_PAIR_SCHEMA)
     schema["properties"]["decisions"]["items"]["properties"]["pair_id"]["enum"] = list(pair_map)
+    if record_payloads is not None:
+        groups = {True: [], False: []}
+        for key, (left, right) in pair_map.items():
+            groups[not relation_duplicate_error(record_payloads[left], record_payloads[right])].append(key)
+        variants = []
+        for allowed, keys in groups.items():
+            if not keys:
+                continue
+            item = copy.deepcopy(schema['properties']['decisions']['items'])
+            item['properties']['pair_id']['enum'] = keys
+            if not allowed:
+                item['properties']['relation']['enum'].remove('duplicate')
+            variants.append(item)
+        schema['properties']['decisions']['items'] = {'anyOf': variants}
     return {"type": "json_schema", "name": "telegram_relations_v2", "strict": True, "schema": schema}
 
 
-def classify_relation_document(document, pair_map, *, max_bytes, legacy=False):
+def classify_relation_document(document, pair_map, *, max_bytes, record_payloads=None):
     """Validate shape, then retain only unambiguous application-addressed decisions."""
-    validate_shape(document, RELATION_SCHEMA if legacy else RELATION_PAIR_SCHEMA)
+    validate_shape(document, RELATION_PAIR_SCHEMA)
     if len(canonical_json(document).encode("utf-8")) > max_bytes:
         raise ValueError("relation_output_limit")
     reverse = {tuple(sorted(pair)): key for key, pair in pair_map.items()}
@@ -114,8 +141,7 @@ def classify_relation_document(document, pair_map, *, max_bytes, legacy=False):
         raise ValueError("relation_pair_mapping")
     grouped, extra, duplicate = {}, 0, 0
     for item in document["decisions"]:
-        identity = (reverse.get(tuple(sorted((item["left_id"], item["right_id"]))))
-                    if legacy else item["pair_id"])
+        identity = item['pair_id']
         if identity not in pair_map:
             extra += 1
             continue
@@ -129,25 +155,222 @@ def classify_relation_document(document, pair_map, *, max_bytes, legacy=False):
     accepted = {key: next(iter(values.values())) for key, values in sorted(grouped.items()) if len(values) == 1}
     missing = sorted(set(pair_map) - set(grouped))
     conflicts = sorted(key for key, values in grouped.items() if len(values) > 1)
+    semantic = {}
+    if record_payloads is not None:
+        for key, value in list(accepted.items()):
+            if value['relation'] != 'duplicate':
+                continue
+            left, right = (record_payloads[identity] for identity in pair_map[key])
+            error = relation_duplicate_error(left, right)
+            if error:
+                semantic[key] = error
+                del accepted[key]
     diagnostics = {"requested": len(pair_map), "accepted": len(accepted), "missing": len(missing),
                    "extra": extra, "duplicate": duplicate, "conflicting": len(conflicts)}
     diagnostics["codes"] = [code for key, code in (("missing", "relation_missing_disposition"),
         ("extra", "relation_pair_scope"), ("duplicate", "relation_duplicate"), ("conflicting", "relation_conflict")) if diagnostics[key]]
     if document["saturated"]:
         diagnostics["codes"].append("relation_saturated")
-    return {"accepted_decisions": accepted, "unresolved_pair_ids": sorted(set(missing) | set(conflicts)),
+    if record_payloads is not None:
+        diagnostics['semantic_rejected'] = len(semantic)
+        diagnostics['codes'] = list(dict.fromkeys([*diagnostics['codes'], *semantic.values()]))
+    return {"accepted_decisions": accepted, "unresolved_pair_ids": sorted(set(missing) | set(conflicts) | set(semantic)),
             "diagnostics": diagnostics, "saturated": document["saturated"]}
 
 
-def evidence_format():
-    schema = copy.deepcopy(EVIDENCE_SCHEMA)
-    refs = schema["properties"]["records"]["items"]["properties"]["source_refs"]["items"]["properties"]
-    # Keep the durable evidence shape; the app binds these placeholders from
-    # the selected source and an unambiguous exact quote, never from model math.
-    refs["content_digest"] = {"type": "string", "enum": [""]}
-    for field in ("fragment_start", "fragment_end"):
-        refs[field] = {"type": "integer", "enum": [0]}
-    return {"type": "json_schema", "name": "telegram_evidence_v1", "strict": True, "schema": schema}
+def _schema_enum_values(value):
+    if isinstance(value, dict):
+        return len(value.get('enum', [])) + sum(_schema_enum_values(v) for v in value.values())
+    return sum(_schema_enum_values(v) for v in value) if isinstance(value, list) else 0
+
+
+def extraction_input_enum_limit():
+    # Structured Outputs permits 1000 enum members across the complete schema.
+    # Five decision-enum members and two reserved slots retain the frozen cap.
+    return MODEL_SCHEMA_LIMITS['enum_values'] - _schema_enum_values(EVIDENCE_SCHEMA) - 7
+
+
+def model_schema_usage(schema):
+    """Count definitions once; resolve refs only to measure actual nesting."""
+    usage = dict.fromkeys(MODEL_SCHEMA_LIMITS, 0)
+    def count(value):
+        if isinstance(value, dict):
+            usage['properties'] += len(value.get('properties', {}))
+            usage['enum_values'] += len(value.get('enum', []))
+            usage['string_chars'] += sum(len(key) for name in ('properties', '$defs')
+                                         for key in value.get(name, {}))
+            usage['string_chars'] += sum(len(v) for v in value.get('enum', []) if isinstance(v, str))
+            usage['string_chars'] += len(value.get('const', '')) if isinstance(value.get('const'), str) else 0
+            for child in value.values():
+                count(child)
+        elif isinstance(value, list):
+            for child in value:
+                count(child)
+    def depth(value, ancestors=()):
+        if 'anyOf' in value:
+            return max(depth(option, ancestors) for option in value['anyOf'])
+        if '$ref' in value:
+            key = value['$ref'].removeprefix('#/$defs/')
+            if value['$ref'] != '#/$defs/' + key or key in ancestors or key not in schema.get('$defs', {}):
+                raise ValueError('model_schema_reference')
+            return depth(schema['$defs'][key], (*ancestors, key))
+        children = list(value.get('properties', {}).values())
+        if 'items' in value:
+            children.append(value['items'])
+        return int(value.get('type') in ('object', 'array')) + max(
+            (depth(child, ancestors) for child in children), default=0)
+    count(schema)
+    usage['depth'] = depth(schema)
+    return usage
+
+
+def addressed_evidence_format(scope, version=5):
+    if version != 5:
+        raise ValueError('extraction_format_retired')
+    if len(scope['model_input_ids']) > extraction_input_enum_limit():
+        raise ValueError('extraction_input_enum_limit')
+    record = copy.deepcopy(EVIDENCE_SCHEMA['properties']['records']['items'])
+    for field in ('source_refs', 'related_message_refs'):
+        del record['properties'][field]
+        record['required'].remove(field)
+    for field in ('supporting_input_ids', 'related_input_ids'):
+        record['properties'][field] = _array({'$ref': '#/$defs/source_id'})
+        record['required'].append(field)
+    source_ids = [*scope['model_input_ids'], *scope.get('context_input_ids', [])]
+    if not source_ids:
+        for field in ('supporting_input_ids', 'related_input_ids'):
+            record['properties'][field]['maxItems'] = 0
+    base = _object({'status': {'type': 'string'}, 'records': _array({'$ref': '#/$defs/record'}),
+                    'retained_record_ids': _STRINGS, 'reason': _STRING})
+    represented = copy.deepcopy(base)
+    represented['properties']['status']['enum'] = ['represented']
+    represented['properties']['records']['minItems'] = 1
+    # A decision either creates records or reuses roots. Mixing both can
+    # repeat its own slot and invalidate otherwise correct residual repair.
+    represented['properties']['retained_record_ids']['maxItems'] = 0
+    negative = copy.deepcopy(base)
+    negative['properties']['status']['enum'] = ['irrelevant', 'unresolved']
+    negative['properties']['records']['maxItems'] = 0
+    negative['properties']['retained_record_ids']['maxItems'] = 0
+    negative['properties']['reason']['minLength'] = 1
+    choices = [represented, negative]
+    retained = copy.deepcopy(base)
+    retained['properties']['status']['enum'] = ['represented', 'duplicate'] if scope.get('allow_retained') else ['represented']
+    retained['properties']['records']['maxItems'] = 0
+    retained['properties']['retained_record_ids']['minItems'] = 1
+    if not scope.get('allow_retained'):
+        retained['properties']['retained_record_ids']['items'] = {'type': 'string', 'pattern': r'^i[0-9]{4}:[0-9]+$'}
+    if scope.get('allow_retained'):
+        choices.append(retained)
+    schema = _object({'saturated': {'type': 'boolean'},
+        'input_dispositions': _object({key: {'$ref': '#/$defs/decision'} for key in scope['model_input_ids']})})
+    schema['$defs'] = {'decision': {'anyOf': choices}, 'record': record,
+        'source_id': {'type': 'string', **({'enum': source_ids} if source_ids else {})}}
+    usage = model_schema_usage(schema)
+    if any(usage[key] > bound for key, bound in MODEL_SCHEMA_LIMITS.items()):
+        raise ValueError('model_schema_limit')
+    return {'type': 'json_schema', 'name': ADDRESSED_EVIDENCE_FORMATS[version],
+            'strict': True, 'schema': schema}
+
+
+
+
+def _internal_disposition_schema():
+    base = _object({'status': {'type': 'string'}, 'record_indices': _array({'type': 'integer'}),
+                    'retained_record_ids': _STRINGS, 'reason': _STRING})
+    by_index, by_root, negative = (copy.deepcopy(base) for _ in range(3))
+    for value in (by_index, by_root):
+        value['properties']['status']['enum'] = ['represented', 'duplicate']
+    by_index['properties']['record_indices']['minItems'] = 1
+    by_root['properties']['retained_record_ids']['minItems'] = 1
+    negative['properties']['status']['enum'] = ['irrelevant', 'unresolved']
+    negative['properties']['record_indices']['maxItems'] = 0
+    negative['properties']['retained_record_ids']['maxItems'] = 0
+    negative['properties']['reason']['minLength'] = 1
+    return {'anyOf': [by_index, by_root, negative]}
+
+
+def extraction_context_ids(context):
+    return [f'c{index:04}' for index, fragment in enumerate(context)
+            if fragment['message']['text'].strip()]
+
+
+def _materialize_owned_records(document, selected, context, *, fragments, maximum, max_records, allow_retained):
+    if set(document) != {'saturated', 'input_dispositions'} or not isinstance(document['input_dispositions'], dict):
+        raise ValueError('extraction_envelope_schema')
+    scope = extraction_scope(selected)
+    sources = dict(zip(scope['inputs'], selected))
+    sources.update({f'c{index:04}': fragment for index, fragment in enumerate(context)})
+    provided = [key for key, fragment in sources.items() if fragment in fragments]
+    wire_scope = {**scope, 'model_input_ids': [key for key in scope['model_input_ids'] if key in provided],
+                  'context_input_ids': extraction_context_ids(context), 'allow_retained': allow_retained}
+    schema = addressed_evidence_format(wire_scope)['schema']
+    records, decisions, owners, local_records = [], {}, {}, {}
+    used = len(canonical_json(document).encode())
+    if used > maximum:
+        raise ValueError('evidence_output_limit')
+    order = [key for key in scope['inputs'] if key in document['input_dispositions']]
+    order += [key for key in document['input_dispositions'] if key not in scope['inputs']]
+    for key in order:
+        decision = document['input_dispositions'][key]
+        if not isinstance(decision, dict) or not isinstance(decision.get('records'), list):
+            decisions[key] = decision
+            continue
+        indices = []
+        for local_index, raw in enumerate(decision['records']):
+            value = copy.deepcopy(raw)
+            slot = len(records)
+            if key in scope['model_input_ids']:
+                owners[slot] = key
+                local_records[f'{key}:{local_index}'] = slot
+            try:
+                validate_shape(raw, schema['$defs']['record'], _root=schema)
+                if key not in wire_scope['model_input_ids']:
+                    raise ValueError('extraction_disposition_scope')
+                refs = [sources[name] for name in dict.fromkeys([key, *raw['supporting_input_ids']])]
+                primary = sources[key]['input']
+                value = {name: item for name, item in raw.items()
+                         if name not in {'supporting_input_ids', 'related_input_ids'}}
+                value['source_refs'] = [{**{field: fragment['input'][field] for field in
+                    ('channel_id', 'message_id', 'content_digest', 'fragment_start', 'fragment_end')},
+                    'quote': fragment['message']['text']} for fragment in refs]
+                value['related_message_refs'] = [
+                    {field: sources[name]['input'][field] for field in ('channel_id', 'message_id')}
+                    for name in dict.fromkeys(raw['related_input_ids'])]
+            except (ValueError, KeyError, TypeError) as exc:
+                # Keep malformed records visible to the shared per-record classifier.
+                value = copy.deepcopy(raw) if isinstance(raw, dict) else {'value': raw}
+                value['_owned_source_error'] = 'extraction_owned_record_schema'
+                if key in sources:
+                    fragment = sources[key]
+                    value['source_refs'] = [{**{field: fragment['input'][field] for field in
+                        ('channel_id', 'message_id', 'content_digest', 'fragment_start', 'fragment_end')},
+                        'quote': fragment['message']['text']}]
+            used += len(canonical_json(value).encode()) + 32
+            if used > maximum or len(records) >= max_records:
+                raise ValueError('evidence_output_limit')
+            indices.append(slot)
+            records.append(value)
+        decisions[key] = {name: item for name, item in decision.items() if name != 'records'}
+        decisions[key]['record_indices'] = indices
+    for key, decision in decisions.items():
+        if key not in scope['inputs'] or not isinstance(decision, dict):
+            continue
+        retained = decision.get('retained_record_ids')
+        if not isinstance(retained, list):
+            continue
+        external = []
+        for identity in retained:
+            slot = local_records.get(identity) if isinstance(identity, str) else None
+            owner = scope['inputs'].get(owners.get(slot))
+            source = scope['inputs'][key]
+            if slot is not None and all(owner[field] == source[field] for field in ('channel_id','message_id','content_digest')):
+                decision['record_indices'].append(slot)
+            else:
+                external.append(identity)
+        decision['retained_record_ids'] = external
+    return {'records': records, 'saturated': document['saturated'], 'input_dispositions': decisions}, owners
+
 
 
 def response_text(response):
@@ -188,8 +411,22 @@ def parse_document(text):
     return json.loads(text, object_pairs_hook=unique_fields)
 
 
-def validate_shape(value, schema=EVIDENCE_SCHEMA):
+def validate_shape(value, schema=EVIDENCE_SCHEMA, *, _root=None):
     """Validate the small JSON Schema subset defined above, without extra dependencies."""
+    root = schema if _root is None else _root
+    if 'anyOf' in schema:
+        for option in schema['anyOf']:
+            try:
+                validate_shape(value, option, _root=root)
+            except ValueError:
+                continue
+            return
+        raise ValueError('evidence_schema_anyof')
+    if '$ref' in schema:
+        key = schema['$ref'].removeprefix('#/$defs/')
+        if schema['$ref'] != '#/$defs/' + key or key not in root.get('$defs', {}):
+            raise ValueError('model_schema_reference')
+        return validate_shape(value, root['$defs'][key], _root=root)
     kinds = schema["type"] if isinstance(schema["type"], list) else [schema["type"]]
     actual = {dict: "object", list: "array", str: "string", int: "integer", bool: "boolean", type(None): "null"}.get(type(value))
     if actual not in kinds or ("enum" in schema and value not in schema["enum"]):
@@ -198,14 +435,17 @@ def validate_shape(value, schema=EVIDENCE_SCHEMA):
         if set(value) != set(schema["properties"]):
             raise ValueError("evidence_schema_fields")
         for key, child in schema["properties"].items():
-            validate_shape(value[key], child)
+            validate_shape(value[key], child, _root=root)
     elif actual == "array":
         if len(value) < schema.get("minItems", 0) or len(value) > schema.get("maxItems", len(value)):
             raise ValueError("evidence_array_size")
         for item in value:
-            validate_shape(item, schema["items"])
-    elif actual == "string" and len(value.strip()) < schema.get("minLength", 0):
-        raise ValueError("evidence_empty_text")
+            validate_shape(item, schema["items"], _root=root)
+    elif actual == 'string':
+        if len(value.strip()) < schema.get('minLength', 0):
+            raise ValueError('evidence_empty_text')
+        if 'pattern' in schema and re.search(schema['pattern'], value) is None:
+            raise ValueError('evidence_string_pattern')
 
 
 ANALYSIS_NORMALIZATION_VERSION = 1
@@ -268,6 +508,24 @@ def _qa_answer_pairs(relations):
     return {frozenset((relation["left_id"], relation["right_id"])) for relation in relations if relation["relation"] == "answers"}
 
 
+def record_source_eligible(store, job, record):
+    """Apply command policy before reduction; durable evidence stays intact."""
+    if job['command'] != 'topics':
+        return True
+    sources = [_verified_analysis_source(store, job, ref, supporting=True) for ref in record['source_refs']]
+    return any(not source['is_digest'] and (
+        not any(ref['is_digest'] for ref in sources) or _record_supported_by_quote(record, source['quote']))
+        for source in sources)
+
+
+def _record_supported_by_quote(record, quote):
+    """Sufficient literal proof for mixed sources; never guess paraphrase support."""
+    text = _source_identity_text(quote)
+    facts = [record['claim'], *record['details'], *record['entities']]
+    return all(value.strip() and re.search(r'(?<!\w)' + re.escape(
+        _source_identity_text(value).rstrip('.')) + r'(?!\w)', text) for value in facts)
+
+
 def _validate_qa_support(ids, known, answer_pairs):
     answers = {key for key in ids if known[key]["record_type"] == "answer"}
     if not answers:
@@ -292,13 +550,124 @@ def _source_subject(record):
     return tuple(sorted({_source_identity_text(value) for value in record['entities'] if value.strip()}))
 
 
+def _detail_equivalence_key(text):
+    # Only an explicit copular variant is erased. Bounds, units, negations and
+    # remaining wording must still match; this is not general fuzzy equivalence.
+    value = re.sub(r'\b(?:составляет|составляют)\b', ' ', _source_identity_text(text))
+    value = re.sub(r'\s+[—–]\s+', ' ', value).rstrip('.')
+    return ' '.join(value.split())
+
+
+def _detail_scope(record):
+    return (_source_subject(record), _source_identity_text(record['claim']),
+            tuple(_source_identity_text(value) for value in record['details']),
+            record.get('assertion_kind'), record.get('record_type'))
+
+
+def equivalent_detail_groups(known, *, relations=()):
+    groups = {}
+    blocked = {frozenset((edge['left_id'], edge['right_id']))
+               for edge in relations if edge['relation'] == 'unrelated'}
+    for identity, record in known.items():
+        for field in ('details',):
+            for index, text in enumerate(record[field]):
+                key = (field, _detail_scope(record), _detail_equivalence_key(text),
+                       None if _source_subject(record) else identity)
+                groups.setdefault(key, []).append({'record_id': identity, 'index': index})
+    result = []
+    for key, refs in groups.items():
+        if len(refs) < 2:
+            continue
+        identities = {ref['record_id'] for ref in refs}
+        if any(pair <= identities for pair in blocked):
+            continue
+        result.append({'refs': refs})
+    return result
+
+
+def topic_components(identities, relations, *, consistent=False):
+    if consistent:
+        members = {key:{key} for key in identities}
+        blocked = {key:set() for key in members}
+        parent = {key:key for key in members}
+        def root(key):
+            while parent[key] != key:
+                parent[key] = parent[parent[key]]
+                key = parent[key]
+            return key
+        edges = [edge for edge in relations if edge['left_id'] in members and edge['right_id'] in members]
+        for edge in edges:
+            if edge['relation'] == 'unrelated':
+                blocked[edge['left_id']].add(edge['right_id'])
+                blocked[edge['right_id']].add(edge['left_id'])
+        priority = {'duplicate':0,'contradicts':1,'complements':2}
+        for edge in sorted(edges, key=lambda edge:(priority.get(edge['relation'],3),
+                min(edge['left_id'],edge['right_id']),max(edge['left_id'],edge['right_id']))):
+            if edge['relation'] not in {'duplicate','complements','contradicts'}:
+                continue
+            left,right = root(edge['left_id']),root(edge['right_id'])
+            if left == right:
+                continue
+            if len(members[left]) < len(members[right]):
+                left,right = right,left
+            if blocked[right] & members[left]:
+                continue
+            parent[right] = left
+            members[left].update(members.pop(right))
+            blocked[left].update(blocked.pop(right))
+        return sorted((sorted(group) for group in members.values()), key=lambda group:group[0])
+    neighbors = {key: set() for key in identities}
+    for edge in relations:
+        left, right = edge['left_id'], edge['right_id']
+        if left in neighbors and right in neighbors and edge['relation'] in {'duplicate', 'complements', 'contradicts'}:
+            neighbors[left].add(right)
+            neighbors[right].add(left)
+    remaining, groups = set(neighbors), []
+    while remaining:
+        seen, pending = set(), [min(remaining)]
+        while pending:
+            key = pending.pop()
+            if key not in seen:
+                seen.add(key)
+                pending.extend(neighbors[key] - seen)
+        groups.append(sorted(seen))
+        remaining -= seen
+    return groups
+
+
+
+
+def validate_topic_group(identities, relations, *, scope_identities=None):
+    """An event group needs a connected supporting graph, not a shared brand."""
+    wanted = set(identities)
+    if len(wanted) < 2:
+        return
+    for edge in relations:
+        if (edge['left_id'] in wanted and edge['right_id'] in wanted
+                and edge['relation'] == 'unrelated'):
+            raise ValueError('topics_group_unrelated')
+    groups = topic_components(scope_identities if scope_identities is not None else identities,
+                              relations, consistent=scope_identities is not None)
+    if not any(wanted <= set(group) for group in groups):
+        raise ValueError('topics_group_disconnected')
+
+
 def _source_fact_key(record, *, claim=True, subject=True):
     values = tuple(tuple(sorted(_source_identity_text(text) for text in record[key]))
-                   for key in ('details', 'conditions', 'exceptions'))
-    constraints = (values, record['assertion_kind'], record.get('event_at'))
+                   for key in ('details',))
+    constraints = (values, record['assertion_kind'])
     if subject:
         constraints += (_source_subject(record),)
     return (_source_identity_text(record['claim']), constraints) if claim else constraints
+
+
+def duplicate_context_error(left, right):
+    """Shared necessary support for duplicate edges and source substitution."""
+    if not left[0] or left[0] != right[0]:
+        return 'relation_subject_mismatch'
+    if left[1] != right[1]:
+        return 'relation_constraints_mismatch'
+    return None
 
 
 def _source_options(store, job, records, relations, *, budget):
@@ -307,7 +676,10 @@ def _source_options(store, job, records, relations, *, budget):
         return [_verified_analysis_source(store, job, ref, supporting=True) for ref in record['source_refs']]
     options = {key: sources(record) for key, record in records.items()}
     if job['command'] == 'topics':
-        return {key: [ref for ref in refs if not ref['is_digest']] for key, refs in options.items()}, set()
+        return {key: [ref for ref in refs if not ref['is_digest'] and (
+            not any(source['is_digest'] for source in refs)
+            or _record_supported_by_quote(records[key], ref['quote']))]
+            for key, refs in options.items()}, set()
     for key, record in records.items():
         if record['record_type'] in {'question', 'problem'}:
             options[key] = [ref for ref in options[key] if not ref['is_digest']]
@@ -342,11 +714,12 @@ def _source_options(store, job, records, relations, *, budget):
             left, right = payload(edge['left_id']), payload(edge['right_id'])
             if left is None or right is None:
                 continue
-            if not left[0] or left[0] != right[0]:
+            error = duplicate_context_error(left, right)
+            if error == 'relation_subject_mismatch':
                 metrics['source_subject_rejections'] += 1
                 continue
             if (frozenset((edge['left_id'], edge['right_id'])) not in forbidden
-                    and left[1] == right[1]):
+                    and error is None):
                 roots[root(edge['left_id'])] = root(edge['right_id'])
     by_fact, by_root = {}, {}
     for key in targets:
@@ -575,6 +948,10 @@ def verify_analysis_sources(store, job_id, result, *, generation, deadline=None,
                 unsupported += 1
                 source_limited += bool(set(records) & uncertain)
             continue
+        if job['command'] == 'topics' and any(not options[key] for key in records):
+            # A standalone citation from another fact cannot support this text.
+            unsupported += 1
+            continue
         if job["command"] == "qa":
             _validate_qa_support(item["evidence_ids"], records, answer_pairs)
         # Keep the latest update; remaining slots retain substantive backing
@@ -585,6 +962,16 @@ def verify_analysis_sources(store, job_id, result, *, generation, deadline=None,
         if job["command"] == "topics":
             ordered = ordered[:1] + sorted(ordered[1:], key=lambda s: -len(s["quote"]))
             selected = ordered[:limit]
+            selected_pairs = {(ref['channel_id'], ref['message_id']) for ref in selected}
+            if any(not selected_pairs.intersection((ref['channel_id'], ref['message_id'])
+                    for ref in options[key]) for key in records):
+                selection = _select_supporting_sources({key: options[key] for key in records},
+                    set(records), limit, budget=budget)
+                selected = selection['sources']
+                if not selected:
+                    unsupported += 1
+                    source_limited += selection['outcome'] == 'search_limited'
+                    continue
         else:
             required = {key for key, record in records.items() if record['record_type'] not in {'question', 'problem'}}
             item_options = {key: options[key] for key in records}
@@ -609,10 +996,7 @@ def verify_analysis_sources(store, job_id, result, *, generation, deadline=None,
     verified.update(budget.metrics)
     if excluded:
         verified["excluded_digest_only_items"] = excluded
-        notice = f"Не включено пунктов без отдельных постов по теме: {excluded}. Источники есть только в дайджестах."
-        limitations = verified.setdefault("limitations", [])
-        if notice not in limitations:
-            limitations.append(notice)
+        verified.setdefault('limitations', [])
         if not retained:
             verified["summary"] = ""
             verified["insufficient_information"] = True
@@ -640,6 +1024,13 @@ def verify_analysis_sources(store, job_id, result, *, generation, deadline=None,
     if not verified.get("items"):
         verified["sources"] = []
         if not excluded and not unsupported:
+            if store.extraction_work_state(job_id)['unknown_range_messages']:
+                # Preserve frozen-input interruption before filtering changed sources.
+                after = ''
+                while batch := store.next_manifest_batch(job_id, after=after):
+                    after = batch['step_key']
+                    for ref in store.manifest_batch_inputs(batch['batch_id']):
+                        _verified_source_snapshot(store, job, ref)
             for ref in store.processed_source_refs(job_id, limit=limit):
                 source = _verified_analysis_source(store, job, ref, supporting=False)
                 digest = source.pop('is_digest')
@@ -661,7 +1052,7 @@ def _verify_presentation_urls(result):
     allowed.update(url for source in sources for url in _PRESENTATION_URL.findall(source["quote"] or ""))
     texts = [result.get("summary", ""), *result.get("limitations", [])]
     for item in result.get("items", []):
-        texts.extend([item["title"], item["text"], *item["conditions"], *item["exceptions"], *item["contradictions"]])
+        texts.extend([item["title"], item["text"], *item.get("conditions", []), *item.get("exceptions", []), *item["contradictions"]])
     if any(url not in allowed for text in texts for url in _PRESENTATION_URL.findall(text)):
         raise ValueError("final_unverified_url")
 
@@ -678,12 +1069,12 @@ def _verified_source_snapshot(store, job, ref):
     return message
 
 
-def validate_evidence_records(store, job_id, batch_id, *, generation, document, fragments, bind_model_sources=False):
+def validate_evidence_records(store, job_id, batch_id, *, generation, document, fragments, record_offset=0, record_schema_version=3):
     job = store.require_running(job_id, generation=generation)
     batch = store.get_batch(batch_id)
     if batch is None or batch["job_id"] != job_id or batch["kind"] != "extract":
         raise ValueError("Evidence step outside job scope")
-    validate_shape(document)
+    validate_shape(document, EVIDENCE_SCHEMAS[record_schema_version])
     policy = job["request"]["settings"]["analysis"]
     if len(document["records"]) > policy["max_evidence_records"] or len(canonical_json(document).encode("utf-8")) > policy["max_intermediate_bytes"]:
         raise ValueError("evidence_output_limit")
@@ -708,31 +1099,14 @@ def validate_evidence_records(store, job_id, batch_id, *, generation, document, 
         item = copy.deepcopy(proposed)
         if not item["source_refs"]:
             raise ValueError("evidence_without_support")
-        if item["event_at"] is not None:
-            try:
-                datetime.fromisoformat(item["event_at"].replace("Z", "+00:00"))
-            except ValueError as exc:
-                raise ValueError("evidence_event_date") from exc
         for ref in item["source_refs"]:
             source = sources.get((ref["channel_id"], ref["message_id"]))
-            if source is not None and bind_model_sources:
-                # Model chooses the source and exact quote; mechanical metadata
-                # comes only from the verified manifest and supplied fragments.
-                matches = set()
-                for fragment in source["fragments"]:
-                    lower, upper = fragment["fragment_start"], fragment["fragment_end"]
-                    start = source["text"].find(ref["quote"], lower, upper)
-                    while start != -1:
-                        matches.add((start, start + len(ref["quote"])))
-                        start = source["text"].find(ref["quote"], start + 1, upper)
-                if len(matches) != 1:
-                    raise ValueError("evidence_supporting_span")
-                start, end = next(iter(matches))
-                ref.update(content_digest=source["manifest"]["content_digest"], fragment_start=start, fragment_end=end)
             if source is None or ref["content_digest"] != source["manifest"]["content_digest"]:
                 raise ValueError("evidence_source_scope")
             start, end = ref["fragment_start"], ref["fragment_end"]
-            parent = next((f for f in source["fragments"] if f["fragment_start"] <= start < end <= f["fragment_end"]), None)
+            candidates = [f for f in source['fragments'] if f['fragment_start'] <= start < end <= f['fragment_end']]
+            parent = min(candidates, key=lambda f:(f['fragment_start'] != start or f['fragment_end'] != end,
+                         f['fragment_end']-f['fragment_start'])) if candidates else None
             if parent is None or source["text"][start:end] != ref["quote"]:
                 raise ValueError("evidence_supporting_span")
             ref.update(role=parent["role"], date_utc=source["manifest"]["date_utc"], text_view_version=1)
@@ -743,10 +1117,253 @@ def validate_evidence_records(store, job_id, batch_id, *, generation, document, 
             continue
         if item["topic_key"] is not None:
             item["topic_key"] = item["topic_key"].strip() or None
-        item.update(reported_at=selected["date_utc"], related_record_ids=[], schema_version=EVIDENCE_SCHEMA_VERSION)
-        identity = uuid.uuid5(uuid.NAMESPACE_URL, f"telegram-analysis:{job_id}:{batch_id}:{index}:{canonical_json(item)}").hex
+        item.update(reported_at=selected["date_utc"], related_record_ids=[], schema_version=record_schema_version)
+        identity = uuid.uuid5(uuid.NAMESPACE_URL, f"telegram-analysis:{job_id}:{batch_id}:{index + record_offset}:{canonical_json(item)}").hex
         records.append({"record_id": identity, "record_type": item["record_type"], "topic_key": item["topic_key"], "payload": item})
     return records
+
+
+def extraction_scope(selected):
+    """Address selected fragments; empty text is an application observation."""
+    inputs = {f"i{index:04d}": {key: copy.deepcopy(value) for key, value in item['input'].items() if key != 'batch_id'}
+              for index, item in enumerate(selected)}
+    empty = [key for key, item in zip(inputs, selected)
+             if not item['message']['text'].strip()]
+    return {'inputs': inputs, 'empty_input_ids': empty,
+            'explicit_digest_input_ids': [key for key, item in zip(inputs, selected) if _is_digest_source(item['message'])],
+            'model_input_ids': [key for key in inputs if key not in empty],
+            'sha256': hashlib.sha256(canonical_json(inputs).encode()).hexdigest()}
+
+
+def _record_uses_fragment(record, fragment):
+    return any(ref['channel_id'] == fragment['channel_id']
+               and ref['message_id'] == fragment['message_id']
+               and ref['content_digest'] == fragment['content_digest']
+               and ref.get('role', 'selected') == fragment.get('role', 'selected')
+               and fragment['fragment_start'] <= ref['fragment_start']
+               < ref['fragment_end'] <= fragment['fragment_end']
+               for ref in record['payload']['source_refs'])
+
+
+
+
+
+
+
+
+
+
+def _classify_extraction_records(store, job_id, batch_id, generation, document, fragments):
+    records, errors = {}, {}
+    for index, value in enumerate(document['records']):
+        if isinstance(value, dict) and '_owned_source_error' in value:
+            errors[str(index)] = value['_owned_source_error']
+            continue
+        try:
+            validate_shape(value, EVIDENCE_SCHEMA['properties']['records']['items'])
+            accepted = validate_evidence_records(store, job_id, batch_id,
+                generation=generation, document={'records': [value], 'saturated': False},
+                fragments=fragments, record_offset=index)
+            if not accepted:
+                raise ValueError('evidence_without_selected_support')
+            records[index] = accepted[0]
+        except ValueError as exc:
+            if str(exc) == 'input_changed':
+                raise
+            errors[str(index)] = str(exc)
+    return records, errors
+
+
+def _disposition_records(value, records, retained_records):
+    if set(value) != {'input_id', 'status', 'record_indices', 'retained_record_ids', 'reason'}:
+        return None
+    indices, retained = value['record_indices'], value['retained_record_ids']
+    if (not isinstance(indices, list) or any(type(i) is not int or i not in records for i in indices)
+            or len(set(indices)) != len(indices) or not isinstance(value['reason'], str)
+            or not isinstance(retained, list) or any(not isinstance(i, str) or i not in retained_records for i in retained)
+            or len(set(retained)) != len(retained)):
+        return None
+    selected = [records[i] for i in indices] + [retained_records[i] for i in retained]
+    return selected if len({r['record_id'] for r in selected}) == len(selected) else None
+
+
+def _literal_extraction_duplicate(key, records, scope, texts, accepted):
+    value = _source_identity_text(texts[key])
+    for record in records:
+        subjects = _source_subject(record['payload'])
+        if not subjects or not all(subject in value for subject in subjects):
+            return False
+        if not any(other != key and decision['status'] == 'represented'
+                   and record['record_id'] in decision['record_ids']
+                   and _source_identity_text(texts[other]) == value
+                   for other, decision in accepted.items()):
+            return False
+    return bool(records)
+
+
+def _validated_retained_dispositions(scope, dispositions, records):
+    roots = {}
+    for key, decision in (dispositions or {}).items():
+        ids = decision.get('record_ids')
+        if (key not in scope['model_input_ids'] or decision.get('status') != 'represented'
+                or not isinstance(ids, list) or not ids or len(set(ids)) != len(ids)
+                or not isinstance(decision.get('reason'), str)
+                or any(identity not in records or not _record_uses_fragment(
+                    records[identity], scope['inputs'][key]) for identity in ids)):
+            continue
+        roots[key] = copy.deepcopy(decision)
+    return roots
+
+
+def _classify_input_dispositions(document, scope, records, retained_records, selected, retained_dispositions):
+    grouped = {}
+    for value in document['input_dispositions']:
+        if isinstance(value, dict) and value.get('input_id') in scope['model_input_ids']:
+            grouped.setdefault(value['input_id'], []).append(value)
+    accepted = {key: {'status': 'empty_text', 'record_ids': [], 'reason': ''}
+                for key in scope['empty_input_ids']}
+    accepted.update(_validated_retained_dispositions(scope, retained_dispositions, retained_records))
+    pending = {}
+    for key, values in grouped.items():
+        if key in accepted:
+            continue  # A fresh response cannot replace an already accepted root.
+        unique = {canonical_json(value): value for value in values}
+        if len(unique) != 1:
+            continue
+        value = next(iter(unique.values()))
+        selected_records = _disposition_records(value, records, retained_records)
+        if selected_records is None:
+            continue
+        status, reason = value['status'], value['reason']
+        if status == 'represented':
+            if not selected_records or any(
+                    not _record_uses_fragment(record, scope['inputs'][key]) for record in selected_records):
+                continue
+        elif status == 'irrelevant':
+            if selected_records or not reason.strip() or any(_record_uses_fragment(
+                    record, scope['inputs'][key]) for record in [*records.values(), *retained_records.values()]):
+                continue
+        elif status == 'duplicate' and reason.strip():
+            pending[key] = (selected_records, reason)
+            continue
+        else:
+            continue
+        accepted[key] = {'status': status, 'record_ids': [record['record_id'] for record in selected_records],
+                         'reason': reason}
+    texts = {key: item['message']['text'] for key, item in zip(scope['inputs'], selected)}
+    for key, (values, reason) in pending.items():
+        if _literal_extraction_duplicate(key, values, scope, texts, accepted):
+            accepted[key] = {'status': 'duplicate', 'record_ids': [r['record_id'] for r in values], 'reason': reason}
+    return accepted
+
+
+def _record_failure_diagnostics(document, errors, scope, fragments):
+    """Describe a failure, without repairing source text or guessing support."""
+    result = {}
+    for slot, code in errors.items():
+        proposed = document['records'][int(slot)]
+        refs = proposed.get('source_refs', []) if isinstance(proposed, dict) else []
+        diagnostics = []
+        for index, ref in enumerate(refs if isinstance(refs, list) else []):
+            if not isinstance(ref, dict):
+                continue
+            pair = (ref.get('channel_id'), ref.get('message_id'))
+            addressed = [key for key, source in scope['inputs'].items()
+                         if (source['channel_id'], source['message_id']) == pair]
+            reason, matches = code, set()
+            if code in {'evidence_supporting_span', 'evidence_source_scope'}:
+                candidates = [fragment for fragment in fragments if
+                    (fragment['input']['channel_id'], fragment['input']['message_id']) == pair]
+                quote = ref.get('quote')
+                if not candidates:
+                    reason = 'source_outside_scope'
+                elif not isinstance(quote, str) or not quote:
+                    reason = 'invalid_quote'
+                else:
+                    for fragment in candidates:
+                        text = fragment['message']['text']
+                        start = text.find(quote)
+                        while start >= 0 and len(matches) < 2:
+                            matches.add(fragment['input']['fragment_start'] + start)
+                            start = text.find(quote, start + 1)
+                    reason = ('quote_not_found' if not matches else
+                              'quote_ambiguous' if len(matches) > 1 else 'source_metadata_or_bounds')
+            diagnostics.append({'code': code, 'reason': reason, 'source_ref_index': index,
+                'channel_id': pair[0], 'message_id': pair[1], 'input_ids': addressed})
+        if diagnostics:
+            result[slot] = diagnostics
+    return result
+
+
+def classify_extraction_document(store, job_id, batch_id, *, generation,
+                                 document, fragments, selected, retained_records=None, retained_dispositions=None, context=None):
+    """Retain independently valid records; a missing decision is not irrelevance."""
+    job = store.require_running(job_id, generation=generation)
+    maximum = job['request']['settings']['analysis']['max_intermediate_bytes']
+    disposition_error = None
+    if not isinstance(document, dict) or 'records' in document:
+        raise ValueError('extraction_envelope_schema')
+    context = context if context is not None else [f for f in fragments if f not in selected]
+    document, owned_inputs = _materialize_owned_records(document, selected, context, fragments=fragments,
+        maximum=maximum, max_records=job['request']['settings']['analysis']['max_evidence_records'],
+        allow_retained=bool(retained_records))
+    if not isinstance(document, dict) or not isinstance(document.get('input_dispositions'), dict):
+        raise ValueError('extraction_envelope_schema')
+    scope = extraction_scope(selected)
+    decision_schema = _internal_disposition_schema()
+    decisions = []
+    for key, value in document['input_dispositions'].items():
+        try:
+            if key not in scope['model_input_ids']:
+                raise ValueError('extraction_disposition_scope')
+            validate_shape(value, decision_schema)
+        except ValueError as exc:
+            disposition_error = str(exc)
+            continue
+        decisions.append({**value, 'input_id': key})
+    document = {**document, 'input_dispositions': decisions}
+    arrays = ('records', 'input_dispositions')
+    if (not isinstance(document, dict) or set(document) != {'saturated', *arrays}
+            or type(document.get('saturated')) is not bool
+            or any(not isinstance(document.get(key), list) for key in arrays)):
+        raise ValueError('extraction_envelope_schema')
+    if (len(canonical_json(document).encode()) > maximum
+            or len(document['records']) > job['request']['settings']['analysis']['max_evidence_records']):
+        raise ValueError('evidence_output_limit')
+    scope = extraction_scope(selected)
+    records, errors = _classify_extraction_records(
+        store, job_id, batch_id, generation, document, fragments)
+    dispositions = _classify_input_dispositions(document, scope, records, retained_records or {}, selected, retained_dispositions)
+    for index in errors:
+        raw = document['records'][int(index)]
+        refs = raw.get('source_refs', []) if isinstance(raw, dict) else []
+        pairs = {(r.get('channel_id'), r.get('message_id')) for r in refs
+                 if isinstance(r, dict) and type(r.get('channel_id')) is int and type(r.get('message_id')) is int} if isinstance(refs, list) else set()
+        # Native owned records address an exact selected range. A failed sibling
+        # cannot reopen valid ranges from the same message.
+        affected = ([owned_inputs[int(index)]] if int(index) in owned_inputs else
+                    [key for key, ref in scope['inputs'].items() if (ref['channel_id'], ref['message_id']) in pairs])
+        for key in affected or scope['model_input_ids']:
+            dispositions.pop(key, None)
+    unresolved = [key for key in scope['inputs'] if key not in dispositions]
+    diagnostics = _record_failure_diagnostics(document, errors, scope, fragments)
+    rejected = {key: document['records'][int(key)] for key in errors}
+    if disposition_error:
+        errors['envelope'] = disposition_error
+    reasons = ['extraction_coverage_incomplete'] if unresolved or errors or document['saturated'] else []
+    return {'scope': scope, 'records': list(records.values()),
+            'model_unresolved_input_ids': [key for key in unresolved if sum(
+                isinstance(value, dict) and value.get('input_id') == key for value in document['input_dispositions']) == 1
+                and any(isinstance(value, dict) and value.get('input_id') == key and value.get('status') == 'unresolved'
+                        for value in document['input_dispositions'])],
+            'record_slots': {str(i): value for i, value in records.items()},
+            'record_errors': errors, 'dispositions': dispositions,
+            'record_diagnostics': diagnostics,
+            'rejected_records': rejected,
+            'local_date_normalizations': 0,
+            'unresolved_input_ids': unresolved, 'input_accounting_complete': not reasons,
+            'semantic_coverage': 'unknown', 'reasons': reasons,
+            'saturated': document['saturated']}
 
 
 def analysis_text_view(message):

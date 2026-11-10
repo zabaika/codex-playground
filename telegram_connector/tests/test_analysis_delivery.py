@@ -42,13 +42,13 @@ def sourced_result(store, job, *, record_type="claim"):
         fragment["input"]["fragment_end"] = len(fragment["message"]["text"])
         batch = store.plan_batch(job["job_id"], generation=job["generation"], step_key=f"fixture-extract/{fragment['input']['channel_id']}", kind="extract", payload={})
         data = document({"messages": [fragment]})
-        data["records"][0].update(record_type=record_type, claim=fragment["message"]["text"], conditions=[], exceptions=[])
-        values = analysis_evidence.validate_evidence_records(store, job["job_id"], batch["batch_id"], generation=job["generation"], document=data, fragments=[fragment])
+        data['records'][0].update(record_type=record_type, claim=fragment['message']['text'])
+        version = analysis_evidence.record_schema_version(job['request']['settings'])
+        values = analysis_evidence.validate_evidence_records(store, job["job_id"], batch["batch_id"], generation=job["generation"], document=data, fragments=[fragment], record_schema_version=version)
         store.complete_batch(job["job_id"], batch["batch_id"], generation=job["generation"], records=values, inputs=[fragment["input"]])
         ids.append(values[0]["record_id"])
     return {"command": "topics", "detail": "normal", "query": None, "summary": "Условия из истории.",
-        "items": [{"title": "Условия", "text": "Минимум 1250 EUR, срок 30 дней.", "conditions": [], "exceptions": [],
-                   "contradictions": [], "evidence_ids": ids}], "limitations": [], "insufficient_information": False,
+        "items": [{'title': 'Условия', 'text': 'Минимум 1250 EUR, срок 30 дней.', 'contradictions': [], 'evidence_ids': ids}], "limitations": [], "insufficient_information": False,
         "partial": False, "reasons": [], "coverage": {"selection_mode": "all_messages", "selected_messages": 2,
             "processed_messages": 2, "known_skipped": 0}}
 
@@ -126,10 +126,9 @@ def test_s21_sources_and_rendering_sources_override_does_not_skip_validation(man
     payload = store.get_job(job["job_id"])["request"]
     payload["request"]["sources"] = 1
     store.conn.execute("UPDATE analysis_jobs SET request_json=? WHERE job_id=?", (analysis.canonical_json(payload), job["job_id"]))
-    shown = verified(store, job, result)["items"][0]["sources"]
-    assert len(shown) == 1
-    omitted_peer = ({11, 22} - {shown[0]["channel_id"]}).pop()
-    store.conn.execute("UPDATE messages SET text='Изменённый источник' WHERE channel_id=?", (omitted_peer,))
+    # One link cannot support both independent facts. Exclusion must still check every input.
+    assert not verified(store, job, result)['items']
+    store.conn.execute("UPDATE messages SET text='Изменённый источник' WHERE channel_id=11")
     with pytest.raises(ValueError, match="input_changed"):
         verified(store, job, result)
 
@@ -220,8 +219,8 @@ def test_s21_sources_and_rendering_long_escaped_blocks_split_without_broken_html
 def test_s21_sources_and_rendering_output_caps_drop_whole_items_and_mark_partial(manifest_job, bound):
     store, job = manifest_job
     result = sourced_result(store, job)
-    result["items"] = [{**copy.deepcopy(result["items"][0]), "title": f"Пункт {i}", "text": "Сведения. " * 50,
-        "conditions": [f"Условие {i}: необходимо выполнить полностью"]} for i in range(6)]
+    result["items"] = [{**copy.deepcopy(result["items"][0]), "title": f"Пункт {i}",
+        "text": f"Условие {i}: необходимо выполнить полностью; " + "подробные сведения " * 10 + "."} for i in range(6)]
     if bound == "chars":
         frozen_output_setting(store, job, lambda p: p["settings"]["analysis"]["output"]["profiles"]["normal"].update(max_chars=1800))
     else:
@@ -231,9 +230,10 @@ def test_s21_sources_and_rendering_output_caps_drop_whole_items_and_mark_partial
     text = "\n".join(output["chunks"])
     assert output["result"]["partial"] and len(output["result"]["items"]) < 6 and "Частичный" in text
     assert output["result"]["summary"] == ""
+    assert output['result']['items'], 'At least one complete item fits both fixture budgets'
     assert (sum(len(c) for c in output["chunks"]) <= 1800) if bound == "chars" else (len(output["chunks"]) <= 2)
     for item in output["result"]["items"]:
-        assert item["conditions"][0] in text
+        assert ' '.join(item['text'].split()) in ' '.join(text.split())
 
 
 def test_s21_sources_and_rendering_candidate_search_is_not_reported_as_full(manifest_job):
@@ -241,7 +241,7 @@ def test_s21_sources_and_rendering_candidate_search_is_not_reported_as_full(mani
     result = sourced_result(store, job)
     result["coverage"].update(selection_mode="candidates", known_skipped=None)
     text = "\n".join(presentation(store, job, result)["chunks"])
-    assert "отобранных кандидатов" in text and "неизвестно" in text
+    assert "Анализ предварительно отобранных сообщений; охват периода неполный" in text and "неизвестно" in text
 
 
 @pytest.mark.parametrize("mode,excluded", [("all_messages", 0), ("candidates", None)])
@@ -278,7 +278,7 @@ def test_s21_sources_and_rendering_capped_fallback_preserves_original_reason(man
     sourced_result(store, job)
     fallback = store.record_budget_stop(job["job_id"], generation=job["generation"], reason="max_llm_calls")
     # Leave room for mandatory channel/period/count metadata before trimming sources.
-    frozen_output_setting(store, job, lambda p: p["settings"]["analysis"]["output"]["profiles"]["normal"].update(max_chars=430))
+    frozen_output_setting(store, job, lambda p: p["settings"]["analysis"]["output"]["profiles"]["normal"].update(max_chars=390))
     output = presentation(store, job, fallback)
     assert output["result"]["partial"] is True
     assert {"max_llm_calls", "max_chars"} <= set(output["result"]["reasons"])
@@ -296,8 +296,7 @@ def test_s21_sources_and_rendering_uses_source_url_literally_present_in_quote(ma
     data["records"][0]["source_refs"][0].update(fragment_end=len(fragment["message"]["text"]), quote=fragment["message"]["text"])
     records = analysis_evidence.validate_evidence_records(store, job["job_id"], batch["batch_id"], generation=job["generation"], document=data, fragments=[fragment])
     store.complete_batch(job["job_id"], batch["batch_id"], generation=job["generation"], records=records, inputs=[fragment["input"]])
-    result = {"summary": "Условия https://example.org/rules", "items": [{"title": "Условия", "text": "Уточнение.", "conditions": [],
-        "exceptions": [], "contradictions": [], "evidence_ids": [records[0]["record_id"]]}], "limitations": [], "partial": False,
+    result = {"summary": "Условия https://example.org/rules", "items": [{'title': 'Условия', 'text': 'Уточнение.', 'contradictions': [], 'evidence_ids': [records[0]['record_id']]}], "limitations": [], "partial": False,
         "reasons": [], "coverage": {"selection_mode": "all_messages", "selected_messages": 1, "processed_messages": 1, "known_skipped": 0}}
     assert "https://example.org/rules" in "\n".join(presentation(store, job, result)["chunks"])
 

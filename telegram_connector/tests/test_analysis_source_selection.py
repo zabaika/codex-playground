@@ -63,8 +63,7 @@ def six_answer_records(store, job):
         refs = [document({'messages': [fragment]})['records'][0]['source_refs'][0]
                 for fragment, facts in zip(fragments, sets) if key in facts]
         value = document({'messages': [fragments[0]]})['records'][0]
-        value.update(record_type='answer', claim=f'Факт {key}.', entities=['Uno'], details=[],
-                     conditions=[], exceptions=[], source_refs=refs)
+        value.update(record_type='answer', claim=f'Факт {key}.', entities=['Uno'], details=[], source_refs=refs)
         values.append(value)
     batch = store.plan_batch(job['job_id'], generation=job['generation'], step_key='cover/extract',
                              kind='extract', payload={})
@@ -249,9 +248,8 @@ def test_old_delivery_counters_are_unknown_for_new_measurements(manifest_job):
     assert report['source_verification']['source_cover_elapsed_ms'] is None
 
 
-def test_cover_state_budget_is_frozen_and_v9_has_no_live_legacy_default(manifest_job):
+def test_cover_state_budget_is_frozen_without_live_default(manifest_job):
     store, job = manifest_job
-    assert job['request']['settings']['algorithm_version'] == 9
     assert job['request']['settings']['analysis']['output']['source_cover_max_states'] == 50000
     payload = copy.deepcopy(job['request'])
     del payload['settings']['analysis']['output']['source_cover_max_states']

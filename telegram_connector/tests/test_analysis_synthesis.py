@@ -1,3 +1,4 @@
+from telegram_connector.tests.analysis_fixtures import CURRENT_EVIDENCE_FORMAT, CURRENT_SYNTHESIS_FORMAT
 import copy
 import json
 
@@ -12,6 +13,7 @@ from telegram_connector.analysis_store import BudgetExceededError
 from telegram_connector.tests.test_analysis_merge import merge, merge_sender
 from telegram_connector.tests.test_analysis_evidence import model_response
 from telegram_connector.tests.test_analysis_transport import Response
+from telegram_connector.tests.analysis_fixtures import expand_wire_quotes, semantic_fact_payload
 
 
 def synthesis_job(store, job, detail, *, limit=None, sources=3):
@@ -26,7 +28,7 @@ def synthesis_job(store, job, detail, *, limit=None, sources=3):
 @pytest.mark.parametrize("detail,tokens", [("short", 1000), ("normal", 3000), ("full", 12000)])
 def test_s20_detail_synthesis_profile_changes_prompt_and_real_output_budget(manifest_job, detail, tokens):
     store, job = manifest_job
-    original = records_fixture(store, job, [{"claim": "Минимум 1250 EUR.", "conditions": ["Паспорт обязателен"], "exceptions": ["Нерезиденты"]}])
+    original = records_fixture(store, job, [{'claim': 'Минимум 1250 EUR.', 'details': ['Паспорт обязателен', 'Нерезиденты']}])
     job = synthesis_job(store, job, detail)
     function = getattr(analysis, "build_synthesis_payload", None)
     assert callable(function), "Detail must affect the request before generation, while extraction stays shared"
@@ -53,32 +55,8 @@ def test_s20_detail_synthesis_limits_are_effective_before_request(manifest_job):
         function(invalid, {"records": []})
 
 
-@pytest.mark.parametrize("field", ["conditions", "exceptions"])
-def test_s36_synthesis_detail_arrays_have_one_application_owner(manifest_job, field):
-    store, job = manifest_job
-    records = records_fixture(store, job, [{"claim": "Платёж 1250 EUR.", "conditions": ["Нужен паспорт"], "exceptions": ["Студенты освобождены"]}])
-    evidence = {"records": records, "partial": False, "reasons": [], "coverage": {}}
-    payload = analysis.build_synthesis_payload(job, evidence)
-    remote_fields = payload["text"]["format"]["schema"]["properties"]["items"]["items"]["properties"]
-    assert remote_fields[field].get("maxItems") == 0, "Model must not create a parallel paraphrased detail list"
-    document = {"summary": "", "items": [{"title": "Условия", "text": "Платёж 1250 EUR.", "conditions": [],
-        "exceptions": [], "contradictions": [], "evidence_ids": [records[0]["record_id"]]}],
-        "limitations": [], "insufficient_information": False, "saturated": False}
-    document["items"][0][field] = ["Парафраз исходного ограничения"]
-    with pytest.raises(ValueError, match="evidence_array_size"):
-        analysis_pipeline._synthesis_result(job, evidence, document)
 
 
-def test_s36_synthesis_preserves_native_details_and_only_deduplicates_format_variants(manifest_job):
-    store, job = manifest_job
-    records_fixture(store, job, [{"claim": "Платёж 1250 EUR.", "conditions": [
-        "Нужен паспорт.", " Нужен  паспорт ", "Паспорт не нужен", "Минимум 1250 EUR", "Максимум 1250 EUR"],
-        "exceptions": ["Студенты освобождены.", "Студенты освобождены"]}])
-    merge(store, job, merge_sender())
-    result = synthesize(store, job, synthesis_sender())
-    assert result["items"][0]["conditions"] == ["Нужен паспорт.", "Паспорт не нужен", "Минимум 1250 EUR", "Максимум 1250 EUR"]
-    assert result["items"][0]["exceptions"] == ["Студенты освобождены."]
-    assert result["partial"] is False
 
 
 def test_s20_detail_synthesis_closing_reserve_remains_usable_after_new_work_stop(manifest_job):
@@ -112,25 +90,23 @@ def synthesis_sender(*, forge=False, sent=None):
         if sent is not None: sent.append((req.full_url, request))
         if req.full_url.endswith("input_tokens"):
             return Response({"input_tokens": 100})
-        data = json.loads(request["input"].split("Опорные записи: ", 1)[1])
-        return Response(model_response({"summary": "Сведения из корпуса.", "items": [{"title": "Условия", "text": record["payload"]["claim"],
-            "conditions": [], "exceptions": [], "contradictions": [],
-            "evidence_ids": ["forged" if forge else record["record_id"]]} for record in data["records"]],
-            "limitations": [], "insufficient_information": not data["records"], "saturated": False}))
+        data = expand_wire_quotes(json.loads(request["input"].split("Опорные записи: ", 1)[1]))
+        return Response(model_response({'summary': 'Сведения из корпуса.', 'items': [{'title': 'Условия', 'text': ' '.join([record['payload']['claim'], *record['payload']['details']]) if request['text']['format']['name'] == CURRENT_SYNTHESIS_FORMAT else record['payload']['claim'], 'contradictions': [], 'evidence_ids': ['forged' if forge else record['record_id']]} for record in data['records']], 'limitations': [], 'insufficient_information': not data['records'], 'saturated': False}))
     return send
 
 
 @pytest.mark.parametrize("detail,tokens", [("short", 1000), ("normal", 3000), ("full", 12000)])
 def test_s20_detail_synthesis_runs_with_profile_cap_preserves_conditions_and_saves_result(manifest_job, detail, tokens):
     store, job = manifest_job
-    records_fixture(store, job, [{"claim": "Минимум 1250 EUR.", "conditions": ["Паспорт обязателен"], "exceptions": ["Нерезиденты"]}])
+    records_fixture(store, job, [{'claim': 'Минимум 1250 EUR.', 'details': ['Паспорт обязателен', 'Нерезиденты']}])
     job = synthesis_job(store, job, detail)
     merge(store, job, merge_sender())
     sent = []
     result = synthesize(store, job, synthesis_sender(sent=sent))
     assert result["detail"] == detail and result["partial"] is False
-    assert result["items"][0]["conditions"] == ["Паспорт обязателен"]
-    assert result["items"][0]["exceptions"] == ["Нерезиденты"]
+    assert 'Паспорт обязателен' in result['items'][0]['text']
+    assert 'Нерезиденты' in result['items'][0]['text']
+    assert not {'conditions', 'exceptions'} & result['items'][0].keys()
     assert [body["max_output_tokens"] for url, body in sent if not url.endswith("input_tokens")] == [tokens]
     assert store.get_job(job["job_id"])["result"] == result
     before = store.get_job(job["job_id"])["provider_requests"]
@@ -183,7 +159,7 @@ def test_s20_detail_synthesis_source_edit_outside_detail_pack_interrupts_after_i
     def sender(req, timeout):
         response = delegate(req, timeout)
         if not req.full_url.endswith("input_tokens"):
-            data = json.loads(json.loads(req.data)["input"].split("Опорные записи: ", 1)[1])
+            data = expand_wire_quotes(json.loads(json.loads(req.data)["input"].split("Опорные записи: ", 1)[1]))
             assert len(data["records"]) == 1
             selected = data["records"][0]["record_id"]
             omitted = next(record for record in original if record["record_id"] != selected)
@@ -215,7 +191,7 @@ def test_s20_detail_synthesis_recounts_smaller_evidence_pack_and_labels_limited_
     merge(store, job, merge_sender())
     delegate = synthesis_sender()
     def sender(req, timeout):
-        data = json.loads(json.loads(req.data)["input"].split("Опорные записи: ", 1)[1])
+        data = expand_wire_quotes(json.loads(json.loads(req.data)["input"].split("Опорные записи: ", 1)[1]))
         if req.full_url.endswith("input_tokens") and len(data["records"]) > 1:
             return Response({"input_tokens": job["request"]["settings"]["analysis"]["max_input_tokens"] + 1})
         return delegate(req, timeout)
@@ -242,8 +218,8 @@ def test_s20_detail_synthesis_atomic_result_commit_failure_preserves_receipt(man
 def test_s20_detail_synthesis_verified_contradictions_survive_model_omission(manifest_job):
     from telegram_connector.tests.test_analysis_relations import link, link_sender
     store, job = manifest_job
-    records_fixture(store, job, [{"claim": "Срок 30 дней.", "conditions": [], "exceptions": [], "topic_key": "срок"},
-                               {"claim": "Срок 60 дней.", "conditions": [], "exceptions": [], "topic_key": "срок"}])
+    records_fixture(store, job, [{'claim': 'Срок 30 дней.', 'topic_key': 'срок', 'details': []},
+                               {'claim': 'Срок 60 дней.', 'topic_key': 'срок', 'details': []}])
     link(store, job, link_sender("contradicts"))
     merge(store, job, merge_sender())
     result = synthesize(store, job, synthesis_sender())
@@ -285,11 +261,9 @@ def test_s20_detail_synthesis_partial_output_does_not_trigger_full_regeneration(
         if outcome == "incomplete":
             return Response({"status": "incomplete", "output": []})
         request = json.loads(req.data)
-        data = json.loads(request["input"].split("Опорные записи: ", 1)[1])
+        data = expand_wire_quotes(json.loads(request["input"].split("Опорные записи: ", 1)[1]))
         record = data["records"][0]
-        return Response(model_response({"summary": "", "items": [{"title": "Факт", "text": record["payload"]["claim"],
-            "conditions": [], "exceptions": [], "contradictions": [], "evidence_ids": [record["record_id"]]}],
-            "limitations": [], "insufficient_information": False, "saturated": True}))
+        return Response(model_response({'summary': '', 'items': [{'title': 'Факт', 'text': record['payload']['claim'], 'contradictions': [], 'evidence_ids': [record['record_id']]}], 'limitations': [], 'insufficient_information': False, 'saturated': True}))
     result = synthesize(store, job, sender)
     assert result["partial"] is True and ("output_saturated" if outcome == "saturated" else outcome) in result["reasons"]
     assert store.get_job(job["job_id"])["llm_calls"] == 1
@@ -315,8 +289,7 @@ def test_s36_synthesis_repair_retains_original_task_purpose_and_detail(manifest_
             return Response({"input_tokens": 100})
         requests.append(json.loads(req.data))
         result = {"wrong": "shape"} if len(requests) == 1 else {
-            "summary": "", "items": [{"title": "Факт", "text": "Факт с источником", "conditions": [],
-                "exceptions": [], "contradictions": [], "evidence_ids": [records[0]["record_id"]]}],
+            "summary": "", "items": [{'title': 'Факт', 'text': 'Факт с источником', 'contradictions': [], 'evidence_ids': [records[0]['record_id']]}],
             "limitations": [], "insufficient_information": False, "saturated": False}
         return Response(model_response(result))
     assert synthesize(store, job, sender)["partial"] is False
@@ -342,14 +315,14 @@ def test_s20_detail_synthesis_oversized_repair_remains_partial_without_another_i
 def test_s20_detail_synthesis_char_cap_drops_complete_items_without_cutting_conditions(manifest_job):
     store, job = manifest_job
     condition = "Только с паспортом и заявлением"
-    records_fixture(store, job, [{"claim": "Первый факт", "conditions": [condition], "exceptions": []},
-                               {"claim": "Второй факт", "conditions": [condition], "exceptions": []}])
+    records_fixture(store, job, [{'claim': 'Первый факт', 'details': [condition]},
+                               {'claim': 'Второй факт', 'details': [condition]}])
     frozen = copy.deepcopy(store.get_job(job["job_id"])["request"])
     frozen["settings"]["analysis"]["output"]["profiles"]["normal"]["max_chars"] = 90
     store.conn.execute("UPDATE analysis_jobs SET request_json=? WHERE job_id=?", (analysis.canonical_json(frozen), job["job_id"]))
     merge(store, job, merge_sender())
     result = synthesize(store, job, synthesis_sender())
-    assert len(result["items"]) == 1 and result["items"][0]["conditions"] == [condition]
+    assert len(result["items"]) == 1 and condition in result["items"][0]["text"]
     assert result["partial"] is True and "max_chars" in result["reasons"]
     assert store.get_job(job["job_id"])["llm_calls"] == 2  # One merge and one synthesis.
 
@@ -407,7 +380,8 @@ def test_s38_synthesis_smaller_pack_keeps_distinct_ranked_groups(manifest_job):
         [{'claim':'Участник включён в ROI; клиент в VIES.','topic_key':'roi'}])
     def merger(req, timeout):
         if req.full_url.endswith('input_tokens'):
-            return Response({'input_tokens':100})
+            fmt = json.loads(req.data).get('text', {}).get('format', {}).get('name')
+            return Response({'input_tokens':1000000 if fmt in {'telegram_synthesis_v1', CURRENT_SYNTHESIS_FORMAT} else 100})
         inputs = json.loads(json.loads(req.data)['input'].split('Записи: ',1)[1])['inputs']
         groups = [{'title':key,'summary':'Конкретные факты сохранены.', 'input_ids':[x['node_id'] for x in inputs if x['payload']['topic_key']==key]} for key in ['bank','roi']]
         return Response(model_response({'groups':groups,'dispositions':[{'input_id':x['node_id'],'disposition':'merged','reason':'В тематической группе.'} for x in inputs], 'saturated':False}))
@@ -415,11 +389,11 @@ def test_s38_synthesis_smaller_pack_keeps_distinct_ranked_groups(manifest_job):
     delegate = synthesis_sender()
     seen = []
     def sender(req, timeout):
-        data = json.loads(json.loads(req.data)['input'].split('Опорные записи: ',1)[1])
+        data = expand_wire_quotes(json.loads(json.loads(req.data)['input'].split('Опорные записи: ',1)[1]))
         if req.full_url.endswith('input_tokens') and len(data['records']) > 2:
             return Response({'input_tokens':job["request"]["settings"]["analysis"]["max_input_tokens"] + 1})
         if not req.full_url.endswith('input_tokens'):
-            seen.append({x['payload']['topic_key'] for x in data['records']})
+            seen.append({'roi' if 'ROI' in x['payload']['claim'] else 'bank' for x in data['records']})
         return delegate(req, timeout)
     result = synthesize(store, job, sender)
     assert seen == [{'bank','roi'}], 'A large first group must not displace the other ranked group when context is reduced'
@@ -467,9 +441,11 @@ def test_s38_synthesis_keeps_source_facts_when_link_diagnostics_are_large(manife
     result = synthesize(store, job, sender)
     assert {key for item in result["items"] for key in item["evidence_ids"]} == {r["record_id"] for r in originals}
     assert "synthesis_evidence_limited" not in result["reasons"]
-    wire = json.loads(sent[0][1]["input"].split("Опорные записи: ", 1)[1])
-    assert [(r["left_id"], r["right_id"], r["relation"]) for r in wire["relations"]] == [
+    wire = expand_wire_quotes(json.loads(sent[0][1]["input"].split("Опорные записи: ", 1)[1]))
+    original_by_payload = {analysis.canonical_json(semantic_fact_payload(r['payload'], synthesis=True)): r['record_id'] for r in originals}
+    canonical = {r['record_id']: original_by_payload[analysis.canonical_json(semantic_fact_payload(r['payload'], synthesis=True))] for r in wire['records']}
+    assert [(canonical[r["left_id"]], canonical[r["right_id"]], r["relation"]) for r in wire["relations"]] == [
         (r["left_id"], r["right_id"], r["relation"]) for r in saved_links]
-    assert {r["record_id"]: r for r in wire["records"]} == {
-        r["record_id"]: {k: r[k] for k in ("record_id", "record_type", "payload")} for r in originals}
+    assert {canonical[r["record_id"]]: {**r, 'record_id': canonical[r['record_id']]} for r in wire["records"]} == {
+        r["record_id"]: {**{k:r[k] for k in ("record_id", "record_type")}, "payload":semantic_fact_payload(r["payload"], synthesis=True)} for r in originals}
     assert list(store.iter_link_decisions(job["job_id"])) == saved_links

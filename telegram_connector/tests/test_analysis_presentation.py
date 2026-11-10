@@ -109,18 +109,18 @@ def test_item_and_section_headings_use_one_newline_before_their_content(command)
         assert f"<b>{title}</b>\n<b>{answer_label}</b>\nПодробность." in text
     else:
         assert f"<b>{title}</b>\nПодробность." in text
-    for heading, content in (("Условия", "Условие"), ("Исключения", "Исключение"),
-                             ("Противоречия", "Противоречие"), ("Источники", '<a href="')):
+    assert 'Подробность.\nУсловие\nИсключение' in text
+    for heading, content in (("Противоречия", "Противоречие"), ("Источники", '<a href="')):
         assert f"<b>{heading}</b>\n{content}" in text
         assert f"<b>{heading}</b>\n\n" not in text
     assert f"3 источник</a>\n\n{SEPARATOR}" in text
 
 
-def test_conditions_and_sources_have_single_newlines_inside_each_block():
+def test_inline_constraints_and_sources_have_single_newlines():
     job, result = presentation(items=1)
     result["items"][0]["conditions"] = ["Первое условие", "Второе условие", "Третье условие"]
     text = "\n\n".join(rendering._analysis_html_chunks(job, result))
-    assert "<b>Условия</b>\nПервое условие\nВторое условие\nТретье условие\n\n<b>Источники</b>" in text
+    assert "Подробность.\nПервое условие\nВторое условие\nТретье условие\n\n<b>Источники</b>" in text
     anchors = [f'<a href="https://t.me/fixture/{n}">{n} источник</a>' for n in range(1, 4)]
     assert "<b>Источники</b>\n" + "\n".join(anchors) + "\n\n" + SEPARATOR in text
 

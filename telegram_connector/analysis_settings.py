@@ -12,8 +12,23 @@ APP_DIR = Path(__file__).resolve().parent
 DEFAULT_CONFIG_FILE = APP_DIR / "config" / "runtime.example.toml"
 _MISSING = object()
 # Versioned application/template contracts, not operator sizing defaults.
-ANALYSIS_SCHEMA_VERSION = 1
-ANALYSIS_ALGORITHM_VERSION = 9
+ANALYSIS_SCHEMA_VERSION = 5
+ANALYSIS_ALGORITHM_VERSION = 17
+
+
+def supported_analysis_policy(settings):
+    return ((settings.get('schema_version'), settings.get('algorithm_version'))
+            == (ANALYSIS_SCHEMA_VERSION, ANALYSIS_ALGORITHM_VERSION))
+
+
+def resume_policy_compatible(current, frozen):
+    """Resume only supported frozen execution, without migrating its policy."""
+    if not supported_analysis_policy(current) or not supported_analysis_policy(frozen):
+        return False
+    comparable = copy.deepcopy(current)
+    informational = {'settings_sources', 'analysis_prompts'}
+    return ({key: value for key, value in comparable.items() if key not in informational}
+            == {key: value for key, value in frozen.items() if key not in informational})
 
 
 def resolve_analysis_model_capabilities(model):
@@ -30,20 +45,8 @@ def resolve_analysis_model_capabilities(model):
 
 
 def analysis_ai(settings):
-    """Read the frozen policy; legacy jobs use only their own saved values."""
-    if "ai" in settings["analysis"]:
-        return settings["analysis"]["ai"]
-    old = settings["digest_ai"]
-    return {
-        **{f"{stage}_max_output_tokens": old["max_output_tokens"]
-           for stage in ("query", "extract", "link", "merge")},
-        "request_timeout_seconds": old["openai_timeout_seconds"],
-        "token_count_timeout_seconds": old["openai_timeout_seconds"],
-        "retry_attempts": old["openai_retry_attempts"],
-        "retry_backoff_seconds": old["openai_retry_backoff_seconds"],
-        **{key: old[key] for key in ("reasoning_effort", "reasoning_summary",
-           "store_prompt_text", "messages_per_ai_pass", "message_block_max_chars")},
-    }
+    """Read only the admitted analytics policy; history does not execute it."""
+    return settings["analysis"]["ai"]
 
 
 def stage_output_limit(settings, kind, *, detail=None):
@@ -51,6 +54,10 @@ def stage_output_limit(settings, kind, *, detail=None):
         return settings["analysis"]["output"]["profiles"][detail]["max_output_tokens"]
     stage = "query" if kind == "expand_query" else kind
     return analysis_ai(settings)[f"{stage}_max_output_tokens"]
+
+
+
+
 
 
 def _analysis_reasoning(settings):
@@ -114,7 +121,7 @@ def _resolve_new_settings(default: Any, supplied: Any, path: str, sources: dict[
         if isinstance(value, str) and re.fullmatch(r"[0-9]+", value.strip()):
             value = int(value)
         minimum = 0 if path in {"analysis.overlap_messages", "analysis.max_repair_attempts",
-                               "analysis.ai.retry_backoff_seconds"} else 1
+                               "analysis.ai.retry_backoff_seconds", "analysis.link_pairs_per_request"} else 1
         if path == "analysis.merge_fan_in":
             minimum = 2
         if type(value) is not int or value < minimum:

@@ -1,4 +1,4 @@
-"""Independent analytics policy and legacy frozen-job compatibility."""
+"""Independent analytics policy and immutable stage budgets."""
 
 import copy
 from pathlib import Path
@@ -43,7 +43,7 @@ def test_analytics_ai_overrides_are_frozen_and_stage_specific():
                 "link": 6000, "merge": 8192, "synthesize": 3000}
     for stage, cap in expected.items():
         assert settings_owner.stage_output_limit(settings, stage, detail="normal") == cap
-    assert settings["analysis"]["link_pairs_per_request"] == 48
+    assert settings["analysis"]["link_pairs_per_request"] == 0
     assert values == original
 
 
@@ -60,18 +60,16 @@ def test_analytics_ai_rejects_invalid_policy(key, value):
         analysis.resolve_analysis_settings(values, config_dir=CONFIG_DIR)
 
 
-def test_legacy_frozen_settings_keep_their_own_caps_without_live_defaults():
-    frozen = {"digest_ai": {"max_output_tokens": 1500,
-        "openai_timeout_seconds": 120, "openai_retry_attempts": 3,
-        "openai_retry_backoff_seconds": 1, "reasoning_effort": "low",
-        "reasoning_summary": "none", "store_prompt_text": False,
-        "messages_per_ai_pass": 500, "message_block_max_chars": 100000},
-        "analysis": {"output": {"profiles": {"normal": {"max_output_tokens": 3000}}}}}
+def test_missing_analytics_ai_cannot_fall_back_to_digest():
+    frozen = analysis.resolve_analysis_settings(config(), config_dir=CONFIG_DIR)
+    del frozen['analysis']['ai']
+    frozen['digest_ai'] = dict(max_output_tokens=1500, openai_timeout_seconds=120,
+        openai_retry_attempts=3, openai_retry_backoff_seconds=1, reasoning_effort='low',
+        reasoning_summary='none', store_prompt_text=False, messages_per_ai_pass=500,
+        message_block_max_chars=100000)
     before = copy.deepcopy(frozen)
-    assert settings_owner.analysis_ai(frozen)["token_count_timeout_seconds"] == 120
-    assert settings_owner.stage_output_limit(frozen, "extract") == 1500
-    assert settings_owner.stage_output_limit(frozen, "merge") == 1500
-    assert settings_owner.stage_output_limit(frozen, "synthesize", detail="normal") == 3000
+    with pytest.raises(KeyError, match="^'ai'$"):
+        settings_owner.analysis_ai(frozen)
     assert frozen == before
 
 

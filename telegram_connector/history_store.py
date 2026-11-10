@@ -425,6 +425,7 @@ def migrate_ai_usage_log_schema(conn: sqlite3.Connection) -> None:
         "cache_write_30m_tokens": "INTEGER",
         "cache_write_12h_tokens": "INTEGER",
         "actual_model": "TEXT",
+        "actual_service_tier": "TEXT",
     }
     for column_name, column_type in ai_usage_additions.items():
         if ai_usage_columns and column_name not in ai_usage_columns:

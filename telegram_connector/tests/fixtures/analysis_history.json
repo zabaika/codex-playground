@@ -1,0 +1,139 @@
+[
+  {
+    "policy": {
+      "schema_version": 1,
+      "algorithm_version": 7
+    },
+    "result": {
+      "command": "topics",
+      "summary": "Сохранённый результат.",
+      "items": [
+        {
+          "title": "Историческая тема",
+          "text": "Сохранённый факт с датой 4 July 2026.",
+          "conditions": [
+            "Только по записи."
+          ],
+          "exceptions": [],
+          "evidence_ids": [
+            "archive-a"
+          ]
+        }
+      ],
+      "partial": true,
+      "reasons": [
+        "merge_no_progress",
+        "relations_incomplete"
+      ]
+    },
+    "delivery": {
+      "outcome": "confirmed",
+      "parse_mode": "HTML",
+      "version": 1,
+      "destination": "100",
+      "detail": "normal",
+      "analysis_partial": true,
+      "parts": [
+        {
+          "text": "<b>Историческая тема</b>\nСохранённый текст до изменения оформления.",
+          "outcome": "confirmed",
+          "attempts": [
+            {
+              "attempt_id": "archive-delivery-0",
+              "generation": 1,
+              "outcome": "confirmed",
+              "message_id": 1,
+              "chat_id": "100"
+            }
+          ]
+        }
+      ]
+    },
+    "synthesis": {
+      "plan": {
+        "evidence": [
+          {
+            "record_id": "archive-a"
+          },
+          {
+            "record_id": "archive-b"
+          }
+        ]
+      },
+      "output": {
+        "items": [
+          {
+            "evidence_ids": [
+              "archive-a"
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "policy": {
+      "schema_version": 5,
+      "algorithm_version": 16
+    },
+    "result": {
+      "command": "topics",
+      "summary": "Сохранённый результат.",
+      "items": [
+        {
+          "title": "Историческая тема",
+          "text": "Единственный опубликованный текст.",
+          "evidence_ids": [
+            "archive-a"
+          ]
+        }
+      ],
+      "partial": false,
+      "reasons": []
+    },
+    "delivery": {
+      "outcome": "unknown",
+      "parse_mode": "HTML",
+      "version": 1,
+      "destination": "100",
+      "detail": "normal",
+      "analysis_partial": false,
+      "parts": [
+        {
+          "text": "<b>Историческая тема</b>\nЕдинственный опубликованный текст.",
+          "outcome": "unknown",
+          "attempts": [
+            {
+              "attempt_id": "archive-delivery-1",
+              "generation": 1,
+              "outcome": "unknown",
+              "message_id": null,
+              "chat_id": "100"
+            }
+          ]
+        }
+      ]
+    },
+    "synthesis": {
+      "plan": {
+        "evidence": [
+          {
+            "record_id": "archive-a"
+          },
+          {
+            "record_id": "archive-b"
+          }
+        ]
+      },
+      "output": {
+        "items": [
+          {
+            "evidence_ids": [
+              "r001"
+            ]
+          }
+        ]
+      }
+    }
+  }
+]

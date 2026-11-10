@@ -47,18 +47,46 @@ def _analysis_brief(job, result):
 def _analysis_coverage_lines(coverage):
     mode = coverage.get("selection_mode", "not_selected")
     selected, processed = coverage.get("selected_messages", 0), coverage.get("processed_messages", 0)
-    lines = ["Режим: последовательный анализ" if mode == "all_messages" else
-        "Отбор сообщений не завершён" if mode == "not_selected" else "Режим: анализ отобранных кандидатов",
+    lines = (["Отбор сообщений не завершён"] if mode == "not_selected" else
+        ["Анализ предварительно отобранных сообщений; охват периода неполный"] if mode == "candidates" else [])
+    lines.extend([
         f'Обработано сообщений: {processed}; выбрано: {selected}; '
         f'не обработано из выбранных: {max(0, selected - processed)}.',
-        f'Не включено в выборку: {coverage.get("known_skipped") if coverage.get("known_skipped") is not None else "неизвестно"}.']
+        f'Не включено в выборку: {coverage.get("known_skipped") if coverage.get("known_skipped") is not None else "неизвестно"}.'])
     if mode == "candidates" and "candidate_messages" in coverage:
         lines.append(f'Кандидатов: {coverage["candidate_messages"]}; сообщений контекста: {coverage["context_messages"]}.')
     return lines
 
 
+def _digest_selection_notice(result):
+    count = result.get('excluded_digest_only_items', 0)
+    if not count:
+        return ''
+    if count % 10 == 1 and count % 100 != 11:
+        opening = f'Исключён {count} пункт'
+    elif count % 10 in (2, 3, 4) and count % 100 not in (12, 13, 14):
+        opening = f'Исключены {count} пункта'
+    else:
+        opening = f'Исключено {count} пунктов'
+    return opening + ': информация есть только в дайджесте, отдельного поста по теме нет.'
+
+
 def _analysis_item_labels(job, item):
     return ("Вопрос: " + item["title"], "Ответ") if job["command"] == "qa" else (item["title"], "")
+
+
+def _analysis_item_text(item):
+    """Render new text unchanged; frozen legacy results retain their details."""
+    if 'conditions' not in item and 'exceptions' not in item:
+        return item['text']
+    parts = [item['text']]
+    seen = {value.strip() for value in re.split(r'(?<=[.!?;])\s+|\n+', item['text'])}
+    seen.add(item['text'].strip())
+    for value in (*item['conditions'], *item['exceptions']):
+        if value.strip() not in seen:
+            parts.append(value)
+            seen.add(value.strip())
+    return '\n'.join(parts)
 
 
 def _analysis_insufficiency_notice(job, result):
@@ -123,12 +151,11 @@ def _analysis_html_chunks(job, result):
         title, answer_label = _analysis_item_labels(job, item)
         text(title, bold=True, compact=True)
         text(answer_label, bold=True, compact=True)
-        text(item["text"])
-        for field, label in (("conditions", "Условия"), ("exceptions", "Исключения"), ("contradictions", "Противоречия")):
-            if item[field]:
-                text(label, bold=True, compact=True)
-                for index, value in enumerate(item[field]):
-                    text(value, compact=field == "conditions" and index < len(item[field]) - 1)
+        text(_analysis_item_text(item))
+        if item["contradictions"]:
+            text("Противоречия", bold=True, compact=True)
+            for value in item["contradictions"]:
+                text(value)
         sources(item["sources"])
         if separator:
             blocks[-1] += "\n\n" + separator
@@ -138,6 +165,7 @@ def _analysis_html_chunks(job, result):
         sources(result.get("sources", []), processed=True)
     if result.get("insufficient_information") and (result.get("items") or job["command"] != "search"):
         text(_analysis_insufficiency_notice(job, result))
+    text(_digest_selection_notice(result))
     for value in result.get("limitations", []):
         text("Ограничение: " + value)
     for line in _analysis_coverage_lines(result.get("coverage", {})):
@@ -190,11 +218,10 @@ def _full_analysis_markdown(job, result):
         blocks.append("## " + _markdown_text(title.replace("\n", " ")))
         if answer_label:
             blocks.append("### " + answer_label)
-        blocks.append(_markdown_text(item["text"]))
-        for field, label in (("conditions", "Условия"), ("exceptions", "Исключения"), ("contradictions", "Противоречия")):
-            if item[field]:
-                blocks.append("### " + label)
-                blocks.extend("- " + _markdown_text(value) for value in item[field])
+        blocks.append(_markdown_text(_analysis_item_text(item)))
+        if item["contradictions"]:
+            blocks.append("### Противоречия")
+            blocks.extend("- " + _markdown_text(value) for value in item["contradictions"])
         sources(item["sources"])
         if separator:
             blocks.append(_markdown_text(separator))
@@ -204,6 +231,9 @@ def _full_analysis_markdown(job, result):
         sources(result.get("sources", []), processed=True)
     if result.get("insufficient_information") and (result.get("items") or job["command"] != "search"):
         blocks.append(_markdown_text(_analysis_insufficiency_notice(job, result)))
+    notice = _digest_selection_notice(result)
+    if notice:
+        blocks.append(_markdown_text(notice))
     if result.get("limitations"):
         blocks.append("## Ограничения")
         blocks.extend("- " + _markdown_text(value) for value in result["limitations"])

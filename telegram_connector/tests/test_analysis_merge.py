@@ -8,9 +8,10 @@ from telegram_connector import analysis_pipeline
 from telegram_connector.tests.test_analysis_manifest import manifest_job, change_setting, build, resume, seed
 from telegram_connector.tests.test_analysis_relations import records_fixture
 from telegram_connector.tests.test_analysis_evidence import model_response
-from telegram_connector.tests.test_analysis_evidence import extract, document
+from telegram_connector.tests.test_analysis_evidence import extract, document, owned_document
 from telegram_connector.tests.test_analysis_batching import batches
 from telegram_connector.tests.test_analysis_transport import Response
+from telegram_connector.tests.analysis_fixtures import CURRENT_SYNTHESIS_FORMAT
 
 
 def merge(store, job, sender):
@@ -24,7 +25,10 @@ def merge(store, job, sender):
 def merge_sender(*, bad_ref=False, no_progress=False):
     def send(req, timeout):
         if req.full_url.endswith("input_tokens"):
-            return Response({"input_tokens": 100})
+            # These tests target the hierarchical fallback. Direct routing has
+            # a separate fixture suite with exact-fit synthesis counts.
+            fmt = json.loads(req.data).get('text', {}).get('format', {}).get('name')
+            return Response({"input_tokens": 1000000 if fmt in {'telegram_synthesis_v1', 'telegram_synthesis_v3', CURRENT_SYNTHESIS_FORMAT} else 100})
         request = json.loads(req.data)
         values = json.loads(request["input"].split("Записи: ", 1)[1])["inputs"]
         ids = [value["node_id"] for value in values]
@@ -45,7 +49,7 @@ def leafs(store, job, reference):
 
 def test_s19_hierarchical_merge_retains_first_middle_last_across_three_layers(manifest_job):
     store, job = manifest_job
-    original = records_fixture(store, job, [{"claim": f"Факт {n}: сумма {n * 100} EUR.", "conditions": [f"Условие {n}"]} for n in range(8)])
+    original = records_fixture(store, job, [{'claim': f'Факт {n}: сумма {n * 100} EUR.', 'details': [f'Условие {n}']} for n in range(8)])
     change_setting(store, job, "analysis", "merge_fan_in", 2)
     result = merge(store, job, merge_sender())
     assert result["state"] == "ready" and result["partial"] is False
@@ -93,7 +97,7 @@ def test_unranked_complete_frontier_is_explicit_at_synthesis_boundary(manifest_j
     assert {r["record_id"] for r in value["records"]} == {r["record_id"] for r in original}
     payload = analysis_pipeline.build_synthesis_payload(current, value)
     assert '"group_order":"unranked"' in payload["input"]
-    assert "всему переданному набору" in payload["input"]
+    assert "по всему набору" in payload["input"]
 
 
 def test_no_reduction_keeps_independent_relations_partial_reason(manifest_job):
@@ -110,7 +114,7 @@ def test_no_reduction_keeps_independent_relations_partial_reason(manifest_job):
 
 def test_s19_hierarchical_merge_final_rank_does_not_force_distinct_events_together(manifest_job):
     store, job = manifest_job
-    original = records_fixture(store, job, [{"claim": "Первое событие", "conditions": ["Испания"]}, {"claim": "Другое событие", "conditions": ["Франция"]}])
+    original = records_fixture(store, job, [{'claim': 'Первое событие', 'details': ['Испания']}, {'claim': 'Другое событие', 'details': ['Франция']}])
     result = merge(store, job, merge_sender(no_progress=True))
     assert result["state"] == "ready" and result["partial"] is False
     assert len(result["frontier"]) == 2
@@ -135,9 +139,12 @@ def test_s19_hierarchical_merge_reserves_actual_remaining_frontier(manifest_job)
     change_setting(store, job, "analysis", "merge_fan_in", 2)
     change_setting(store, job, "analysis", "max_llm_calls", 4)
     before = store.get_job(job["job_id"])["provider_requests"]
-    result = merge(store, job, lambda *a, **k: pytest.fail("Do not start when known merge tail cannot fit"))
+    def sender(req, timeout):
+        assert req.full_url.endswith('input_tokens'), 'No inference may start when merge tail cannot fit'
+        return Response({'input_tokens': 1000000})
+    result = merge(store, job, sender)
     assert result["partial"] is True and "max_llm_calls" in result["reasons"]
-    assert store.get_job(job["job_id"])["provider_requests"] == before
+    assert store.get_job(job["job_id"])["provider_requests"] == before + 1
 
 
 def test_s19_hierarchical_merge_link_decisions_are_visible_to_reducer(manifest_job):
@@ -168,6 +175,8 @@ def test_s19_hierarchical_merge_token_limit_reduces_fan_in_and_recounts(manifest
     records_fixture(store, job, [{"claim": f"Факт {n}"} for n in range(4)])
     delegate = merge_sender()
     def sender(req, timeout):
+        if json.loads(req.data).get('text', {}).get('format', {}).get('name') in {'telegram_synthesis_v1', 'telegram_synthesis_v3', CURRENT_SYNTHESIS_FORMAT}:
+            return delegate(req, timeout)
         data = json.loads(json.loads(req.data)["input"].split("Записи: ", 1)[1])
         if req.full_url.endswith("input_tokens") and len(data["inputs"]) > 2:
             return Response({"input_tokens": job["request"]["settings"]["analysis"]["max_input_tokens"] + 1})
@@ -224,8 +233,7 @@ def test_s19_hierarchical_merge_manifest_repair_invalidates_only_affected_leafs_
 
 
 def extract_ready(store, job, ready):
-    data = document(ready)
-    data["records"][0]["claim"] = ready["messages"][0]["message"]["text"]
+    data = owned_document(ready)
     return extract(store, job, ready, lambda req, timeout: Response({"input_tokens": 100})
         if req.full_url.endswith("input_tokens") else Response(model_response(data)))
 
@@ -352,7 +360,8 @@ def test_s19_hierarchical_merge_discarded_input_is_explicit_and_leaf_is_retained
     records_fixture(store, job, [{"claim": "Первый факт"}, {"claim": "Второй факт"}])
     def sender(req, timeout):
         if req.full_url.endswith("input_tokens"):
-            return Response({"input_tokens": 100})
+            fmt = json.loads(req.data).get('text', {}).get('format', {}).get('name')
+            return Response({"input_tokens": 1000000 if fmt in {'telegram_synthesis_v1', 'telegram_synthesis_v3', CURRENT_SYNTHESIS_FORMAT} else 100})
         data = json.loads(json.loads(req.data)["input"].split("Записи: ", 1)[1])
         return Response(model_response({"groups": [], "dispositions": [{"input_id": value["node_id"],
             "disposition": disposition, "reason": "Явное исключение"} for value in data["inputs"]], "saturated": False}))

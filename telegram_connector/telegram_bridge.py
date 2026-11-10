@@ -1743,8 +1743,7 @@ class BridgeSupervisor:
                 continue
             self.progress_pending.add(job["job_id"])
             frozen = job["request"].get("settings", {})
-            valid_version = (frozen.get("schema_version") == self.analysis.ANALYSIS_SCHEMA_VERSION
-                             and frozen.get("algorithm_version") == self.analysis.ANALYSIS_ALGORITHM_VERSION)
+            valid_version = self.analysis.analysis_settings.supported_analysis_policy(frozen)
             principal = job["request"].get("principal", {})
             event = {"message": {"chat": {"id": job["destination"]},
                                  "from": {"id": job["requester_id"], "username": principal.get("username") or ""}}}

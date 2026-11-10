@@ -7,7 +7,7 @@ import hashlib
 import pytest
 
 from telegram_connector import telegram_analysis as analysis
-from telegram_connector.tests.test_analysis_evidence import evidence_batch, extract, document, model_response
+from telegram_connector.tests.test_analysis_evidence import evidence_batch, extract, owned_document, model_response
 from telegram_connector.tests.test_analysis_manifest import manifest_job, build, seed, change_setting
 from telegram_connector.tests.test_analysis_batching import batches
 from telegram_connector.tests.test_analysis_transport import Response
@@ -48,9 +48,13 @@ def test_s17_cache_lifecycle_identity_changes_for_incompatible_contract(evidence
 
 
 def finish_origin(store, job, batch, *, empty=False, data=None):
+    if data is None:
+        data = (dict(saturated=False, input_dispositions={'i0000': dict(status='irrelevant',
+            records=[], retained_record_ids=[], reason='Нет релевантного факта.')})
+            if empty else owned_document(batch))
     def send(req, timeout):
         return Response({"input_tokens": 100} if req.full_url.endswith("input_tokens") else
-                        {**model_response(data if data is not None else {"records": [], "saturated": False} if empty else document(batch)), "model": "fixture-snapshot"})
+                        {**model_response(data), "model": "fixture-snapshot"})
     assert extract(store, job, batch, send)["outcome"] == "succeeded"
     store.conn.execute("UPDATE analysis_jobs SET result_json=? WHERE job_id=?",
         (analysis.canonical_json({"items": [{"claim": "1250 EUR", "sources": [{"channel_id": 22, "message_id": 1}]}]}), job["job_id"]))
@@ -102,11 +106,14 @@ def test_s17_cache_lifecycle_valid_empty_hit_and_disabled_cache(evidence_batch, 
     assert store.get_batch(ready["batch_id"])["state"] == ("succeeded" if empty else "running")
 
 
-def test_s17_cache_lifecycle_actual_model_and_original_inference_age_survive_copy(evidence_batch):
+def test_cache_keeps_original_age_unknown_aggregate_model_and_native_receipt(evidence_batch):
     store, origin, batch = evidence_batch
     finish_origin(store, origin, batch)
     provenance = store.get_batch(batch["batch_id"])["payload"].get("provenance")
-    assert provenance and provenance["actual_model"] == "fixture-snapshot"
+    assert provenance and provenance['actual_model'] is None
+    native = store.conn.execute("SELECT actual_model FROM ai_usage_log WHERE job_id=? AND stage='extract:inference'",
+        (origin['job_id'],)).fetchall()
+    assert [row[0] for row in native] == ['fixture-snapshot']
     target, ready = new_target(store, origin)
     assert reuse(store, target, ready) is True
     copied = store.get_batch(ready["batch_id"])["payload"]["provenance"]
@@ -174,9 +181,10 @@ def test_s17_cache_lifecycle_copy_obeys_target_byte_cap_atomically(evidence_batc
 
 def test_s17_cache_lifecycle_local_relations_are_remapped_and_foreign_graph_is_not_copied(evidence_batch):
     store, origin, batch = evidence_batch
-    data = document(batch)
-    data["records"].append(copy.deepcopy(data["records"][0]))
-    data["records"][1]["claim"] = "Исключение: нерезиденты."
+    data = owned_document(batch)
+    records = data['input_dispositions']['i0000']['records']
+    records.append(copy.deepcopy(records[0]))
+    records[1]["claim"] = "Исключение: нерезиденты."
     finish_origin(store, origin, batch, data=data)
     rows = store.conn.execute("SELECT record_id,payload_json FROM analysis_evidence WHERE batch_id=? ORDER BY record_id", (batch["batch_id"],)).fetchall()
     value = json.loads(rows[0][1])
@@ -193,8 +201,10 @@ def test_s17_cache_lifecycle_local_relations_are_remapped_and_foreign_graph_is_n
 
 def test_s17_cache_lifecycle_copy_obeys_target_record_cap_atomically(evidence_batch):
     store, origin, batch = evidence_batch
-    data = document(batch)
-    data["records"].append(copy.deepcopy(data["records"][0]))
+    data = owned_document(batch)
+    records = data['input_dispositions']['i0000']['records']
+    records.append(copy.deepcopy(records[0]))
+    records[1]['claim'] = 'Исключение: нерезиденты.'
     finish_origin(store, origin, batch, data=data)
     target, ready = new_target(store, origin)
     change_setting(store, target, "analysis", "max_evidence_records", 1)
@@ -204,10 +214,10 @@ def test_s17_cache_lifecycle_copy_obeys_target_record_cap_atomically(evidence_ba
     assert store.get_batch(ready["batch_id"])["state"] == "running"
 
 
-def maintain(store, *, cap=1):
+def maintain(store, *, cap=1, now=None):
     function = getattr(store, "maintain_analysis_storage", None)
     assert callable(function), "Bounded cache eviction must preserve active data, final results and receipts"
-    return function(now=datetime.now(timezone.utc), max_cache_bytes=cap)
+    return function(now=now or datetime.now(timezone.utc), max_cache_bytes=cap)
 
 
 @pytest.mark.parametrize("status", ["completed", "failed"])
@@ -259,16 +269,20 @@ def test_s17_cache_lifecycle_eviction_keeps_active_and_resumable_dependencies(ev
     assert store.get_job(origin["job_id"])["evidence_records"] == 1
 
 
-def test_s17_cache_lifecycle_retention_uses_last_finished_worker_and_keeps_full_file(evidence_batch, tmp_path):
+def test_retention_expires_reuse_keeps_history_and_full_file(evidence_batch, tmp_path):
     store, origin, batch = evidence_batch
     finish_origin(store, origin, batch)
     report = tmp_path / "report.md"
     report.write_text("Пользовательский отчёт", encoding="utf-8")
+    now = datetime(2026, 11, 10, tzinfo=timezone.utc)
     store.conn.execute("UPDATE analysis_jobs SET finished_at=?,full_path=?,full_hash=?,updated_at=? WHERE job_id=?",
-        ((datetime.now(timezone.utc) - timedelta(days=8)).isoformat(), str(report), hashlib.sha256(report.read_bytes()).hexdigest(),
-         datetime.now(timezone.utc).isoformat(), origin["job_id"]))
-    result = maintain(store)
-    assert result["pruned_jobs"] == 1 and store.get_job(origin["job_id"]) is None
+        ((now - timedelta(days=8)).isoformat(), str(report), hashlib.sha256(report.read_bytes()).hexdigest(),
+         now.isoformat(), origin["job_id"]))
+    before = store.get_job(origin['job_id'])
+    result = maintain(store, now=now)
+    assert result["pruned_jobs"] == 0
+    assert store.get_job(origin['job_id'])['result'] == before['result']
+    assert store.get_batch(batch['batch_id'])['cache_key'] is None
     assert report.read_text(encoding="utf-8") == "Пользовательский отчёт"
 
 
@@ -281,13 +295,15 @@ def test_s17_cache_lifecycle_large_valid_retention_does_not_overflow_datetime(ev
     assert reuse(store, target, ready) is True
 
 
-def test_s17_cache_lifecycle_explicit_retention_cutoff_uses_last_worker_finish(evidence_batch):
+def test_explicit_cutoff_revokes_reuse_without_deleting_history(evidence_batch):
     store, origin, batch = evidence_batch
     finish_origin(store, origin, batch)
-    now = datetime.now(timezone.utc)
+    now = datetime(2026, 11, 10, tzinfo=timezone.utc)
     store.conn.execute("UPDATE analysis_jobs SET finished_at=?,updated_at=? WHERE job_id=?",
         ((now - timedelta(days=8)).isoformat(), now.isoformat(), origin["job_id"]))
-    assert store.prune_expired_analysis_jobs(before=now - timedelta(days=7)) == 1
+    assert store.prune_expired_analysis_jobs(before=now - timedelta(days=7)) == 0
+    assert store.get_job(origin['job_id'])['result'] is not None
+    assert store.get_batch(batch['batch_id'])['cache_key'] is None
 
 
 @pytest.mark.parametrize("valid", [True, False])

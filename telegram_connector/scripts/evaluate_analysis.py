@@ -294,21 +294,26 @@ def capture_model_responses(path):
 @contextmanager
 def capture_extraction_rejections(path):
     """Retain rejected synthetic evidence for diagnosis, preserving engine validation."""
-    original = analysis_evidence.validate_evidence_records
+    original = analysis_evidence.classify_extraction_document
     rejected = []
+    def record(job_id, batch_id, document, error):
+        rejected.append({"job_id": job_id, "batch_id": batch_id,
+            "error": error, "document": copy.deepcopy(document)})
+        json_io.write_json_atomic(path, rejected)
     def validate(store, job_id, batch_id, **kwargs):
         try:
-            return original(store, job_id, batch_id, **kwargs)
+            result = original(store, job_id, batch_id, **kwargs)
         except ValueError as exc:
-            rejected.append({"job_id": job_id, "batch_id": batch_id,
-                "error": str(exc), "document": copy.deepcopy(kwargs["document"])})
-            json_io.write_json_atomic(path, rejected)
+            record(job_id, batch_id, kwargs['document'], str(exc))
             raise
-    analysis_evidence.validate_evidence_records = validate
+        if result.get('record_errors'):
+            record(job_id, batch_id, kwargs['document'], ';'.join(sorted(set(result['record_errors'].values()))))
+        return result
+    analysis_evidence.classify_extraction_document = validate
     try:
         yield
     finally:
-        analysis_evidence.validate_evidence_records = original
+        analysis_evidence.classify_extraction_document = original
 
 
 def seed_recorded_sources(conn, recorded):

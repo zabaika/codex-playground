@@ -1,3 +1,5 @@
+from telegram_connector.tests.analysis_fixtures import CURRENT_EVIDENCE_FORMAT, CURRENT_SYNTHESIS_FORMAT
+from telegram_connector.tests.analysis_fixtures import expand_wire_quotes
 """The evaluator grades explicit reviewed facts; it is not a semantic text matcher."""
 
 import copy
@@ -8,12 +10,14 @@ from pathlib import Path
 
 import pytest
 
+from telegram_connector.tests.analysis_fixtures import extraction_inputs, owned_response_from_records
+
 from telegram_connector import telegram_analysis as analysis
 from telegram_connector import analysis_pipeline
 from telegram_connector import analysis_evidence
 from telegram_shared import openai_api
 from telegram_connector.tests.test_analysis_lifecycle import config
-from telegram_connector.tests.test_analysis_evidence import document, model_response, evidence_batch, extract
+from telegram_connector.tests.test_analysis_evidence import document, owned_document, model_response, evidence_batch, extract
 from telegram_connector.tests.test_analysis_manifest import manifest_job
 from telegram_connector.tests.test_analysis_transport import Response
 
@@ -69,18 +73,18 @@ def test_review_eval_cli_has_outer_hard_ttl(evaluator, config, tmp_path, monkeyp
 
 
 def test_s36_eval_contract_rejected_extraction_is_captured_without_changing_validation(evaluator, tmp_path, monkeypatch):
-    rejected = {"records": [{"source_refs": [{"quote": "исходная цитата"}]}], "saturated": False}
+    rejected = {"input_dispositions": {"i0000": {"status": "represented"}}, "saturated": False}
     def validate(*args, **kwargs):
-        if kwargs["document"]["records"]:
+        if kwargs["document"]["input_dispositions"]:
             raise ValueError("evidence_supporting_span")
-        return []
-    monkeypatch.setattr(analysis_evidence, "validate_evidence_records", validate)
+        return {'record_errors': {}}
+    monkeypatch.setattr(analysis_evidence, "classify_extraction_document", validate)
     path = tmp_path / "case.validation.json"
     with evaluator.capture_extraction_rejections(path):
         with pytest.raises(ValueError, match="^evidence_supporting_span$"):
-            analysis_evidence.validate_evidence_records(None, "job", "batch", document=rejected)
-        assert analysis_evidence.validate_evidence_records(None, "job", "other", document={"records": []}) == []
-    assert analysis_evidence.validate_evidence_records is validate
+            analysis_evidence.classify_extraction_document(None, "job", "batch", document=rejected)
+        assert analysis_evidence.classify_extraction_document(None, "job", "other", document={"input_dispositions": {}}) == {'record_errors': {}}
+    assert analysis_evidence.classify_extraction_document is validate
     assert json.loads(path.read_text()) == [{"job_id": "job", "batch_id": "batch",
         "error": "evidence_supporting_span", "document": rejected}]
 
@@ -109,30 +113,30 @@ def bundle():
 @pytest.mark.parametrize("invalid", [False, True])
 def test_capture_wraps_actual_extraction_and_restores_hooks(evaluator, evidence_batch, tmp_path, monkeypatch, invalid):
     store, job, batch = evidence_batch
-    data = document(batch)
+    data = owned_document(batch)
     if invalid:
-        data["records"][0]["source_refs"][0]["quote"] = "Несуществующая цитата"
+        data["input_dispositions"]["i0000"]["records"][0]["supporting_input_ids"] = ["foreign"]
     calls = []
     def send(request, timeout):
         calls.append(request.full_url)
         return Response({"input_tokens": 100} if request.full_url.endswith("input_tokens") else model_response(data))
     monkeypatch.setattr(openai_api._JSON_OPENER, "open", lambda *a, **k: pytest.fail("Unexpected network request"))
     original_request = analysis_pipeline.request_counted_analysis_payload
-    original_validate = analysis_evidence.validate_evidence_records
+    original_validate = analysis_evidence.classify_extraction_document
     stages, rejections = tmp_path / "stages.json", tmp_path / "rejections.json"
     with evaluator.capture_model_responses(stages), evaluator.capture_extraction_rejections(rejections):
         result = extract(store, job, batch, send)
     assert analysis_pipeline.request_counted_analysis_payload is original_request
-    assert analysis_evidence.validate_evidence_records is original_validate
+    assert analysis_evidence.classify_extraction_document is original_validate
     captured = json.loads(stages.read_text())
     assert len(captured) == len([url for url in calls if url.endswith("responses")])
     assert all(entry["job_id"] == job["job_id"] and entry["batch_id"] == batch["batch_id"] for entry in captured)
     attempts = {attempt["attempt_id"] for attempt in store.get_batch(batch["batch_id"])["attempts"]}
     assert all(entry["attempt_id"] in attempts for entry in captured)
     if invalid:
-        assert result["outcome"] == "invalid_schema"
+        assert result["outcome"] == "partial"
         assert len(json.loads(rejections.read_text())) == len(captured)
-        assert all(entry["error"] == "evidence_supporting_span" and entry["document"] == data
+        assert all(entry["error"] == "extraction_owned_record_schema" and entry["document"] == data
                    for entry in json.loads(rejections.read_text()))
     else:
         assert result["outcome"] == "succeeded" and not rejections.exists()
@@ -317,12 +321,12 @@ def fixture_api(command, calls):
         kind = data["text"]["format"]["name"]
         if kind == "telegram_query_terms_v1":
             result = {"terms": ["España", "pasaporte", "residencia"]}
-        elif kind == "telegram_evidence_v1":
-            fragments = json.loads(data["input"].split("Сообщения: ", 1)[1])
+        elif kind == CURRENT_EVIDENCE_FORMAT:
+            fragments = extraction_inputs(data)
             fragment = next(value for value in fragments if value["input"]["role"] == "selected")
             result = document({"messages": [fragment]})
-            result["records"][0].update(record_type="answer" if command == "qa" else "claim", claim=fragment["message"]["text"],
-                conditions=[], exceptions=[], entities=["Uno"], topic_key="case")
+            result['records'][0].update(record_type='answer' if command == 'qa' else 'claim', claim=fragment['message']['text'], entities=['Uno'], topic_key='case')
+            result = owned_response_from_records(data, result)
         elif kind == "telegram_relations_v2":
             pairs = json.loads(data["input"].split("Кандидаты: ", 1)[1])["pairs"]
             result = {"decisions": [{"pair_id": pair["pair_id"], "relation": "complements", "reason": "Fixture"} for pair in pairs], "saturated": False}
@@ -332,10 +336,9 @@ def fixture_api(command, calls):
             result = {"groups": [{"title": "Условия", "summary": "Данные корпуса", "input_ids": ids}],
                 "dispositions": [{"input_id": key, "disposition": "merged", "reason": "Включено"} for key in ids], "saturated": False}
         else:
-            assert kind == "telegram_synthesis_v1"
-            records = json.loads(data["input"].split("Опорные записи: ", 1)[1])["records"]
-            result = {"summary": "Сведения участников", "items": [{"title": "Условия", "text": records[0]["payload"]["claim"],
-                "conditions": [], "exceptions": [], "contradictions": [], "evidence_ids": [records[0]["record_id"]]}],
+            assert kind == CURRENT_SYNTHESIS_FORMAT
+            records = expand_wire_quotes(json.loads(data["input"].split("Опорные записи: ", 1)[1]))["records"]
+            result = {"summary": "Сведения участников", "items": [{'title': 'Условия', 'text': records[0]['payload']['claim'], 'contradictions': [], 'evidence_ids': [records[0]['record_id']]}],
                 "limitations": [], "insufficient_information": False, "saturated": False}
         return Response(model_response(result))
     return send

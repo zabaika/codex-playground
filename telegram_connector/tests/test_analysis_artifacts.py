@@ -81,7 +81,9 @@ def test_s23_full_markdown_contains_scope_question_facts_and_real_sources(manife
     store.conn.execute("UPDATE analysis_jobs SET command=? WHERE job_id=?", (command, job["job_id"]))
     frozen_output_setting(store, job, lambda p: p["request"].update(command=command,
         query="Какие условия у банка?" if command == "search" else None))
-    result["items"][0].update(conditions=["Контракт обязателен"], exceptions=["Кроме нерезидентов"], contradictions=["Другая версия: 60 дней"])
+    item = result["items"][0]
+    item.update(text=item["text"] + " Контракт обязателен. Кроме нерезидентов.",
+                contradictions=["Другая версия: 60 дней"])
     store.save_analysis_result(job["job_id"], result, generation=job["generation"])
     output = render(store, job)
     text = output["text"]
@@ -102,7 +104,7 @@ def test_s23_full_markdown_partial_candidates_and_unavailable_link_are_explicit(
     store.conn.execute("UPDATE channels SET channel_type='Chat',username=NULL WHERE channel_id=22")
     text = render(store, job)["text"]
     assert "Частичный" in text and "extraction" in text and "личный опыт" in text
-    assert "отобранных кандидатов" in text and "неизвестно" in text
+    assert "Анализ предварительно отобранных сообщений; охват периода неполный" in text and "неизвестно" in text
     assert "ссылка недоступна" in text and "22/1" in text
 
 
@@ -120,15 +122,15 @@ def test_s23_full_markdown_model_markup_remains_literal_text(manifest_job):
 def test_s23_full_markdown_caps_drop_whole_items_without_mutating_saved_result(manifest_job):
     store, job = manifest_job
     result = full_result(store, job)
-    result["items"] = [{**copy.deepcopy(result["items"][0]), "title": f"Пункт {i}", "text": "Сведения " * 50,
-        "conditions": [f"Условие {i} обязательно целиком"]} for i in range(4)]
+    result["items"] = [{**copy.deepcopy(result["items"][0]), "title": f"Пункт {i}",
+        "text": "Сведения " * 50 + f"Условие {i} обязательно целиком"} for i in range(4)]
     store.save_analysis_result(job["job_id"], result, generation=job["generation"])
     frozen_output_setting(store, job, lambda p: p["settings"]["analysis"]["output"]["profiles"]["full"].update(max_chars=1400))
     output = render(store, job)
     assert len(output["text"]) <= 1400 and output["result"]["partial"] is True
     assert len(output["result"]["items"]) < 4 and "Частичный" in output["text"]
     for item in output["result"]["items"]:
-        assert item["conditions"][0] in output["text"]
+        assert item["text"] in output["text"]
     assert store.get_job(job["job_id"])["result"] == result
 
 

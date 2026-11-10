@@ -29,7 +29,8 @@ def records_fixture(store, job, values):
         batch = store.plan_batch(job["job_id"], generation=job["generation"], step_key=f"fixture-extract/{index}", kind="extract", payload={})
         data = document({"messages": [fragment]})
         data["records"][0].update({key: copy.deepcopy(item) for key, item in value.items() if key not in {"text", "reply_to"}})
-        records = analysis_evidence.validate_evidence_records(store, job["job_id"], batch["batch_id"], generation=job["generation"], document=data, fragments=[fragment])
+        version = analysis_evidence.record_schema_version(job['request']['settings'])
+        records = analysis_evidence.validate_evidence_records(store, job["job_id"], batch["batch_id"], generation=job["generation"], document=data, fragments=[fragment], record_schema_version=version)
         store.complete_batch(job["job_id"], batch["batch_id"], generation=job["generation"], records=records, inputs=[fragment["input"]])
         result.append(records[0])
     return result
