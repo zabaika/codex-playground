@@ -52,6 +52,44 @@ guidance do not automatically apply to them.
 - Use comments and docstrings to explain non-obvious intent, contracts or constraints
   rather than restating the implementation.
 
+## State and Boundary Contracts
+
+### Return values and exceptions
+
+- Preserve success, valid empty, partial, invalid and unknown outcomes when callers
+  need to distinguish them. Do not reuse `None`, `False` or `[]` for materially
+  different outcomes if that makes the interface ambiguous.
+- Do not hide failures behind broad exception handlers returning success or an
+  empty value. Catch the exceptions the boundary can meaningfully handle.
+- Reuse existing result structures. Introduce a dataclass, TypedDict, enum or
+  class only when the contract needs it.
+
+### Data transformations
+
+- Do not silently drop required elements. Distinguish intentional exclusion from
+  processing failure, and retain required IDs, lineage and source references.
+- Resolve conflicting values only under a defined conflict policy; do not select
+  an arbitrary winner. Avoid surprising mutation of input structures.
+
+### Module interfaces
+
+- When changing serializers, validators, adapters or constructors, inspect the
+  payload actually passed after all transformations, not just the original
+  Python structure.
+- Formatting helpers must not reconstruct obsolete fields or duplicate semantic
+  blocks for compatibility that is no longer supported.
+- During refactoring, preserve actual dependency-resolution points, including
+  mocking and instrumentation; follow the dependency-owner guidance in
+  [Python Baseline](#python-baseline).
+
+### Python tests
+
+- Use existing project factories and fixtures for current contracts. Keep
+  old-format conversions explicit rather than hiding them in universal helpers.
+- Derive expected results independently of the implementation under test.
+- Keep tests readable and consistent with the local project style. General
+  verification policy belongs to [RULEBOOK: Test Rules](./RULEBOOK.md#13-test-rules).
+
 ## Function and Module Size Signals
 
 | Signal | Scope and interpretation |

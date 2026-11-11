@@ -39,6 +39,11 @@ Keep this block current as the repository evolves:
 
 ## Source Of Truth
 
+The source lists below define navigation and reading order, not precedence over
+the owner of a specific contract. If documents disagree, identify that owner,
+check the actual behavior contract, and reconcile the other documents with it;
+do not automatically choose the first listed file.
+
 When working in `telegram_connector`, prefer these sources in this order:
 - [telegram_connector/README.md](./telegram_connector/README.md) for current user-facing behavior and command surface
 - [telegram_connector/AGENTS.md](./telegram_connector/AGENTS.md) for project-specific coding boundaries

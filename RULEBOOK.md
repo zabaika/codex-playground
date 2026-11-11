@@ -65,6 +65,9 @@ Keep documentation split by responsibility:
 - if a wrapper or orchestration layer needs to expose upstream metadata, pass through or parse the canonical upstream artifact instead of reconstructing it with local placeholders or guessed values
 - if an orchestration or producer workflow already has a shared downstream writer for user-facing notes or documents, keep the producer responsible only for orchestration and structured payloads; do not let it own a second local copy of the final note contract
 - for user-facing output contracts such as final summaries, created-vs-updated reports, or section ordering, keep one canonical definition in the deepest owning workflow and make wrappers inherit it instead of restating the same format in multiple places
+- designate one owner of semantic composition for each published result; if several structured sources contribute, name their combining component explicitly; renderers, transports and wrappers must not independently add the same facts or conditions to an already composed result
+- multiple physical representations are allowed as derived views of that owner; this does not require storing the result as a single string
+- when changing the content contract, check producers, transformations, consumers and actually assembled prompts; remove obsolete parallel schema fields unless an active consumer or supported compatibility obligation still requires them
 - if a wrapper delegates note creation, document rendering, or another structured-output workflow to a deeper canonical owner, delegate the final write path as well instead of reusing only a local formatting helper from that owner while bypassing its route resolution, save logic, or final contract checks
 - apply the same inheritance rule to final validation layers: if a wrapper delegates note creation, document rendering, or another structured-output workflow to a deeper canonical owner, the wrapper must inherit that owner's final compliance passes and quality gates instead of silently shortening the validation path
 
@@ -84,6 +87,7 @@ Keep documentation split by responsibility:
 
 #### Contract Ownership and Validation
 
+- when renaming or moving a rule section, search for references to its previous title or anchor; update affected consumers in the same change, preserving the rule's meaning and canonical ownership
 - if behavior changes, update code, tests, and the relevant source-of-truth document in the same change
 - when a top-level project, tool, or workflow becomes a meaningful navigation anchor, update both the root `README.md` project index and the root `AGENTS.md` repo layout in the same change
 - when a workflow grows beyond a few pages of rules, split it into one thin entrypoint plus canonical reference docs; keep the entrypoint focused on sequencing and keep detailed policy in the deepest owning reference file
@@ -182,12 +186,22 @@ Keep documentation split by responsibility:
 - keep shared contracts, defaults, and repeated execution rules under one canonical owner; include critical step-specific conditions directly, reference shared details, and map every mandatory requirement to an implementation step and a verification check
 - when several components must compose, plan an early observable end-to-end slice using bounded fixtures where appropriate, then extend it; distinguish fixture integration from working external integrations
 - after each completed step or interruption, record verified progress, decisions, remaining work, and the exact next action so execution can resume without relying on chat memory
-- do not stop at `implemented`; stop only when the success criteria have been verified or a concrete blocker is surfaced
+- do not stop at `implemented`; verify mandatory success criteria or record an honest stop under the bounded improvement policy below, with unmet criteria and blockers explicit
 - prefer strong, local success criteria over broad phrases like `make it work`, because weak criteria force repeated clarification and invite silent drift
 - before asserting a pipeline-wide property, inspect the relevant path from producer through transformations to consumers; a property of one component does not establish the same property for the whole workflow
 - limit each claim to the scope actually verified; distinguish self-review, automated checks, independent review, code inspection, and demonstrated runtime behavior, naming the applicable method and remaining limits in substantial verification reports
 - mechanical artifact validation must consume the current saved artifact; if it uses a separately maintained model, inventory or graph, first verify that representation against the artifact and identify the revision checked; report only the properties actually established by that check
 - follow [File and Context Reading](./AGENTS.md#file-and-context-reading) when scoping reads and handling output limits; partial output remains incomplete evidence, and Skill Rule Context Loading defines when full rule-file coverage is required
+
+##### Bounded Improvement and Stopping Policy
+
+- before substantial iterative work, define a measurable Definition of Done; distinguish mandatory requirements, critical blockers, explicitly acceptable limitations and optional improvements
+- for experimental development, complex debugging and optimization, set a finite iteration budget and applicable time, cost and resource limits before starting; routine TDD cycles within approved scope need no new approval
+- each iteration needs a concrete problem, testable hypothesis, expected result, verification method and stop criterion; start another only with new evidence or an explainable hypothesis
+- stop further optimization when sufficient quality is verified, the budget or iteration limit is exhausted, improvement is no longer measurable, fixes systematically introduce comparable defects, complexity outweighs benefit, or progress requires a material revision of approved architecture or scope
+- do not continue merely because a better solution might exist; do not automatically reset the iteration counter, expand scope or extend the budget at its limit; obtain authorization before changing agreed limits or material scope
+- at a stop, record the achieved result, remaining defects and unmet criteria, evidence and available options: accept only explicitly permitted limitations, move optional improvements to backlog, roll back to a verified version, stop rollout because of blockers, or propose a separate bounded plan
+- `Loop until verified` requires verified mandatory criteria or that honest recorded stop; exhausted budgets and unsafe results never count as successful completion
 
 #### 5. External OS Services and Signing Agents
 
@@ -210,6 +224,7 @@ Keep documentation split by responsibility:
 - config examples must include a nearby comment explaining what the limit bounds and whether it applies per item, per request, per command, or to the whole process
 - if code clamps a config value to a range, the nearby config comment must state that range with `Values are clamped to ...`
 - avoid hidden fallback constants for business behavior; use code defaults only as compatibility fallbacks for missing older configs
+- reconcile limits across stages and retries: aggregate work, intermediate growth, input/output tokens with completion reserves, calls, cost, storage and elapsed time must fit the shared budget and whole-run deadline; a per-step limit alone does not establish feasibility
 
 Examples:
 
@@ -292,6 +307,10 @@ they do not waive mandatory security, authorization or verification requirements
 ### Workflow State and Entity Model
 
 - when a workflow tracks business progress over time, define one canonical entity vocabulary before adding UI views, agent wrappers, reports, or automations on top of it
+- define the independently meaningful processing unit and distinguish technical termination, coverage completeness, structural validity, semantic correctness and publication; one successful status or valid schema must not stand in for all five
+- define atomicity and localize failures to the smallest contractually independent unit; retain confirmed partial progress when the operation allows it, distinguishing incomplete responses from valid empty results
+- define retry, repair, resume and invalidation at those boundaries; cover failure between an external call, its receipt and a checkpoint, reconciling uncertain effects before replay
+- for filtering, merging, deduplication, compaction, summarization and repair, define permitted information loss in the project contract; trace required facts, independent events, conditions and provenance through producer, transformations and final consumer; results must not claim completeness beyond the evidence
 - distinguish primary business entities from their occurrences, events, or derived views; do not collapse canonical records, source-specific sightings, reminders, audit entries, and projections into one overloaded table or object
 - keep workflow stages separate from orthogonal flags such as hidden, processed, archived, blocked, or materially_changed; do not overload one status field to mean both progression and side-condition overlays
 - if several related state machines exist, such as item workflow, external action progress, human touchpoints, or review flows, keep them explicitly separate unless they truly share the same lifecycle semantics
@@ -300,7 +319,11 @@ they do not waive mandatory security, authorization or verification requirements
 - when a new surface needs a queue, dashboard, or operator list, build it as a projection over canonical entities and states rather than as a second mutable state store
 - when sources or results change, assess dependent artifacts against the project's version, freshness and snapshot contract; invalidate only dependent artifacts made unsuitable for the intended operation, and verify the applicable source/result version at publication or restoration; a valid historical snapshot need not become stale when its source changes
 - preserve required dependencies or a supported reconstruction path for promised reading, verification, redelivery or restoration, even after a task completes or fails; distinguish these obligations from ordinary reuse-cache retention; after dependency expiry, apply the declared restoration/recomputation policy or explicitly refuse an operation that can no longer be supported
-- preserve confirmed and uncertain external-effect history independently of result validity; recomputing or invalidating a result does not authorize repeating an external effect
+- preserve confirmed and uncertain external-effect history independently of result validity and temporary execution state; recomputing or invalidating a result, deleting or restoring internal state does not authorize repeating a confirmed action; reconcile uncertain effects before retry
+- keep durable results, audit, usage, costs and delivery receipts distinct from temporary execution checkpoints and caches, each under its own existing retention contract; inspect cascade/delete dependencies so temporary cleanup cannot erase retained history
+- reading a retained historical result must not require executing an obsolete algorithm when the necessary data is already available; retain a supported legacy execution path while existing jobs still need it to resume
+
+These lifecycle rules require neither indefinite retention nor a new archive subsystem.
 
 ### Surface Independence and Degraded Mode
 
@@ -557,7 +580,7 @@ Rules:
 - before freezing analysis inputs, satisfy the project's input-readiness contract for the requested scope and verify the required output is available to the next stage; a missing or disabled required stage is a configuration/readiness issue, handled under the declared stop/degraded policy; do not invent dependencies on unrelated pending data or bypass shared resource limits
 - when resuming from frozen inputs or a manifest/checkpoint, preserve that input version; rerunning prerequisite processing must not silently change it; any rebuild follows the project's explicit policy and consistently invalidates results/artifacts that are no longer compatible
 - choose intermediate representations for large or multi-stage inputs according to the task contract, using bounded hierarchical processing where needed; summaries are appropriate only when they preserve the information required by that contract
-- when transforming, combining or reducing data, verify preservation of required information and its provenance where needed; permitted information loss and coverage limits belong to the project contract, and results must not claim completeness beyond the evidence
+- apply the [cross-stage preservation contract](#workflow-state-and-entity-model) when choosing or transforming AI inputs and outputs
 - do not mix unrelated sources inside one AI batch if source-level context matters
 - include lightweight provenance in prompts when it improves quality, such as source name, sender identity, timestamp, and message id
 - if per-source AI results are independently readable, emit them progressively and send a final status summary only when something failed or was skipped
@@ -745,7 +768,10 @@ Use the subset that matches the project. For example, a local skill may not need
 Rules:
 
 - every new command nuance should have a parser test
+- functional tests should primarily verify current behavior and public contracts; keep supported backward-compatibility cases distinct, without making historical algorithms or prompts accidental dependencies of current-behavior tests
 - prompt tests must verify transmitted data, structure and application behavior without depending on instructional wording, prose headings or formatting; use model evaluations for semantic compliance. Apply this to assertions, fixtures, helpers and mocks; do not parse payloads through editorial headings. Keep exact matching for explicit literal contracts, fixture markers and security boundaries. Preserve the original guarantee when replacing a check, and report any remaining semantic coverage gap.
+- fixture updates must preserve independent behavioral assertions rather than hide regressions; remove obsolete tests only after verifying that required coverage survives elsewhere
+- a passing test count does not establish semantic completeness; use the distinct code, semantic-quality, resource and runtime evidence gates below for the claims they actually cover
 - every new config nuance should have a config test
 - every security hardening rule should have at least one regression test
 - when a project defines a canonical project-local virtualenv for tests, install dependencies and run the suite through that environment instead of the system Python
