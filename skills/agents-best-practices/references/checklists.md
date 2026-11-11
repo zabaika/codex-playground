@@ -8,6 +8,7 @@ Apply only items required by the chosen design; this checklist must not create u
 - [ ] The complete current deliverable received the mandatory [final review](harness-workflows.md#final-deliverable-review) after drafting or revision; corrections and unverified assumptions are reflected consistently.
 - [ ] Fixed workflow versus model-directed loop is chosen with a brief rationale.
 - [ ] Significant new components/settings are justified against checked reuse options; numbers are identified as constraints, measurements or proposed defaults.
+- [ ] Qualifying architecture passed the [pre-implementation risk review](harness-workflows.md#pre-implementation-architecture-risk-review); material findings, owners, minimal corrections and negative acceptance checks are in the existing plan. A local fix without those risks remains exempt from the full audit.
 - [ ] Domain, primary user, and job-to-be-done are stated.
 - [ ] MVP scope, assumptions, non-goals, and deferred capabilities are explicit.
 - [ ] Autonomy level is the lowest level that still creates value.
@@ -241,6 +242,7 @@ For each tool:
 - [ ] Approval-required actions are listed.
 - [ ] Progress log is durable.
 - [ ] Stop rules are explicit.
+- [ ] Iterative engineering follows the repository-root `RULEBOOK.md` section `Bounded Improvement and Stopping Policy`; sufficient quality or an exhausted limit ends optimization without an automatic counter reset, budget extension or scope expansion, and unmet mandatory criteria remain explicit.
 
 ## Workflow orchestration checklist
 
@@ -385,6 +387,7 @@ Use [evals.md](evals.md) for evaluation strategy, trace grading, adversarial cas
 - [ ] Cost and latency measured.
 - [ ] Regression evals added for every production incident.
 - [ ] Fixtures reconstruct runtime state as well as messages; paired and cross-capability cases exercise required and forbidden behavior.
+- [ ] Applicable [architecture-review cases](evals.md#architecture-risk-review-evaluation) assess decisions, ownership, minimality and stopping; self-application and independent evidence are reported separately.
 - [ ] Quality, safety, completed-task cost, first useful UI, and end-to-end latency gate model/configuration selection.
 - [ ] Component comparisons state tested budget/configuration scope, distinguish overflow and early failure from efficiency, and use mutation evidence separately from judged phases.
 - [ ] Alternative action profiles meet equivalent host-control and verification requirements or are explicitly reported as bundled interventions.

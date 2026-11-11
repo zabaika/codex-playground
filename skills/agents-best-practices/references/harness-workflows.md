@@ -84,11 +84,96 @@ Return a compact, actionable deliverable:
 
 Use only relevant mechanisms; a specification edit does not require a complete harness blueprint, paid probe or runtime scaffold. Present the diagnosis and plan under the entrypoint's approval gate, then wait for explicit approval before implementation. Approval of a previously presented plan is execution authority within that scope, not a request to produce another plan.
 
+## Pre-implementation Architecture Risk Review
+
+Before implementing substantial multi-stage, stateful or LLM-driven architecture,
+review the material risks below. Use the existing specification/plan and acceptance
+criteria; no separate review document is required. A local fix without those risks
+needs only its affected-contract checks, not this full review. In design or
+requirements mode, resolve these risks before presenting the implementation plan;
+in approved execution, check them against current state before implementation.
+The entrypoint's approval gate still controls material architecture/scope changes.
+
+This procedure applies Playground's repository-root `RULEBOOK.md` rather than
+replacing it: `Workflow State and Entity Model` for state, lifecycle and
+information preservation; `Wrapper and Orchestration Inheritance` for content
+composition; `6. Runtime Limits and Operator-Visible Guardrails` for budgets;
+`Bounded Improvement and Stopping Policy` for iteration limits; and
+`13. Test Rules` for verification.
+
+For each applicable area, trace a representative input through actual producers,
+transformations and consumers. Record the contract owner, evidence or unresolved
+assumption, smallest necessary correction, negative test/invariant and acceptance
+check. Resolve blockers or leave them explicitly blocking implementation; do not
+turn every question into a component, field or mandatory report section.
+
+### A. Semantic Contracts
+
+Identify the independent processing unit, allowed combinations, transformations
+and exclusions. What exactly proves termination, coverage, structural validity,
+semantic correctness and eligibility for publication? Name the information that
+must survive and the owner composing the final content. Compare model prompts,
+schemas, validators and application code for conflicting obligations. Inspect
+assembled prompts and downstream payloads, not just templates or Python objects.
+Test a valid unchanged/empty outcome as well as an invalid one: a progress metric
+must measure the requested semantic goal rather than force unrelated reductions.
+
+### B. Failure & Recovery
+
+Walk through partial success and incomplete responses at the operation's atomic
+boundaries. Which valid units survive a neighboring failure? Identify retry,
+repair, resume and invalidation behavior, including a crash between external
+acceptance, receipt and checkpoint. Check confirmed-progress preservation and
+uncertain-effect reconciliation. Trace durable history independently of execution
+state through restart and temporary cleanup, using the existing storage owner.
+For agent-specific dependency probes, use
+[result dependencies and retention](always-on-agents.md#result-dependencies-and-retention).
+
+### C. Information Preservation
+
+For filtering, merging, deduplication, compaction, summarization and repair, ask
+which losses the task explicitly permits. Follow required facts, independent
+events, conditions and provenance to the final consumer, using
+[handoff inspection](workflow-orchestration.md#information-preservation-and-handoffs).
+Contrast a permitted reduction with an input whose distinct events must survive.
+Identify repeated semantic composition by model, renderer or wrapper. Fix the
+conflicting ownership/contract instead of adding another content deduplicator.
+
+### D. Resource Feasibility
+
+Size a representative full-scope input before large-scale implementation. Estimate
+or measure intermediate records and relationship growth, input/output tokens with
+completion reserves, API calls, cost, duration and storage against the shared
+deadline and budgets, including retries/repair. Show the assumptions and limiting
+stage; use a bounded sizing probe where needed. A tiny passing fixture establishes
+only that fixture's behavior, not full-volume feasibility. Change the processing
+strategy or expose an unresolved feasibility gate when the envelope cannot fit.
+
+### E. Simplicity & Exit Strategy
+
+Compare the proposal with the smallest working baseline. Justify each material
+new component, field and abstraction against a current requirement and reuse
+options. Put measurable sufficient-quality criteria, finite experimental iteration
+and resource budgets, stopping conditions and rollback in the existing plan under
+the linked bounded improvement policy. Check which old mechanisms can be removed
+after the contract changes; distinguish obsolete representation from legacy
+execution still required by resumable jobs. Use one content owner and existing
+storage/compatibility contracts rather than adding layers to hide a root cause.
+
+Close the review by mapping material findings to the plan's existing acceptance
+checks and [architecture-review evals](evals.md#architecture-risk-review-evaluation).
+Keep code correctness, semantic quality, performance and demonstrated runtime
+behavior as separate evidence. Successful static review is not runtime proof.
+
 ## Implementation Plan Structure
 
 Use this contract when the requested deliverable includes substantial multi-step implementation, whether the primary route is design, audit, troubleshooting or requirements refinement. Keep a brief diagnosis or small specification edit compact. Adapt headings and layout to the user's requested format; this contract does not require extra files or a fixed number of steps. Repository rules remain authoritative for approval, coding and TDD policy.
 
 Before designing the sequence, consolidate mandatory requirements, latest user corrections, scope exclusions and open decisions into a compact inventory. Distinguish user decisions, observed project facts and proposed assumptions; resolve superseded requirements explicitly. Reuse the existing requirement-to-check mapping as this inventory when possible rather than creating a parallel ledger.
+
+For qualifying architecture, carry forward the findings and acceptance checks from
+the [pre-implementation risk review](#pre-implementation-architecture-risk-review)
+instead of conducting a second audit or creating a parallel requirements ledger.
 
 Start with a short shared contract: the intended user-visible outcome, scope, mandatory constraints, accepted decisions and unresolved assumptions. Identify one owner for shared schemas, interfaces, configuration defaults and repeated execution rules. Put detailed shared contracts in an addressable reference section or the existing project owner. Cards carry critical local conditions and exceptions; shared TDD, regression and progress rules need a precise reference rather than repeated boilerplate. Keep settings excerpts tied to their canonical keys and units; overrides must not silently become different defaults.
 

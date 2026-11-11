@@ -91,6 +91,40 @@ For plan review, exercise these evidence and dependency boundaries:
 - **Technical prerequisite:** a consumer needs a type, schema or interface produced by an earlier step. Name that output and retain the dependency; calling it scheduling preference cannot make an unavailable prerequisite usable.
 - **Mandatory gate:** an integration check, approval or exclusive-resource handoff must precede a later action despite independent code. Preserve the gate separately from code dependencies and scheduling preferences.
 
+## Architecture risk review evaluation
+
+For changes to the [pre-implementation review](harness-workflows.md#pre-implementation-architecture-risk-review),
+apply baseline and candidate instructions to the same task contracts and raw
+artifacts where available. Use the existing case shape and
+[independent evaluation method](#independent-skill-evaluation); the expectations
+below are evaluator material, not hints for an independent executor. If only
+self-application is available, disclose that limitation and avoid claims of
+independently measured improvement.
+
+For each applicable case, assess the actual diagnosis, contract owner, smallest
+correction, negative tests/invariants, unnecessary layers and preserved completion
+criteria. Credit a valid alternative solution; vocabulary matches are not evidence.
+Record whether the baseline already handled the case, the candidate changes the
+decision, or evidence is insufficient. An added requirement without demonstrated
+decision value should be simplified or removed.
+
+| Case | Evaluator checks |
+| --- | --- |
+| `merge_no_progress`: input contains independent events with no valid merge | Accept unchanged groups as a valid semantic outcome; distinguish terminal/no-op from failure. Test independent and genuinely duplicate events; do not force group-count reduction. |
+| Relations: one returned pair lies outside the requested set | Use the declared atomic unit; isolate the invalid pair and retain valid independent decisions where permitted. Test mixed valid/foreign pairs without weakening pair validation. |
+| Extraction: one source item contains several independent events | Preserve every required event, condition and source link through extraction and merging. Contrast true duplicates; test final consumer input rather than counts alone. |
+| Recovery: restart follows partial acceptance or an external receipt | Preserve confirmed units; retry only eligible remainder and reconcile uncertain effects. Probe crash before/after receipt/checkpoint and verify resumed state, not just in-memory output. |
+| Feasibility: representative records and candidate pairs grow beyond limits | Account for intermediate growth, request/output capacity, reserves, calls, cost, storage and deadline. Reject tiny-fixture success as full-scale proof; use the smallest feasible strategy. |
+| Local Python fix with no material architecture risk | Keep ordinary affected-contract checks; no full architecture audit, new plan artifact or result-class hierarchy. Preserve the local Definition of Done. |
+| Optimization reaches its agreed iteration limit with optional gains remaining | Stop, retain evidence and report remaining criteria under the repository's bounded improvement policy. No automatic counter reset, budget extension or scope expansion; unmet mandatory criteria remain incomplete. |
+| Model and renderer both compose the same facts/conditions | Inspect assembled prompts and published payload; assign composition to one owner and remove conflicting additions/obsolete fields. Test required facts once without adding another deduplicator. |
+| Checkpoint/cache deletion affects retained history; current tests require obsolete algorithms | Inspect actual delete/cascade dependencies and reopened historical results under existing retention. Read retained data without old execution where possible; preserve legacy resume only where required. Separate current-contract tests from supported compatibility; preserve coverage without a new archive or compatibility layer. |
+
+Also contrast misleading document reading order with correct contract ownership:
+when README, RULEBOOK, CODE_CONVENTIONS and SKILL disagree, identify the specific
+owner and actual contract, then reconcile dependents. Do not grade the first file
+in AGENTS' navigation list as automatically authoritative.
+
 ## Named public suites
 
 Use public benchmark names as calibration examples, not as the only valid evals.
