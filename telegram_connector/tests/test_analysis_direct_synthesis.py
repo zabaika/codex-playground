@@ -5,6 +5,7 @@ import json
 
 import pytest
 
+from telegram_connector.tests.analysis_fixtures import prompt_json
 from telegram_connector import analysis_pipeline
 from telegram_connector.tests.test_analysis_manifest import manifest_job
 from telegram_connector.tests.test_analysis_relations import records_fixture
@@ -113,7 +114,7 @@ def test_complete_frontier_skips_merge_and_reuses_exact_synthesis_count(manifest
     def provider(req, timeout):
         payload = json.loads(req.data)
         calls.append((req.full_url, payload))
-        evidence = expand_wire_quotes(json.loads(payload['input'].split('Опорные записи: ', 1)[1]))
+        evidence = expand_wire_quotes(prompt_json(payload['input'], 'evidence'))
         assert evidence['group_order'] == 'unranked'
         assert {analysis_pipeline.canonical_json(semantic_fact_payload(r['payload'], synthesis=True)) for r in evidence['records']} == {
             analysis_pipeline.canonical_json(semantic_fact_payload(r['payload'], synthesis=True)) for r in records}

@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 
 import pytest
 
+from telegram_connector.tests.analysis_fixtures import prompt_json
 from telegram_connector import analysis_telemetry as telemetry
 from telegram_connector.tests.test_analysis_manifest import manifest_job, change_setting
 from telegram_connector.tests.test_analysis_relations import records_fixture, link, link_sender, candidates
@@ -28,7 +29,7 @@ def test_adaptive_and_fixed_keep_the_same_complete_pair_set(manifest_job, ceilin
     delegate = link_sender('complements')
     def provider(req, timeout):
         if not req.full_url.endswith('input_tokens'):
-            data = json.loads(json.loads(req.data)['input'].split('Кандидаты: ', 1)[1])
+            data = prompt_json(json.loads(req.data)['input'], 'records')
             assert len({r['record_id'] for r in data['records']}) == len(data['records'])
             # Wire aliases are local to a request; compare immutable fact identities.
             labels = {r['record_id']: r['payload']['claim'] for r in data['records']}

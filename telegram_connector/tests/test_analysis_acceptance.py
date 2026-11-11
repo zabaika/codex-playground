@@ -9,6 +9,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
+from telegram_connector.tests.analysis_fixtures import prompt_json
 from telegram_connector import telegram_analysis as analysis, telegram_bridge as bridge
 from telegram_connector import analysis_pipeline
 from telegram_connector.analysis_store import AnalysisStore, BudgetExceededError
@@ -343,5 +344,5 @@ def test_s34_fault_boundaries_untrusted_history_cannot_change_instruction_or_too
     assert "UNTRUSTED_OVERRIDE_884" not in payload["instructions"]
     assert "tools" not in payload and payload["model"] == "fixture-model" and payload["store"] is False
     assert payload["text"]["format"]["strict"] is True
-    sources = json.loads(payload["input"].split("Сообщения: ", 1)[1])
+    sources = prompt_json(payload["input"], 'messages')
     assert sources["inputs"][0]["message"]["text"] == attack

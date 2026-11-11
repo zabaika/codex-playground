@@ -4,6 +4,7 @@ from urllib.error import URLError
 
 import pytest
 
+from telegram_connector.tests.analysis_fixtures import prompt_json
 from telegram_connector import analysis_evidence as evidence
 from telegram_connector import analysis_pipeline as pipeline
 from telegram_connector import analysis_telemetry
@@ -87,7 +88,7 @@ def fixture_pairs(manifest_job):
 
 def request_pairs(req):
     payload = json.loads(req.data)
-    data = json.loads(payload["input"].split("Кандидаты: ", 1)[1])
+    data = prompt_json(payload["input"], 'records')
     return payload, data["pairs"]
 
 

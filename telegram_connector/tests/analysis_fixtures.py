@@ -1,6 +1,8 @@
 """Explicit current fixtures; negative responses pass through without repair."""
 import copy
 import json
+from pathlib import Path
+import tomllib
 
 from telegram_connector import analysis_evidence, analysis_settings
 
@@ -8,22 +10,56 @@ CURRENT_EVIDENCE_FORMAT = analysis_evidence.ADDRESSED_EVIDENCE_FORMATS[analysis_
 CURRENT_SYNTHESIS_FORMAT = analysis_evidence.synthesis_format()['name']
 
 
+def write_prompt_bundle(directory):
+    """Explicit mock-provider protocol, separate from editable production prose."""
+    source = Path(__file__).resolve().parents[1] / 'config/analysis_prompts.toml'
+    bundle = tomllib.loads(source.read_text())['analysis_prompts']
+    bundle['templates'] = {
+        stage: '\n'.join(f'<fixture:{key}>{{{key}}}</fixture:{key}>'
+                         for key in sorted(fields))
+        for stage, fields in analysis_settings.PROMPT_FIELDS.items()}
+    bundle['commands'] = {key: f'fixture-command-{key}' for key in bundle['commands']}
+    bundle['details'] = {key: f'fixture-detail-{key}' for key in bundle['details']}
+    lines = ['[analysis_prompts]']
+    for key in ('version', 'system_instructions', 'shared_prefix'):
+        lines.append(f'{key} = {json.dumps(bundle[key], ensure_ascii=False)}')
+    for section in ('templates', 'commands', 'details'):
+        lines.append(f'[analysis_prompts.{section}]')
+        lines.extend(f'{key} = {json.dumps(value, ensure_ascii=False)}'
+                     for key, value in bundle[section].items())
+    destination = directory / 'fixture-prompts.toml'
+    destination.write_text('\n'.join(lines) + '\n')
+    return str(destination)
+
+
+def prompt_field(payload, key):
+    """Read one field from the actual serialized test-provider request."""
+    text = payload['input'] if isinstance(payload, dict) else payload
+    start, end = f'<fixture:{key}>', f'</fixture:{key}>'
+    assert text.count(start) == 1, f'Missing or duplicated fixture field: {key}'
+    return text.split(start, 1)[1].split(end, 1)[0]
+
+
+def prompt_json(payload, key):
+    return json.loads(prompt_field(payload, key))
+
+
 def extraction_inputs(payload):
     text = payload['input']
-    if 'Некорректный результат: ' in text:
-        return json.loads(text.split('Некорректный результат: ', 1)[1].split('\nОшибки валидации:', 1)[0])['inputs']
-    return json.loads(text.split('Сообщения: ', 1)[1])['inputs']
+    if '<fixture:invalid_output>' in text:
+        return prompt_json(payload, 'invalid_output')['inputs']
+    return prompt_json(payload, 'messages')['inputs']
 
 
 def owned_response_from_records(payload, document):
     """Author a mock response from fixture facts, before applying fault mutations."""
     inputs = extraction_inputs(payload)
     text = payload['input']
-    if 'Некорректный результат: ' in text:
-        repair = json.loads(text.split('Некорректный результат: ', 1)[1].split('\nОшибки валидации:', 1)[0])
+    if '<fixture:invalid_output>' in text:
+        repair = prompt_json(payload, 'invalid_output')
         context = repair['context']
     else:
-        context = json.loads(text.split('Контекст: ', 1)[1].split('\nСообщения: ', 1)[0])
+        context = prompt_json(payload, 'context')
     supplied = [*inputs, *context]
     def resolve(ref):
         matches = [fragment['input_id'] for fragment in supplied

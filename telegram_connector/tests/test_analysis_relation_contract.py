@@ -3,6 +3,7 @@ import copy
 
 import pytest
 
+from telegram_connector.tests.analysis_fixtures import prompt_json
 from telegram_connector import analysis_pipeline as pipeline, analysis_evidence as evidence
 from telegram_connector.tests.test_analysis_manifest import manifest_job
 from telegram_connector.tests.test_analysis_relations import records_fixture
@@ -73,7 +74,7 @@ def test_semantic_repair_keeps_good_pairs_and_stable_aliases(manifest_job):
     def provider(req, timeout):
         if req.full_url.endswith('input_tokens'):
             return Response({'input_tokens': 100})
-        wire = json.loads(json.loads(req.data)['input'].split('Кандидаты: ', 1)[1])
+        wire = prompt_json(json.loads(req.data)['input'], 'records')
         sent.append(wire)
         assert len(wire['pairs']) == (3 if len(sent) == 1 else 1)
         if len(sent) == 1:

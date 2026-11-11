@@ -3,6 +3,7 @@ import json
 
 import pytest
 
+from telegram_connector.tests.analysis_fixtures import prompt_json
 from telegram_connector import telegram_analysis as analysis
 from telegram_connector import analysis_pipeline
 from telegram_connector.tests.test_analysis_manifest import manifest_job, change_setting, build, resume, seed
@@ -30,7 +31,7 @@ def merge_sender(*, bad_ref=False, no_progress=False):
             fmt = json.loads(req.data).get('text', {}).get('format', {}).get('name')
             return Response({"input_tokens": 1000000 if fmt in {'telegram_synthesis_v1', 'telegram_synthesis_v3', CURRENT_SYNTHESIS_FORMAT} else 100})
         request = json.loads(req.data)
-        values = json.loads(request["input"].split("Записи: ", 1)[1])["inputs"]
+        values = prompt_json(request["input"], 'records')["inputs"]
         ids = [value["node_id"] for value in values]
         groups = [{"title": "Условия", "summary": "Сроки и условия сохранены в исходных фактах.", "input_ids": ["forged"] if bad_ref else ids}]
         if no_progress:
@@ -96,8 +97,11 @@ def test_unranked_complete_frontier_is_explicit_at_synthesis_boundary(manifest_j
     assert len(value["groups"]) == len(value["records"]) == 9
     assert {r["record_id"] for r in value["records"]} == {r["record_id"] for r in original}
     payload = analysis_pipeline.build_synthesis_payload(current, value)
-    assert '"group_order":"unranked"' in payload["input"]
-    assert "по всему набору" in payload["input"]
+    wire = prompt_json(payload, 'evidence')
+    assert wire['group_order'] == 'unranked'
+    assert wire['coverage']['ranking_scope'] == 'complete'
+    assert {r['claim'] for r in wire['records']} == {r['payload']['claim'] for r in original}
+    assert len(wire['topic_components']) == 9
 
 
 def test_no_reduction_keeps_independent_relations_partial_reason(manifest_job):
@@ -155,7 +159,7 @@ def test_s19_hierarchical_merge_link_decisions_are_visible_to_reducer(manifest_j
     delegate = merge_sender()
     def sender(req, timeout):
         if not req.full_url.endswith("input_tokens"):
-            data = json.loads(json.loads(req.data)["input"].split("Записи: ", 1)[1])
+            data = prompt_json(json.loads(req.data)["input"], 'records')
             assert any(item["relation"] == "contradicts" for item in data.get("relations", []))
         return delegate(req, timeout)
     assert merge(store, job, sender)["partial"] is False
@@ -177,7 +181,7 @@ def test_s19_hierarchical_merge_token_limit_reduces_fan_in_and_recounts(manifest
     def sender(req, timeout):
         if json.loads(req.data).get('text', {}).get('format', {}).get('name') in {'telegram_synthesis_v1', 'telegram_synthesis_v3', CURRENT_SYNTHESIS_FORMAT}:
             return delegate(req, timeout)
-        data = json.loads(json.loads(req.data)["input"].split("Записи: ", 1)[1])
+        data = prompt_json(json.loads(req.data)["input"], 'records')
         if req.full_url.endswith("input_tokens") and len(data["inputs"]) > 2:
             return Response({"input_tokens": job["request"]["settings"]["analysis"]["max_input_tokens"] + 1})
         return delegate(req, timeout)
@@ -362,7 +366,7 @@ def test_s19_hierarchical_merge_discarded_input_is_explicit_and_leaf_is_retained
         if req.full_url.endswith("input_tokens"):
             fmt = json.loads(req.data).get('text', {}).get('format', {}).get('name')
             return Response({"input_tokens": 1000000 if fmt in {'telegram_synthesis_v1', 'telegram_synthesis_v3', CURRENT_SYNTHESIS_FORMAT} else 100})
-        data = json.loads(json.loads(req.data)["input"].split("Записи: ", 1)[1])
+        data = prompt_json(json.loads(req.data)["input"], 'records')
         return Response(model_response({"groups": [], "dispositions": [{"input_id": value["node_id"],
             "disposition": disposition, "reason": "Явное исключение"} for value in data["inputs"]], "saturated": False}))
     result = merge(store, job, sender)

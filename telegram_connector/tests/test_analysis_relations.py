@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from telegram_connector.tests.analysis_fixtures import prompt_json
 from telegram_connector import telegram_analysis as analysis
 from telegram_connector import analysis_evidence
 from telegram_connector import telegram_history_client as history
@@ -78,7 +79,7 @@ def link_sender(relation, *, forge=False):
         request = json.loads(req.data)
         if req.full_url.endswith("input_tokens"):
             return Response({"input_tokens": 100})
-        data = json.loads(request["input"].split("Кандидаты: ", 1)[1])
+        data = prompt_json(request["input"], 'records')
         decisions = [relation_decision(pair, relation, "Опирается на содержание обеих записей.") for pair in data["pairs"]]
         if forge:
             for value in decisions:
@@ -169,7 +170,7 @@ def test_s18_record_relations_large_input_splits_and_counts_every_child(manifest
     delegate = link_sender("unrelated")
     def sender(req, timeout):
         request = json.loads(req.data)
-        data = json.loads(request["input"].split("Кандидаты: ", 1)[1])
+        data = prompt_json(request["input"], 'records')
         sent.append((req.full_url.endswith("input_tokens"), len(data["pairs"])))
         if req.full_url.endswith("input_tokens") and len(data["pairs"]) > 1:
             return Response({"input_tokens": job["request"]["settings"]["analysis"]["max_input_tokens"] + 1})
@@ -208,12 +209,12 @@ def test_s36_single_pair_declared_saturation_gets_one_bounded_repair(manifest_jo
         requests.append(json.loads(req.data))
         if len(requests) == 1:
             return Response(model_response({"decisions": [], "saturated": True}))
-        pairs = json.loads(requests[0]["input"].split("Кандидаты: ", 1)[1])["pairs"]
+        pairs = prompt_json(requests[0]["input"], 'records')["pairs"]
         return Response(model_response({"decisions": [relation_decision(pair, "contradicts", "План отменён.")
             for pair in pairs], "saturated": False}))
     assert link(store, job, sender)["partial"] is False
     assert len(requests) == 2 and store.get_job(job["job_id"])["llm_calls"] == 2
-    assert "relation_saturated" in requests[1]["input"]
+    assert 'relation_saturated' in prompt_json(requests[1], 'records')['validation_errors']
 
 
 def test_s18_record_relations_repair_is_counted_and_bounded(manifest_job):
@@ -295,7 +296,7 @@ def test_s38_relation_output_splits_preserve_pairs_usage_and_replay(manifest_job
         if req.full_url.endswith('input_tokens'):
             return Response({'input_tokens':100})
         payload = json.loads(req.data)
-        data = json.loads(payload['input'].split('Кандидаты: ',1)[1])
+        data = prompt_json(payload['input'], 'records')
         sent.append(len(data['pairs']))
         if len(data['pairs']) > 1:
             if outcome == 'incomplete':

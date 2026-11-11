@@ -6,6 +6,7 @@ from datetime import timedelta
 
 import pytest
 
+from telegram_connector.tests.analysis_fixtures import prompt_json
 from telegram_connector import telegram_analysis as analysis
 from telegram_connector import analysis_pipeline, analysis_telemetry
 from telegram_connector.analysis_store import canonical_json
@@ -29,9 +30,18 @@ def set_cap(store, job, maximum):
 
 
 def test_admission_reserves_telemetry_before_accepting_near_full_job(store, config, access):
-    config['analysis']['max_intermediate_bytes'] = 55600
+    event = update(text='/topics @fixture since=today until=today')
+    probe, _ = admit(store, config, access, event)
+    size = store.storage_usage(probe['job_id'])
+    assert size['telemetry_reserve'] > 0
+    # Fit the actual frozen request and closure, but not all telemetry.
+    # Prompt edits may change request size without changing this boundary.
+    cap = size['allocated_bytes'] - size['telemetry_reserve'] // 2
+    assert size['allocated_bytes'] - size['telemetry_reserve'] < cap
+    store.conn.execute('DELETE FROM analysis_jobs WHERE job_id=?', (probe['job_id'],))
+    config['analysis']['max_intermediate_bytes'] = cap
     with pytest.raises(analysis.AnalysisRejection, match='invalid_request'):
-        admit(store, config, access, update(text='/topics @fixture since=today until=today'))
+        admit(store, config, access, event)
     assert list(store.iter_jobs('queued')) == []
     assert store.conn.execute('SELECT COUNT(*) FROM analysis_phase_runs').fetchone()[0] == 0
 
@@ -185,7 +195,7 @@ def test_equivalent_standalone_answer_outside_item_replaces_digest(manifest_job,
     def provider(req, timeout):
         if req.full_url.endswith('input_tokens'):
             return Response({'input_tokens': 100})
-        wire = json.loads(json.loads(req.data)['input'].split('Кандидаты: ', 1)[1])
+        wire = prompt_json(json.loads(req.data)['input'], 'records')
         pairs = wire['pairs']
         types = {row['record_id']: row['payload']['record_type'] for row in wire['records']}
         return Response(model_response({'decisions': [decision(pair['pair_id'],
@@ -353,7 +363,7 @@ def test_relink_synthesis_source_policy_and_delivery_compose(manifest_job, comma
         if req.full_url.endswith('input_tokens'):
             return Response({'input_tokens': 100})
         payload = json.loads(req.data)
-        wire = json.loads(payload['input'].split('Опорные записи: ', 1)[1])
+        wire = prompt_json(payload['input'], 'evidence')
         assert {edge['relation'] for edge in wire['relations']} == {'answers'}
         document = answer_result(records)
         document = {key: document[key] for key in ('summary', 'items', 'limitations')}

@@ -4,6 +4,7 @@ import json
 
 import pytest
 
+from telegram_connector.tests.analysis_fixtures import prompt_json, prompt_field
 from telegram_connector import telegram_analysis as analysis
 from telegram_connector import analysis_pipeline
 from telegram_connector.tests.test_analysis_manifest import manifest_job
@@ -35,10 +36,13 @@ def test_s20_detail_synthesis_profile_changes_prompt_and_real_output_budget(mani
     payload = function(job, {"records": original, "partial": False, "reasons": []})
     profile = job["request"]["settings"]["analysis"]["output"]["profiles"][detail]
     assert payload["max_output_tokens"] == tokens
-    assert job["request"]["settings"]["analysis_prompts"]["details"][detail].strip() in payload["input"]
-    assert all(value in payload["input"] for value in ("1250 EUR", "Паспорт обязателен", "Нерезиденты"))
-    assert str(profile["max_chars"]) in payload["input"]
-    assert f'"max_output_tokens":{tokens}' in payload["input"], "The model must receive the same output ceiling as the API"
+    assert prompt_field(payload, 'detail_instructions') == f'fixture-detail-{detail}'
+    facts = prompt_json(payload, 'evidence')['records']
+    assert facts[0]['claim'] == 'Минимум 1250 EUR.'
+    assert facts[0]['details'] == ['Паспорт обязателен', 'Нерезиденты']
+    limits = prompt_json(payload, 'limits')
+    assert limits['max_chars'] == profile['max_chars']
+    assert limits['max_output_tokens'] == tokens
     assert payload["store"] is False and payload["text"]["format"]["strict"] is True
 
 
@@ -48,7 +52,8 @@ def test_s20_detail_synthesis_limits_are_effective_before_request(manifest_job):
     function = getattr(analysis, "build_synthesis_payload", None)
     assert callable(function)
     payload = function(job, {"records": [], "partial": False, "reasons": []})
-    assert '"max_items":2' in payload["input"] and '"sources_per_item":1' in payload["input"]
+    limits = prompt_json(payload, 'limits')
+    assert limits['max_items'] == 2 and limits['sources_per_item'] == 1
     invalid = copy.deepcopy(job)
     invalid["request"]["request"]["limit"] = 11
     with pytest.raises(ValueError, match="limit"):
@@ -90,7 +95,7 @@ def synthesis_sender(*, forge=False, sent=None):
         if sent is not None: sent.append((req.full_url, request))
         if req.full_url.endswith("input_tokens"):
             return Response({"input_tokens": 100})
-        data = expand_wire_quotes(json.loads(request["input"].split("Опорные записи: ", 1)[1]))
+        data = expand_wire_quotes(prompt_json(request["input"], 'evidence'))
         return Response(model_response({'summary': 'Сведения из корпуса.', 'items': [{'title': 'Условия', 'text': ' '.join([record['payload']['claim'], *record['payload']['details']]) if request['text']['format']['name'] == CURRENT_SYNTHESIS_FORMAT else record['payload']['claim'], 'contradictions': [], 'evidence_ids': ['forged' if forge else record['record_id']]} for record in data['records']], 'limitations': [], 'insufficient_information': not data['records'], 'saturated': False}))
     return send
 
@@ -159,7 +164,7 @@ def test_s20_detail_synthesis_source_edit_outside_detail_pack_interrupts_after_i
     def sender(req, timeout):
         response = delegate(req, timeout)
         if not req.full_url.endswith("input_tokens"):
-            data = expand_wire_quotes(json.loads(json.loads(req.data)["input"].split("Опорные записи: ", 1)[1]))
+            data = expand_wire_quotes(prompt_json(json.loads(req.data)["input"], 'evidence'))
             assert len(data["records"]) == 1
             selected = data["records"][0]["record_id"]
             omitted = next(record for record in original if record["record_id"] != selected)
@@ -191,7 +196,7 @@ def test_s20_detail_synthesis_recounts_smaller_evidence_pack_and_labels_limited_
     merge(store, job, merge_sender())
     delegate = synthesis_sender()
     def sender(req, timeout):
-        data = expand_wire_quotes(json.loads(json.loads(req.data)["input"].split("Опорные записи: ", 1)[1]))
+        data = expand_wire_quotes(prompt_json(json.loads(req.data)["input"], 'evidence'))
         if req.full_url.endswith("input_tokens") and len(data["records"]) > 1:
             return Response({"input_tokens": job["request"]["settings"]["analysis"]["max_input_tokens"] + 1})
         return delegate(req, timeout)
@@ -261,7 +266,7 @@ def test_s20_detail_synthesis_partial_output_does_not_trigger_full_regeneration(
         if outcome == "incomplete":
             return Response({"status": "incomplete", "output": []})
         request = json.loads(req.data)
-        data = expand_wire_quotes(json.loads(request["input"].split("Опорные записи: ", 1)[1]))
+        data = expand_wire_quotes(prompt_json(request["input"], 'evidence'))
         record = data["records"][0]
         return Response(model_response({'summary': '', 'items': [{'title': 'Факт', 'text': record['payload']['claim'], 'contradictions': [], 'evidence_ids': [record['record_id']]}], 'limitations': [], 'insufficient_information': False, 'saturated': True}))
     result = synthesize(store, job, sender)
@@ -293,7 +298,7 @@ def test_s36_synthesis_repair_retains_original_task_purpose_and_detail(manifest_
             "limitations": [], "insufficient_information": False, "saturated": False}
         return Response(model_response(result))
     assert synthesize(store, job, sender)["partial"] is False
-    repair = json.loads(requests[1]["input"].split("Некорректный результат: ", 1)[1].split("\nОшибки валидации:", 1)[0])
+    repair = prompt_json(requests[1]["input"], 'invalid_output')
     assert repair.get("original_task") == requests[0]["input"]
     assert "evidence" not in repair  # Original task already contains evidence.
 
@@ -305,7 +310,7 @@ def test_s20_detail_synthesis_oversized_repair_remains_partial_without_another_i
     def sender(req, timeout):
         request = json.loads(req.data)
         if req.full_url.endswith("input_tokens"):
-            return Response({"input_tokens": job["request"]["settings"]["analysis"]["max_input_tokens"] + 1 if "Некорректный результат:" in request["input"] else 100})
+            return Response({"input_tokens": job["request"]["settings"]["analysis"]["max_input_tokens"] + 1 if '<fixture:invalid_output>' in request['input'] else 100})
         return Response(model_response({"wrong": "shape"}))
     result = synthesize(store, job, sender)
     assert result["partial"] is True and "max_input_tokens" in result["reasons"]
@@ -370,7 +375,7 @@ def test_s20_detail_synthesis_same_adapter_uses_each_command_rubric(manifest_job
     sent = []
     result = synthesize(store, job, synthesis_sender(sent=sent))
     prompt = next(body["input"] for url, body in sent if not url.endswith("input_tokens"))
-    assert frozen["settings"]["analysis_prompts"]["commands"][command].strip() in prompt
+    assert prompt_field(prompt, 'command_rubric') == f'fixture-command-{command}'
     assert result["command"] == command and result["query"] == frozen["request"]["query"]
 
 
@@ -382,14 +387,14 @@ def test_s38_synthesis_smaller_pack_keeps_distinct_ranked_groups(manifest_job):
         if req.full_url.endswith('input_tokens'):
             fmt = json.loads(req.data).get('text', {}).get('format', {}).get('name')
             return Response({'input_tokens':1000000 if fmt in {'telegram_synthesis_v1', CURRENT_SYNTHESIS_FORMAT} else 100})
-        inputs = json.loads(json.loads(req.data)['input'].split('Записи: ',1)[1])['inputs']
+        inputs = prompt_json(json.loads(req.data)['input'], 'records')['inputs']
         groups = [{'title':key,'summary':'Конкретные факты сохранены.', 'input_ids':[x['node_id'] for x in inputs if x['payload']['topic_key']==key]} for key in ['bank','roi']]
         return Response(model_response({'groups':groups,'dispositions':[{'input_id':x['node_id'],'disposition':'merged','reason':'В тематической группе.'} for x in inputs], 'saturated':False}))
     merge(store, job, merger)
     delegate = synthesis_sender()
     seen = []
     def sender(req, timeout):
-        data = expand_wire_quotes(json.loads(json.loads(req.data)['input'].split('Опорные записи: ',1)[1]))
+        data = expand_wire_quotes(prompt_json(json.loads(req.data)['input'], 'evidence'))
         if req.full_url.endswith('input_tokens') and len(data['records']) > 2:
             return Response({'input_tokens':job["request"]["settings"]["analysis"]["max_input_tokens"] + 1})
         if not req.full_url.endswith('input_tokens'):
@@ -421,7 +426,7 @@ def test_s38_synthesis_keeps_source_facts_when_link_diagnostics_are_large(manife
     def linker(req, timeout):
         if req.full_url.endswith("input_tokens"):
             return Response({"input_tokens": 100})
-        pair = json.loads(json.loads(req.data)["input"].split("Кандидаты: ", 1)[1])["pairs"][0]
+        pair = prompt_json(json.loads(req.data)["input"], 'records')["pairs"][0]
         return Response(model_response({"decisions": [{"pair_id": pair["pair_id"],
             "relation": "complements", "reason": "Объяснение решения классификатора. " * 1000}], "saturated": False}))
 
@@ -441,7 +446,7 @@ def test_s38_synthesis_keeps_source_facts_when_link_diagnostics_are_large(manife
     result = synthesize(store, job, sender)
     assert {key for item in result["items"] for key in item["evidence_ids"]} == {r["record_id"] for r in originals}
     assert "synthesis_evidence_limited" not in result["reasons"]
-    wire = expand_wire_quotes(json.loads(sent[0][1]["input"].split("Опорные записи: ", 1)[1]))
+    wire = expand_wire_quotes(prompt_json(sent[0][1]["input"], 'evidence'))
     original_by_payload = {analysis.canonical_json(semantic_fact_payload(r['payload'], synthesis=True)): r['record_id'] for r in originals}
     canonical = {r['record_id']: original_by_payload[analysis.canonical_json(semantic_fact_payload(r['payload'], synthesis=True))] for r in wire['records']}
     assert [(canonical[r["left_id"]], canonical[r["right_id"]], r["relation"]) for r in wire["relations"]] == [

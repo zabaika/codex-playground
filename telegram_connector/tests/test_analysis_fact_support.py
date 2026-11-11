@@ -11,6 +11,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from telegram_connector.tests.analysis_fixtures import prompt_json
 from telegram_connector import analysis_evidence as evidence
 from telegram_connector import analysis_pipeline as pipeline
 from telegram_connector import telegram_analysis as analysis
@@ -36,7 +37,7 @@ def test_direct_input_excludes_digest_only_fact_before_model(manifest_job):
     records = records_fixture(store, job, FACTS)
     seen = []
     def count(req, timeout):
-        value = expand_wire_quotes(json.loads(json.loads(req.data)['input'].split('Опорные записи: ', 1)[1]))
+        value = expand_wire_quotes(prompt_json(json.loads(req.data)['input'], 'evidence'))
         seen.extend(value['records'])
         return Response({'input_tokens': 100})
     merge(store, job, count)
@@ -92,7 +93,7 @@ def test_worker_filters_mixed_fact_through_delivery_and_report(manifest_job, mon
             return link_sender('unrelated')(req, timeout)
         if name.startswith('telegram_merge_'):
             return merge_sender()(req, timeout)
-        value = expand_wire_quotes(json.loads(payload['input'].split('Опорные записи: ', 1)[1]))
+        value = expand_wire_quotes(prompt_json(payload['input'], 'evidence'))
         synthesis.append(value)
         assert len(value['records']) == 1
         record = value['records'][0]

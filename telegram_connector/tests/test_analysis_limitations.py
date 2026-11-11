@@ -6,6 +6,7 @@ import pytest
 from telegram_connector import analysis_pipeline as pipeline
 from telegram_connector.tests.test_analysis_manifest import manifest_job
 from telegram_connector.tests.test_analysis_relations import records_fixture
+from telegram_connector.tests.analysis_fixtures import prompt_json, expand_wire_quotes
 
 
 def synthesis_case(store, job, claim='Uno откроет офис 1 октября.'):
@@ -42,6 +43,6 @@ def test_source_wording_is_preserved_without_added_attribution(manifest_job, cla
     assert result['summary'] == claim and result['items'][0]['text'] == claim
     assert not result['limitations'] and data == original
     payload = pipeline.build_synthesis_payload(job, data)
-    assert 'Не добавляй атрибуции или оговорки' in payload['input']
-    assert 'Неизвестную дату уточняй только при явном вопросе' in payload['input']
-    assert 'не по вопросу внутри цитируемого сообщения' in payload['input']
+    wire = expand_wire_quotes(prompt_json(payload, 'evidence'))
+    assert wire['records'][0]['payload']['claim'] == claim
+    assert wire['records'][0]['payload']['source_refs'][0]['quote'] == claim

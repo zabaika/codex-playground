@@ -1,0 +1,352 @@
+{
+  "version": 1,
+  "annotation_origin": "Assistant-authored semantic regression scenarios; fresh model quality unverified. Accept supported paraphrases, grade meaning and evidence IDs rather than wording.",
+  "period": {
+    "since": "2026-10-10",
+    "until": "2026-10-12",
+    "accepted_at": "2026-10-15T12:00:00+00:00"
+  },
+  "messages": [
+    {
+      "channel_id": 22,
+      "message_id": 1,
+      "date": "2026-10-11T10:00:00+00:00",
+      "text": "Выпущен редактор Aero 2. Добавлен экспорт PDF."
+    },
+    {
+      "channel_id": 22,
+      "message_id": 2,
+      "date": "2026-10-12T10:00:00+00:00",
+      "text": "По оценке автора, спрос на Beta вырос вдвое."
+    },
+    {
+      "channel_id": 22,
+      "message_id": 3,
+      "date": "2026-10-10T10:00:00+00:00",
+      "text": "Компания Gamma заявляет: сервис откроется 1 октября."
+    },
+    {
+      "channel_id": 22,
+      "message_id": 4,
+      "date": "2026-10-11T10:00:00+00:00",
+      "text": "Обсуждение Delta: «Когда состоится запуск?» Пока только анонс, дата не указана."
+    },
+    {
+      "channel_id": 22,
+      "message_id": 5,
+      "date": "2026-10-12T10:00:00+00:00",
+      "text": "Версия Epsilon выпущена 4 июля."
+    },
+    {
+      "channel_id": 22,
+      "message_id": 6,
+      "date": "2026-10-10T10:00:00+00:00",
+      "text": "Компания Forum6 провела конференцию. Конкретных продуктовых новостей не было."
+    },
+    {
+      "channel_id": 22,
+      "message_id": 7,
+      "date": "2026-10-11T10:00:00+00:00",
+      "text": "Компания Forum7 провела конференцию. Конкретных продуктовых новостей не было."
+    },
+    {
+      "channel_id": 22,
+      "message_id": 8,
+      "date": "2026-10-12T10:00:00+00:00",
+      "text": "Компания Forum8 провела конференцию. Конкретных продуктовых новостей не было."
+    },
+    {
+      "channel_id": 22,
+      "message_id": 9,
+      "date": "2026-10-10T10:00:00+00:00",
+      "text": "Компания Forum9 провела конференцию. Конкретных продуктовых новостей не было."
+    },
+    {
+      "channel_id": 22,
+      "message_id": 10,
+      "date": "2026-10-11T10:00:00+00:00",
+      "text": "Выпущена Orion 3: удвоен контекст и добавлена обработка видео. Доступна всем подписчикам."
+    }
+  ],
+  "facts": [
+    {
+      "id": "plain_release",
+      "claim": "Выпущен редактор Aero 2. Добавлен экспорт PDF.",
+      "sources": [
+        {
+          "channel_id": 22,
+          "message_id": 1,
+          "quote": "Выпущен редактор Aero 2. Добавлен экспорт PDF."
+        }
+      ]
+    },
+    {
+      "id": "author_estimate",
+      "claim": "По оценке автора, спрос на Beta вырос вдвое.",
+      "sources": [
+        {
+          "channel_id": 22,
+          "message_id": 2,
+          "quote": "По оценке автора, спрос на Beta вырос вдвое."
+        }
+      ]
+    },
+    {
+      "id": "company_plan",
+      "claim": "Заявление Gamma об открытии 1 октября остаётся планом; наступление даты не подтверждает исполнение.",
+      "sources": [
+        {
+          "channel_id": 22,
+          "message_id": 3,
+          "quote": "Компания Gamma заявляет: сервис откроется 1 октября."
+        }
+      ]
+    },
+    {
+      "id": "unknown_date",
+      "claim": "Анонс Delta без даты запуска; вопрос принадлежит участнику источника.",
+      "sources": [
+        {
+          "channel_id": 22,
+          "message_id": 4,
+          "quote": "Обсуждение Delta: «Когда состоится запуск?» Пока только анонс, дата не указана."
+        }
+      ]
+    },
+    {
+      "id": "explicit_date",
+      "claim": "Epsilon выпущена 4 июля; год в источнике отсутствует.",
+      "sources": [
+        {
+          "channel_id": 22,
+          "message_id": 5,
+          "quote": "Версия Epsilon выпущена 4 июля."
+        }
+      ]
+    },
+    {
+      "id": "conference_6",
+      "claim": "Компания Forum6 провела конференцию. Конкретных продуктовых новостей не было.",
+      "sources": [
+        {
+          "channel_id": 22,
+          "message_id": 6,
+          "quote": "Компания Forum6 провела конференцию. Конкретных продуктовых новостей не было."
+        }
+      ]
+    },
+    {
+      "id": "conference_7",
+      "claim": "Компания Forum7 провела конференцию. Конкретных продуктовых новостей не было.",
+      "sources": [
+        {
+          "channel_id": 22,
+          "message_id": 7,
+          "quote": "Компания Forum7 провела конференцию. Конкретных продуктовых новостей не было."
+        }
+      ]
+    },
+    {
+      "id": "conference_8",
+      "claim": "Компания Forum8 провела конференцию. Конкретных продуктовых новостей не было.",
+      "sources": [
+        {
+          "channel_id": 22,
+          "message_id": 8,
+          "quote": "Компания Forum8 провела конференцию. Конкретных продуктовых новостей не было."
+        }
+      ]
+    },
+    {
+      "id": "conference_9",
+      "claim": "Компания Forum9 провела конференцию. Конкретных продуктовых новостей не было.",
+      "sources": [
+        {
+          "channel_id": 22,
+          "message_id": 9,
+          "quote": "Компания Forum9 провела конференцию. Конкретных продуктовых новостей не было."
+        }
+      ]
+    },
+    {
+      "id": "major_release",
+      "claim": "Выпущена Orion 3: удвоен контекст и добавлена обработка видео. Доступна всем подписчикам.",
+      "sources": [
+        {
+          "channel_id": 22,
+          "message_id": 10,
+          "quote": "Выпущена Orion 3: удвоен контекст и добавлена обработка видео. Доступна всем подписчикам."
+        }
+      ]
+    }
+  ],
+  "tasks": [
+    {
+      "id": "attribution",
+      "command": "search",
+      "query": "Что известно о выпуске Aero 2, оценке спроса на Beta и плане открытия Gamma?",
+      "modes": [
+        "full"
+      ],
+      "details": [
+        "short"
+      ],
+      "expected_fact_ids": [
+        "plain_release",
+        "author_estimate",
+        "company_plan"
+      ],
+      "critical_fact_ids": [
+        "plain_release",
+        "author_estimate",
+        "company_plan"
+      ],
+      "allowed_fact_ids": [
+        "plain_release",
+        "author_estimate",
+        "company_plan"
+      ],
+      "same_item": [],
+      "different_items": [],
+      "review_checks": [
+        "source_support_preserved",
+        "no_added_attribution",
+        "original_attribution_preserved",
+        "plan_not_promoted_to_completed"
+      ]
+    },
+    {
+      "id": "quoted_time_question",
+      "command": "search",
+      "query": "Что известно об анонсе Delta?",
+      "modes": [
+        "full"
+      ],
+      "details": [
+        "short"
+      ],
+      "expected_fact_ids": [
+        "unknown_date"
+      ],
+      "critical_fact_ids": [
+        "unknown_date"
+      ],
+      "allowed_fact_ids": [
+        "unknown_date"
+      ],
+      "same_item": [],
+      "different_items": [],
+      "review_checks": [
+        "source_support_preserved",
+        "quoted_question_does_not_trigger_date_disclaimer",
+        "publication_date_not_event_date"
+      ]
+    },
+    {
+      "id": "user_time_question",
+      "command": "search",
+      "query": "Когда состоится запуск Delta?",
+      "modes": [
+        "full"
+      ],
+      "details": [
+        "short"
+      ],
+      "expected_fact_ids": [
+        "unknown_date"
+      ],
+      "critical_fact_ids": [
+        "unknown_date"
+      ],
+      "allowed_fact_ids": [
+        "unknown_date"
+      ],
+      "same_item": [],
+      "different_items": [],
+      "review_checks": [
+        "source_support_preserved",
+        "unknown_event_date_disclosed_for_explicit_user_question",
+        "publication_date_not_event_date"
+      ]
+    },
+    {
+      "id": "date_without_year",
+      "command": "search",
+      "query": "Что известно о выпуске Epsilon?",
+      "modes": [
+        "full"
+      ],
+      "details": [
+        "short"
+      ],
+      "expected_fact_ids": [
+        "explicit_date"
+      ],
+      "critical_fact_ids": [
+        "explicit_date"
+      ],
+      "allowed_fact_ids": [
+        "explicit_date"
+      ],
+      "same_item": [],
+      "different_items": [],
+      "review_checks": [
+        "source_support_preserved",
+        "no_invented_year",
+        "publication_date_not_event_date"
+      ]
+    },
+    {
+      "id": "global_ranking",
+      "command": "topics",
+      "query": null,
+      "modes": [
+        null
+      ],
+      "details": [
+        "short"
+      ],
+      "expected_fact_ids": [
+        "major_release",
+        "plain_release"
+      ],
+      "critical_fact_ids": [
+        "major_release",
+        "plain_release"
+      ],
+      "allowed_fact_ids": [
+        "plain_release",
+        "author_estimate",
+        "company_plan",
+        "unknown_date",
+        "explicit_date",
+        "conference_6",
+        "conference_7",
+        "conference_8",
+        "conference_9",
+        "major_release"
+      ],
+      "same_item": [],
+      "different_items": [],
+      "review_checks": [
+        "source_support_preserved",
+        "important_releases_precede_empty_conferences",
+        "tail_event_not_lost",
+        "no_filler"
+      ]
+    }
+  ],
+  "review_rubric": {
+    "source_support_preserved": "Every factual claim retains its own supporting source. Paraphrases are allowed; judge the whole output, including summary.",
+    "no_added_attribution": "The direct Aero statement gains no invented speaker, uncertainty or verification disclaimer.",
+    "original_attribution_preserved": "Beta remains an author estimate; Gamma remains a company statement. Exact introductory phrases are not required.",
+    "plan_not_promoted_to_completed": "Gamma is not reported as opened solely because 1 October precedes analysis_period.until.",
+    "quoted_question_does_not_trigger_date_disclaimer": "The source participant question is not treated as a user request for chronology; avoid an unsolicited missing-date discussion.",
+    "publication_date_not_event_date": "No publication timestamp becomes an event timestamp.",
+    "unknown_event_date_disclosed_for_explicit_user_question": "Answer the user time question by explaining the source does not establish the launch date.",
+    "no_invented_year": "Keep 4 July without assigning a publication-derived year.",
+    "important_releases_precede_empty_conferences": "Orion and Aero product changes precede conferences with no product news, using supporting fact IDs for identity.",
+    "tail_event_not_lost": "Include Orion although its source is last and short output requires selection.",
+    "no_filler": "Do not invent events to fill the item limit."
+  }
+}

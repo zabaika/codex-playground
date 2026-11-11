@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from telegram_connector.tests.analysis_fixtures import prompt_json
 from telegram_connector import telegram_analysis as analysis
 from telegram_connector import analysis_pipeline
 from telegram_connector import analysis_evidence
@@ -71,7 +72,7 @@ def event_provider(req, timeout):
     request = json.loads(req.data)
     kind = request["text"]["format"]["name"]
     if kind == "telegram_relations_v2":
-        data = expand_wire_quotes(json.loads(request["input"].split("Кандидаты: ", 1)[1]))
+        data = expand_wire_quotes(prompt_json(request["input"], 'records'))
         records = {r["record_id"]: r["payload"] for r in data["records"]}
         decisions = []
         for pair in data["pairs"]:
@@ -84,7 +85,7 @@ def event_provider(req, timeout):
         output = {"decisions": decisions, "saturated": False}
     else:
         assert kind == "telegram_merge_v1"
-        data = json.loads(request["input"].split("Записи: ", 1)[1])
+        data = prompt_json(request["input"], 'records')
         inputs = data["inputs"]
         groups = [{"title": topic, "summary": "Развитие одного события", "input_ids": [
             item["node_id"] for item in inputs if item["payload"]["topic_key"] == topic]}
@@ -141,7 +142,7 @@ def test_s25_topics_events_global_rank_corrections_concrete_facts_and_sources(to
         if req.full_url.endswith("input_tokens"):
             return Response({"input_tokens": 100})
         request = json.loads(req.data)
-        evidence = expand_wire_quotes(json.loads(request["input"].split("Опорные записи: ", 1)[1]))
+        evidence = expand_wire_quotes(prompt_json(request["input"], 'evidence'))
         groups = ranked_fixture_groups(evidence)
         assert all(set(group['evidence_ids']) <= set(component)
             for group in groups for component in evidence['topic_components']
@@ -195,7 +196,7 @@ def test_s25_topics_events_membership_stays_in_scope_when_final_input_is_split(t
     counted = []
     def send(req, timeout):
         data = json.loads(req.data)
-        evidence = expand_wire_quotes(json.loads(data["input"].split("Опорные записи: ", 1)[1]))
+        evidence = expand_wire_quotes(prompt_json(data["input"], 'evidence'))
         selected = {r["record_id"] for r in evidence["records"]}
         groups = ranked_fixture_groups(evidence)
         assert all(group["evidence_ids"] and set(group["evidence_ids"]) <= selected for group in groups)
@@ -243,7 +244,7 @@ def topics_journey(listener, config, access, runtime, tmp_path, monkeypatch):
                     state["before_inference"](job, data)
                 state["calls"].append((job["job_id"], data))
                 if data["text"]["format"]["name"] == CURRENT_SYNTHESIS_FORMAT:
-                    evidence = expand_wire_quotes(json.loads(data["input"].split("Опорные записи: ", 1)[1]))
+                    evidence = expand_wire_quotes(prompt_json(data["input"], 'evidence'))
                     by_id = {r["record_id"]: r["payload"] for r in evidence["records"]}
                     items = [{'title': 'Запуск сервиса Uno', 'text': ' '.join((by_id[key]['claim'] for key in group['evidence_ids'])), 'contradictions': [], 'evidence_ids': group['evidence_ids']}
                         for group in synthesis_fixture_groups(evidence)]

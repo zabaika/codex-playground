@@ -745,6 +745,7 @@ Use the subset that matches the project. For example, a local skill may not need
 Rules:
 
 - every new command nuance should have a parser test
+- prompt tests must verify transmitted data, structure and application behavior without depending on instructional wording, prose headings or formatting; use model evaluations for semantic compliance. Apply this to assertions, fixtures, helpers and mocks; do not parse payloads through editorial headings. Keep exact matching for explicit literal contracts, fixture markers and security boundaries. Preserve the original guarantee when replacing a check, and report any remaining semantic coverage gap.
 - every new config nuance should have a config test
 - every security hardening rule should have at least one regression test
 - when a project defines a canonical project-local virtualenv for tests, install dependencies and run the suite through that environment instead of the system Python
