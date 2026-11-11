@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from telegram_connector.tests.analysis_fixtures import prompt_json
 from telegram_connector.tests.analysis_fixtures import CURRENT_EVIDENCE_FORMAT, CURRENT_SYNTHESIS_FORMAT, expand_wire_quotes
 from telegram_connector import analysis_pipeline as pipeline, analysis_telemetry as telemetry
 from telegram_connector import telegram_analysis as analysis
@@ -39,7 +40,7 @@ class Provider:
             output = self.extract(payload)
         elif kind == 'telegram_relations_v2':
             self.calls.append('link')
-            data = json.loads(payload['input'].split('Кандидаты: ', 1)[1])
+            data = prompt_json(payload['input'], 'records')
             by_id = {row['record_id']: row['payload'] for row in data['records']}
             output = {'decisions': [{'pair_id': pair['pair_id'], 'relation': 'answers' if {
                 by_id[pair[key]]['record_type'] for key in ('left_id', 'right_id')} == {'question', 'answer'}
@@ -54,17 +55,20 @@ class Provider:
         return Response(response)
 
     def extract(self, payload):
-        if '"read_only_dispositions":' in payload['input']:
+        if '<fixture:invalid_output>' in payload['input']:
+            repair = prompt_json(payload, 'invalid_output')
             self.calls.append('child-repair')
-            assert QUESTION in payload['input'] and '"role":"context"' in payload['input']
+            assert any(row['message']['text'] == QUESTION and row['input']['role'] == 'context'
+                       for row in repair['context'])
             batch = next(self.store.get_batch(row[0]) for row in self.store.conn.execute(
                 "SELECT batch_id FROM analysis_batches WHERE job_id=? AND kind='extract' AND state='running'", (self.job['job_id'],)))
             progress = batch['payload']['extraction_progress']
             identity = progress['dispositions']['i0000']['record_ids'][0]
-            assert identity in payload['input'] and '"i0000"' in payload['input']
+            assert identity in {row['record_id'] for row in repair['read_only_records']}
+            assert 'i0000' in repair['read_only_dispositions']
             return dict(saturated=False, input_dispositions={'i0001': dict(status='duplicate',
                 records=[], retained_record_ids=[identity], reason='Дословный повтор Uno.')})
-        data = json.loads(payload['input'].split('Сообщения: ', 1)[1])
+        data = prompt_json(payload['input'], 'messages')
         fragments = data['inputs']
         first = fragments[0]['message']['text']
         output = dict(saturated=first == 'Uno: событие ROOT.', input_dispositions={})
@@ -91,7 +95,7 @@ class Provider:
 
     def synthesis(self, payload):
         self.calls.append('synthesis')
-        data = expand_wire_quotes(json.loads(payload['input'].split('Опорные записи: ', 1)[1]))
+        data = expand_wire_quotes(prompt_json(payload['input'], 'evidence'))
         assert len(data['records']) == 5
         value = next(row for row in data['records'] if '4 July 2026' in row['payload']['claim'])
         assert 'event_at' not in value['payload']

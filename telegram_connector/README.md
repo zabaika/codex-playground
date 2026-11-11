@@ -304,3 +304,27 @@ Complete the generated claim/source review before scoring; a mock response or
 successful API call does not establish semantic quality. Inspect an interrupted
 case before rerunning it. Captured results can be reviewed and scored without
 new model calls.
+
+### Prompt semantic regressions
+
+Use [analysis_prompt_semantics_gold.json](tests/fixtures/analysis_prompt_semantics_gold.json)
+before accepting prompt changes affecting attribution, dates, planned/completed
+actions or global ranking. This optional corpus supplements the default one;
+the application and ordinary pytest runs do not execute inference from it.
+
+Follow the workflow above, adding `--gold` to **every** command:
+
+```bash
+EVAL_GOLD=telegram_connector/tests/fixtures/analysis_prompt_semantics_gold.json
+python3 telegram_connector/scripts/evaluate_analysis.py --gold "$EVAL_GOLD" validate
+python3 telegram_connector/scripts/evaluate_analysis.py --gold "$EVAL_GOLD" --output scratch/analytics-prompt-eval-candidate prepare
+```
+
+`validate` and `prepare` do not call a model. Obtain scope/budget approval before
+`run`; keep the same `--gold` and `--output` for review and scoring. Fill the review
+using `review_rubric`, accepting supported paraphrases. Require
+`structural_pass=true`, `critical_recall=1` and `unsupported_rate=0`.
+
+Compare prompt versions using the same corpus/model/settings and separate output
+directories and approved scopes. Semantic quality remains unverified until fresh
+runs and reviews finish; pytest or re-scoring old outputs cannot establish it.

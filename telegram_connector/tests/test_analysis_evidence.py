@@ -4,6 +4,7 @@ import sqlite3
 
 import pytest
 
+from telegram_connector.tests.analysis_fixtures import prompt_json, prompt_field
 from telegram_connector import telegram_analysis as analysis, analysis_evidence
 from telegram_connector.tests.test_analysis_batching import batches
 from telegram_connector.tests.test_analysis_manifest import manifest_job, seed, build, change_setting
@@ -124,8 +125,8 @@ def test_s16_evidence_contract_extraction_uses_toml_schema_and_persists_facts_at
     assert store.get_job(job["job_id"])["evidence_records"] == 1
     assert sent[0]["text"]["format"]["strict"] is True
     bundle = store.get_job(job["job_id"])["request"]["settings"]["analysis_prompts"]
-    assert bundle["system_instructions"] in sent[0]["instructions"]
-    assert bundle["commands"]["topics"] in sent[0]["input"]
+    assert sent[0]['instructions'] == bundle['system_instructions'] + '\n' + bundle['shared_prefix']
+    assert prompt_field(sent[0], 'command_rubric') == 'fixture-command-topics'
 
 
 
@@ -208,7 +209,7 @@ def test_s16_evidence_contract_saturation_splits_and_commits_only_child_records(
         sends.append(data)
         if len(sends) == 1:
             return Response(model_response({"input_dispositions": {}, "saturated": True}))
-        selected = json.loads(data["input"].split("Сообщения: ", 1)[1])["inputs"]
+        selected = prompt_json(data["input"], 'messages')["inputs"]
         return Response(model_response(owned_document({"messages": selected})))
 
     result = extract(store, job, batch, send)
@@ -233,14 +234,14 @@ def test_s38_oversized_extraction_repair_splits_or_stops_with_paid_usage(manifes
 
     def send(req, timeout):
         data = json.loads(req.data)
-        repair = '"original_task"' in data["input"]
+        repair = '<fixture:invalid_output>' in data['input']
         if req.full_url.endswith("input_tokens"):
             return Response({"input_tokens": job["request"]["settings"]["analysis"]["max_input_tokens"] + 1 if repair else 100})
         assert not repair, "Oversized repair must never reach inference"
         sends.append(data)
         if len(sends) == 1:
             return Response(model_response({"bad": "shape"}))
-        selected = json.loads(data["input"].split("Сообщения: ", 1)[1])["inputs"]
+        selected = prompt_json(data["input"], 'messages')["inputs"]
         return Response(model_response(owned_document({"messages": selected})))
 
     result = extract(store, job, batch, send)
@@ -303,7 +304,7 @@ def test_s16_evidence_contract_split_resume_does_not_repeat_committed_child(mani
         sends.append(data)
         if len(sends) == 1:
             return Response(model_response({"input_dispositions": {}, "saturated": True}))
-        return Response(model_response(owned_document({"messages": json.loads(data["input"].split("Сообщения: ", 1)[1])["inputs"]})))
+        return Response(model_response(owned_document({"messages": prompt_json(data["input"], 'messages')["inputs"]})))
 
     original = store.finish_extraction_progress
 

@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 
+from telegram_connector.tests.analysis_fixtures import prompt_json, write_prompt_bundle
 from telegram_connector.tests.analysis_fixtures import extraction_inputs, owned_response_from_records
 
 from telegram_connector import telegram_analysis as analysis
@@ -37,6 +38,21 @@ def evaluator():
 
 def raw_gold():
     return json.loads(GOLD.read_text())
+
+
+def test_prompt_semantic_scenarios_are_ready_for_fresh_model_review(evaluator):
+    gold = evaluator.validate_gold(json.loads(
+        (ROOT / 'tests/fixtures/analysis_prompt_semantics_gold.json').read_text()))
+    cases = evaluator.expand_cases(gold)
+    assert {case['task_id'] for case in cases} == {
+        'attribution', 'quoted_time_question', 'user_time_question',
+        'date_without_year', 'global_ranking'}
+    checks = {check for case in cases for check in case['review_checks']}
+    assert checks == set(gold['review_rubric'])
+    ranking = next(case for case in cases if case['task_id'] == 'global_ranking')
+    assert ranking['detail'] == 'short' and 'major_release' in ranking['critical_fact_ids']
+    assert gold['messages'][-1]['message_id'] == next(
+        fact['sources'][0]['message_id'] for fact in gold['facts'] if fact['id'] == 'major_release')
 
 
 @pytest.mark.parametrize("hang", [False, True])
@@ -328,16 +344,16 @@ def fixture_api(command, calls):
             result['records'][0].update(record_type='answer' if command == 'qa' else 'claim', claim=fragment['message']['text'], entities=['Uno'], topic_key='case')
             result = owned_response_from_records(data, result)
         elif kind == "telegram_relations_v2":
-            pairs = json.loads(data["input"].split("Кандидаты: ", 1)[1])["pairs"]
+            pairs = prompt_json(data["input"], 'records')["pairs"]
             result = {"decisions": [{"pair_id": pair["pair_id"], "relation": "complements", "reason": "Fixture"} for pair in pairs], "saturated": False}
         elif kind == "telegram_merge_v1":
-            values = json.loads(data["input"].split("Записи: ", 1)[1])["inputs"]
+            values = prompt_json(data["input"], 'records')["inputs"]
             ids = [value["node_id"] for value in values]
             result = {"groups": [{"title": "Условия", "summary": "Данные корпуса", "input_ids": ids}],
                 "dispositions": [{"input_id": key, "disposition": "merged", "reason": "Включено"} for key in ids], "saturated": False}
         else:
             assert kind == CURRENT_SYNTHESIS_FORMAT
-            records = expand_wire_quotes(json.loads(data["input"].split("Опорные записи: ", 1)[1]))["records"]
+            records = expand_wire_quotes(prompt_json(data["input"], 'evidence'))["records"]
             result = {"summary": "Сведения участников", "items": [{'title': 'Условия', 'text': records[0]['payload']['claim'], 'contradictions': [], 'evidence_ids': [records[0]['record_id']]}],
                 "limitations": [], "insufficient_information": False, "saturated": False}
         return Response(model_response(result))
@@ -346,6 +362,7 @@ def fixture_api(command, calls):
 
 @pytest.mark.parametrize("command,mode,detail", [("topics", None, "full"), ("search", "fast", "normal"), ("search", "full", "short"), ("qa", None, "normal")])
 def test_s36_eval_contract_isolated_engine_capture_and_replay(evaluator, config, tmp_path, monkeypatch, command, mode, detail):
+    config['analysis_prompts']['file'] = write_prompt_bundle(tmp_path)
     config["processing"]["model"] = "gpt-5.6-luna"
     config["analysis"]["ai"].update(reasoning_effort="low", reasoning_summary="none")
     project = tmp_path / "repo/telegram_connector"

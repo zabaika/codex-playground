@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 
+from telegram_connector.tests.analysis_fixtures import prompt_json, prompt_field
 from telegram_connector.tests.analysis_fixtures import extraction_inputs, owned_response_from_records
 
 from telegram_connector import telegram_analysis as analysis
@@ -133,7 +134,7 @@ def test_s31_qa_extraction_preserves_unmatched_questions_and_standalone_solution
     answer = by_message[2][0]["payload"]
     assert all(value in answer["claim"] for value in ("1250 EUR", "30 дней", "паспорт"))
     assert 'только по записи' in answer['details'] and answer['assertion_kind'] == 'experience'
-    assert all(job["request"]["settings"]["analysis_prompts"]["commands"]["qa"].strip() in call["input"] for call in calls)
+    assert all(prompt_field(call, 'command_rubric') == 'fixture-command-qa' for call in calls)
     assert store.processed_analysis_messages(job["job_id"]) == 7
 
 
@@ -201,7 +202,7 @@ def test_s32_cross_batch_qa_links_without_reply_in_either_order(qa_job, answer_f
         data = json.loads(req.data)
         if req.full_url.endswith("input_tokens"):
             return Response({"input_tokens": 100})
-        supplied = expand_wire_quotes(json.loads(data["input"].split("Опорные записи: ", 1)[1]))
+        supplied = expand_wire_quotes(prompt_json(data["input"], 'evidence'))
         calls.append(supplied)
         return Response(model_response(final_document(ids, text=answer["claim"], records=records)))
     result = synthesize(store, job, send)
@@ -266,7 +267,7 @@ def test_s32_cross_batch_qa_contrary_results_keep_conditions_and_both_sources(qa
         data = json.loads(req.data)
         if req.full_url.endswith("input_tokens"):
             return Response({"input_tokens": 100})
-        wire = expand_wire_quotes(json.loads(data["input"].split("Кандидаты: ", 1)[1]))
+        wire = expand_wire_quotes(prompt_json(data["input"], 'records'))
         pairs = wire["pairs"]
         questions = {r["record_id"] for r in wire["records"] if r["payload"]["record_type"] == "question"}
         return Response(model_response({"decisions": [{"pair_id": pair["pair_id"],
@@ -369,7 +370,7 @@ def qa_journey(listener, config, access, runtime, tmp_path, monkeypatch):
                     records.append(value)
                 return Response(model_response(owned_response_from_records(data, {"records": records, "saturated": False})))
             if kind == "telegram_relations_v2":
-                supplied = expand_wire_quotes(json.loads(data["input"].split("Кандидаты: ", 1)[1]))
+                supplied = expand_wire_quotes(prompt_json(data["input"], 'records'))
                 by_id = {record["record_id"]: record["payload"] for record in supplied["records"]}
                 decisions = []
                 for pair in supplied["pairs"]:
@@ -379,7 +380,7 @@ def qa_journey(listener, config, access, runtime, tmp_path, monkeypatch):
                         "reason": "Fixture-labelled answer to the document question"})
                 return Response(model_response({"decisions": decisions, "saturated": False}))
             if kind == CURRENT_SYNTHESIS_FORMAT:
-                supplied = expand_wire_quotes(json.loads(data["input"].split("Опорные записи: ", 1)[1]))
+                supplied = expand_wire_quotes(prompt_json(data["input"], 'evidence'))
                 by_id = {record["record_id"]: record["payload"] for record in supplied["records"]}
                 items = []
                 for key, record in by_id.items():

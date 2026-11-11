@@ -3,6 +3,7 @@ import copy
 import itertools
 import json
 import pytest
+from telegram_connector.tests.analysis_fixtures import prompt_json
 from telegram_connector import analysis_evidence as e, analysis_pipeline as p
 from telegram_connector.tests.test_analysis_manifest import manifest_job
 from telegram_connector.tests.test_analysis_extraction_accounting import accounting_batch
@@ -66,7 +67,7 @@ def test_partition_is_owned_before_alias_encoding(manifest_job,monkeypatch):
     aliases=dict(zip(ordered,['r999','r1000','r1001']))
     monkeypatch.setattr(p,'_record_aliases',lambda ids:aliases)
     payload=p.build_synthesis_payload(job,view)
-    data=json.loads(payload['input'].split('Опорные записи: ',1)[1]);reverse={v:k for k,v in aliases.items()}
+    data=prompt_json(payload['input'], 'evidence');reverse={v:k for k,v in aliases.items()}
     assert [[reverse[key] for key in group] for group in data['topic_components']]==e.topic_components(ids,view['relations'],consistent=True)
 
 

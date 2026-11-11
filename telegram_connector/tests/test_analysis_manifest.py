@@ -9,6 +9,7 @@ from common import sqlite as common_sqlite
 from telegram_connector import telegram_analysis as analysis
 from telegram_connector import telegram_history_client as history
 from telegram_connector.analysis_store import AnalysisStore, StaleGenerationError, canonical_json
+from telegram_connector.tests.analysis_fixtures import write_prompt_bundle
 
 
 NOW = datetime(2026, 10, 16, 12, tzinfo=timezone.utc)
@@ -16,13 +17,14 @@ DATE = "2026-10-12T10:00:00+00:00"
 
 
 @pytest.fixture
-def manifest_job():
+def manifest_job(tmp_path):
     conn = common_sqlite.connect_sqlite(":memory:")
     history.init_db(conn)
     store = AnalysisStore(conn)
     folder = history.APP_DIR / "config"
     config = tomllib.loads((folder / "runtime.example.toml").read_text())
     config["processing"]["model"] = "fixture-model"
+    config['analysis_prompts']['file'] = write_prompt_bundle(tmp_path)
     config["sync"]["batch_size"] = 2
     event = {"update_id": 10, "message": {"chat": {"id": 100}, "from": {"id": 7},
               "text": "/topics @two,@one since=2026-10-10 until=2026-10-12"}}

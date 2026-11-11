@@ -7,6 +7,7 @@ from telegram_connector.tests.analysis_fixtures import expand_wire_quotes
 
 import pytest
 
+from telegram_connector.tests.analysis_fixtures import prompt_json
 from telegram_connector import analysis_pipeline as pipeline
 from telegram_connector.tests.test_analysis_manifest import manifest_job
 from telegram_connector.tests.test_analysis_extraction_accounting import accounting_batch, envelope
@@ -51,12 +52,13 @@ def test_repair_keeps_original_context_through_final_synthesis(manifest_job, com
             if len(repairs) == 1:
                 result = {'saturated': False, 'input_dispositions': {}}
             else:
-                assert question in payload['input']
-                assert '"role":"context"' in payload['input']
+                repair = prompt_json(payload, 'invalid_output')
+                assert any(row['message']['text'] == question and row['input']['role'] == 'context'
+                           for row in repair['context'])
                 result = fixed
         else:
             assert payload['text']['format']['name'] == CURRENT_SYNTHESIS_FORMAT
-            data = expand_wire_quotes(json.loads(payload['input'].split('Опорные записи: ', 1)[1]))
+            data = expand_wire_quotes(prompt_json(payload['input'], 'evidence'))
             final_requests.append(data)
             saved = data['records'][0]
             assert saved['payload']['claim'] == record['claim']
@@ -93,7 +95,8 @@ def test_duplicate_repair_uses_saved_represented_root_without_reinserting_it(man
         else:
             progress = store.get_batch(batch['batch_id'])['payload']['extraction_progress']
             identity = progress['dispositions']['i0000']['record_ids'][0]
-            assert identity in payload['input'], 'Retained root A must be present in the residual request for B'
+            repair = prompt_json(payload, 'invalid_output')
+            assert identity in {row['record_id'] for row in repair['read_only_records']}
             result = {'saturated': False, 'input_dispositions': {'i0001': dict(status='duplicate', records=[],
                  retained_record_ids=[identity], reason='Дословный повтор о том же банке.')}}
         return Response(model_response(result))
@@ -191,7 +194,9 @@ def test_repair_packs_one_literal_root_when_saved_roots_are_equivalent(manifest_
             progress = store.get_batch(batch['batch_id'])['payload']['extraction_progress']
             first_id = progress['dispositions']['i0000']['record_ids'][0]
             redundant_id = progress['dispositions']['i0001']['record_ids'][0]
-            assert first_id in payload['input'] and redundant_id not in payload['input']
+            repair = prompt_json(payload, 'invalid_output')
+            retained = {row['record_id'] for row in repair['read_only_records']}
+            assert first_id in retained and redundant_id not in retained
             output = {'saturated': False, 'input_dispositions': {'i0002': dict(status='duplicate', records=[],
                  retained_record_ids=[first_id], reason='Дословный повтор Uno.')}}
         return Response(model_response(output))

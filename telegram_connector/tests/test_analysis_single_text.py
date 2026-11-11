@@ -4,6 +4,7 @@ import json
 
 import pytest
 
+from telegram_connector.tests.analysis_fixtures import prompt_json
 from telegram_connector import analysis_evidence as evidence
 from telegram_connector import analysis_pipeline as pipeline
 from telegram_connector.tests.test_analysis_manifest import manifest_job
@@ -52,7 +53,7 @@ def test_new_evidence_and_synthesis_have_one_text(manifest_job, command):
     view = dict(records=records, relations=[], partial=False, reasons=[], coverage={})
     payload = pipeline.build_synthesis_payload(job, view)
     assert payload['text']['format']['name'] == 'telegram_synthesis_v4'
-    data = json.loads(payload['input'].split('Опорные записи: ', 1)[1])
+    data = prompt_json(payload['input'], 'evidence')
     assert data['equivalent_detail_groups'] == []
     row = data['records'][0]
     assert row['details'] == ['Замер выполнен на 16 GB.']
@@ -146,11 +147,11 @@ def test_worker_publishes_only_authored_text_and_public_report(manifest_job, com
                 rows[fragment['input_id']] = dict(status='represented', records=[row], retained_record_ids=[], reason='')
             value = dict(saturated=False, input_dispositions=rows)
         elif name == 'telegram_relations_v2':
-            data = json.loads(payload['input'].split('Кандидаты: ', 1)[1])
+            data = prompt_json(payload['input'], 'records')
             value = dict(saturated=False, decisions=[dict(pair_id=p['pair_id'], relation='unrelated', reason='Разные записи.') for p in data['pairs']])
         else:
             assert name == 'telegram_synthesis_v4'
-            data = json.loads(payload['input'].split('Опорные записи: ', 1)[1])
+            data = prompt_json(payload['input'], 'evidence')
             assert data['records'][0]['details'] == ['Замер выполнен на 16 GB.']
             assert not {'conditions', 'exceptions', 'detail_groups'} & data['records'][0].keys()
             value = dict(summary='Требования ALPHA.', items=[dict(title='Требования ALPHA',
@@ -194,17 +195,17 @@ def test_hint_is_omitted_before_facts_on_packing_boundary(manifest_job):
     view = dict(records=records, relations=[], partial=False, reasons=[], coverage={})
     before = copy.deepcopy(view)
     payload = pipeline.build_synthesis_payload(job, view)
-    data = json.loads(payload['input'].split('Опорные записи: ', 1)[1])
+    data = prompt_json(payload['input'], 'evidence')
     assert len(data['equivalent_detail_groups']) == 1
     change_setting(store, job, 'analysis.ai', 'message_block_max_chars', len(evidence.canonical_json(data)) - 1)
     current = store.get_job(job['job_id'])
     packed = pipeline.build_synthesis_payload(current, view)
-    wire = json.loads(packed['input'].split('Опорные записи: ', 1)[1])
+    wire = prompt_json(packed['input'], 'evidence')
     assert wire['equivalent_detail_groups'] == []
     for key in ('records', 'quote_texts', 'source_table'):
         assert wire[key] == data[key]
     assert view == before
-    current['request']['settings']['analysis_prompts']['templates']['synthesize'] = current['request']['settings']['analysis_prompts']['templates']['synthesize'].replace('Опорные записи: ', 'FACTS: ')
+    current['request']['settings']['analysis_prompts']['templates']['synthesize'] = 'Edited heading\n' + current['request']['settings']['analysis_prompts']['templates']['synthesize']
     packed = pipeline.build_synthesis_payload(current, view)
     batch = pipeline._plan_synthesis_batch(store, current, view, packed, generation=current['generation'])
     assert batch['payload']['plan']['detail_hint'] == dict(candidate_groups=1, sent_groups=0, chars=2, omitted_reason='packing')
@@ -224,7 +225,7 @@ def test_material_qualifiers_reach_current_synthesis_and_stay_in_text(manifest_j
     rows = extract(store, job, source, details, entity=brand)
     view = dict(records=rows, relations=[], partial=False, reasons=[], coverage={})
     payload = pipeline.build_synthesis_payload(job, view)
-    wire = json.loads(payload['input'].split('Опорные записи: ', 1)[1])
+    wire = prompt_json(payload['input'], 'evidence')
     assert wire['records'][0]['details'] == details
     text = ' '.join(details)
     document = dict(summary='', items=[dict(title=brand, text=text,

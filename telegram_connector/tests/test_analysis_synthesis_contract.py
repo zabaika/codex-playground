@@ -3,6 +3,7 @@ import copy
 
 import pytest
 
+from telegram_connector.tests.analysis_fixtures import prompt_json
 from telegram_connector import analysis_evidence as evidence, analysis_pipeline as pipeline
 from telegram_connector.tests.test_analysis_manifest import manifest_job
 from telegram_connector.tests.test_analysis_relations import records_fixture
@@ -62,7 +63,7 @@ def test_short_addresses_round_trip_to_canonical_records(manifest_job):
     original = copy.deepcopy(view)
     view['groups'] = [{'node_id': 'group', 'evidence_ids': [r['record_id'] for r in records]}]
     payload = pipeline.build_synthesis_payload(job, view)
-    wire = json.loads(payload['input'].split('Опорные записи: ', 1)[1])
+    wire = prompt_json(payload['input'], 'evidence')
     aliases = {r['record_id']: f'r{index:03}' for index, r in enumerate(sorted(records, key=lambda r:r['record_id']),1)}
     assert [r['record_id'] for r in wire['records']] == [aliases[r['record_id']] for r in records]
     assert wire['relations'][0]['left_id'] == aliases[records[0]['record_id']]
@@ -106,7 +107,7 @@ def test_private_metadata_removal_does_not_relax_detail_equivalence(manifest_job
     for row in records:
         row['payload']['details'] = ['Только Pro.']
     payload = pipeline.build_synthesis_payload(job, view)
-    wire = json.loads(payload['input'].split('Опорные записи: ',1)[1])
+    wire = prompt_json(payload['input'], 'evidence')
     assert wire['equivalent_detail_groups'] == []
     assert 'detail_groups' not in payload['text']['format']['schema']['properties']['items']['items']['properties']
     assert all('schema_version' not in row for row in wire['records'])

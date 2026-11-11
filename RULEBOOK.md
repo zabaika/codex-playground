@@ -769,6 +769,7 @@ Rules:
 
 - every new command nuance should have a parser test
 - functional tests should primarily verify current behavior and public contracts; keep supported backward-compatibility cases distinct, without making historical algorithms or prompts accidental dependencies of current-behavior tests
+- prompt tests must verify transmitted data, structure and application behavior without depending on instructional wording, prose headings or formatting; use model evaluations for semantic compliance. Apply this to assertions, fixtures, helpers and mocks; do not parse payloads through editorial headings. Keep exact matching for explicit literal contracts, fixture markers and security boundaries. Preserve the original guarantee when replacing a check, and report any remaining semantic coverage gap.
 - fixture updates must preserve independent behavioral assertions rather than hide regressions; remove obsolete tests only after verifying that required coverage survives elsewhere
 - a passing test count does not establish semantic completeness; use the distinct code, semantic-quality, resource and runtime evidence gates below for the claims they actually cover
 - every new config nuance should have a config test

@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from telegram_connector.tests.analysis_fixtures import prompt_json
 from telegram_connector.tests.analysis_fixtures import extraction_inputs, owned_response_from_records
 
 from telegram_connector import telegram_analysis as analysis
@@ -584,7 +585,7 @@ def search_answer(search_job, runtime, tmp_path, monkeypatch):
                     records.append(value)
                 return Response(model_response(owned_response_from_records(data, {"records": records, "saturated": False})))
             if kind == "telegram_relations_v2":
-                pairs = expand_wire_quotes(json.loads(data["input"].split("Кандидаты: ", 1)[1]))
+                pairs = expand_wire_quotes(prompt_json(data["input"], 'records'))
                 by_id = {r["record_id"]: r["payload"] for r in pairs["records"]}
                 decisions = []
                 for pair in pairs["pairs"]:
@@ -595,7 +596,7 @@ def search_answer(search_job, runtime, tmp_path, monkeypatch):
                         "reason": "Fixture-labelled compatibility of conditions"})
                 return Response(model_response({"decisions": decisions, "saturated": False}))
             if kind == CURRENT_SYNTHESIS_FORMAT:
-                evidence = expand_wire_quotes(json.loads(data["input"].split("Опорные записи: ", 1)[1]))
+                evidence = expand_wire_quotes(prompt_json(data["input"], 'evidence'))
                 claims = [text for r in evidence['records'] for text in [r['payload']['claim'], *r['payload']['details']]]
                 return Response(model_response({'summary': 'В обсуждениях приведены условия и противоречащие суммы.', 'items': [{'title': 'Условия оформления', 'text': ' '.join(claims), 'contradictions': [], 'evidence_ids': [r['record_id'] for r in evidence['records']]}], 'limitations': [], 'insufficient_information': False, 'saturated': False}))
             return base(req, timeout)

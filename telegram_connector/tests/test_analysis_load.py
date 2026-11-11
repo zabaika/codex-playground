@@ -28,6 +28,7 @@ if str(ROOT) not in sys.path:
 import pytest
 
 from telegram_connector.tests.analysis_fixtures import CURRENT_EVIDENCE_FORMAT, CURRENT_SYNTHESIS_FORMAT
+from telegram_connector.tests.analysis_fixtures import prompt_json, write_prompt_bundle
 from common import json_io, sqlite as common_sqlite
 from telegram_connector.tests.analysis_fixtures import extraction_inputs, owned_response_from_records
 
@@ -74,17 +75,17 @@ def bounded_provider(job, stats):
                 records.append({'record_type': 'answer' if job['command'] == 'qa' else 'event' if job['command'] == 'topics' else 'claim', 'claim': quote, 'details': [], 'entities': ['Uno'], 'topic_key': 'документы', 'source_refs': [{**{key: ref.get(key, '' if key == 'content_digest' else 0) for key in ('channel_id', 'message_id', 'content_digest', 'fragment_start')}, 'fragment_end': ref.get('fragment_start', 0) + len(quote), 'quote': quote}], 'related_message_refs': [], 'assertion_kind': 'reported', 'support_status': 'reported'})
             output = owned_response_from_records(data, {"records": records, "saturated": False})
         elif kind == "telegram_relations_v2":
-            pairs = json.loads(data["input"].split("Кандидаты: ", 1)[1])["pairs"]
+            pairs = prompt_json(data["input"], 'records')["pairs"]
             output = {"decisions": [{"pair_id": pair["pair_id"], "relation": "complements", "reason": "Synthetic repeated condition"}
                 for pair in pairs], "saturated": False}
         elif kind == "telegram_merge_v1":
-            values = json.loads(data["input"].split("Записи: ", 1)[1])["inputs"]
+            values = prompt_json(data["input"], 'records')["inputs"]
             ids = [value["node_id"] for value in values]
             output = {"groups": [{"title": "Документы Uno", "summary": "Повторяющиеся условия подачи", "input_ids": ids}],
                 "dispositions": [{"input_id": key, "disposition": "merged", "reason": "Сохранено"} for key in ids], "saturated": False}
         else:
             assert kind == CURRENT_SYNTHESIS_FORMAT
-            values = json.loads(data["input"].split("Опорные записи: ", 1)[1])["records"]
+            values = prompt_json(data["input"], 'evidence')["records"]
             output = {"summary": "Условия из синтетического корпуса", "items": [{'title': 'Какие документы нужны?' if job['command'] == 'qa' else 'Документы Uno', 'text': 'Паспорт; 1250 EUR, срок 30 дней.', 'contradictions': [], 'evidence_ids': [values[0]['record_id']]}] if values else [], "limitations": [],
                 "insufficient_information": not values, "saturated": False}
         output = output
@@ -147,6 +148,7 @@ def measure(count, report, *, cache_probe=False):
     with tempfile.TemporaryDirectory(prefix="telegram-analysis-load-") as folder:
         path = Path(folder) / "history.sqlite3"
         config = tomllib.loads((history.APP_DIR / "config/runtime.example.toml").read_text())
+        config['analysis_prompts']['file'] = write_prompt_bundle(Path(folder))
         config["paths"]["history_db"] = str(path)
         config["processing"]["model"] = "gpt-5.6-luna"
         config["analysis"]["ai"].update(reasoning_effort="low", reasoning_summary="none",

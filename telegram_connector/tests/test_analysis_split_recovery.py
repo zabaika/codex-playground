@@ -12,6 +12,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from telegram_connector.tests.analysis_fixtures import prompt_json
 from telegram_connector import analysis_pipeline as pipeline, analysis_telemetry as telemetry
 from telegram_connector import telegram_analysis as analysis
 from telegram_connector.tests.test_analysis_manifest import manifest_job, seed, build
@@ -59,7 +60,7 @@ def irrelevant_provider(req, timeout):
     if req.full_url.endswith('input_tokens'):
         return Response({'input_tokens': 100})
     payload = json.loads(req.data)
-    data = json.loads(payload['input'].split('Сообщения: ', 1)[1])
+    data = prompt_json(payload['input'], 'messages')
     return Response(model_response({'saturated': False, 'input_dispositions': {
         value['input_id']: dict(status='irrelevant', records=[], retained_record_ids=[],
             reason='Локальная fixture-разметка.') for value in data['inputs']}}))
@@ -114,7 +115,7 @@ def test_worker_continues_saved_split_before_synthesis_and_local_delivery(manife
             return irrelevant_provider(req, timeout)
         assert kind == CURRENT_SYNTHESIS_FORMAT
         assert all(store.get_batch(key)['state'] == 'succeeded' for key in parent['payload']['split_children'])
-        evidence = expand_wire_quotes(json.loads(payload['input'].split('Опорные записи: ', 1)[1]))
+        evidence = expand_wire_quotes(prompt_json(payload['input'], 'evidence'))
         record = evidence['records'][0]
         return Response(model_response({'summary': 'Сведения банка Uno.', 'items': [{'title': 'Комиссия и срок', 'text': record['payload']['claim'], 'contradictions': [], 'evidence_ids': [record['record_id']]}], 'limitations': [], 'insufficient_information': False, 'saturated': False}))
     result = analysis.execute_analysis_job(store, store.get_job(job['job_id']),

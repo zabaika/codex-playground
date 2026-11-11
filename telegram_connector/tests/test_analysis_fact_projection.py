@@ -1,6 +1,7 @@
 """Private model projections keep service metadata and citations canonical."""
 import copy,json
 import pytest
+from telegram_connector.tests.analysis_fixtures import prompt_json
 from telegram_connector import analysis_pipeline as pipeline
 from telegram_connector.tests.test_analysis_manifest import manifest_job
 from telegram_connector.tests.test_analysis_extraction_accounting import accounting_batch
@@ -17,12 +18,12 @@ def test_extraction_keeps_explicit_dates_but_not_publication_metadata(manifest_j
     batch['context'][0]['input']['role']='context'
     before=copy.deepcopy(batch)
     payload=pipeline.build_extraction_payload(job,batch['messages'],batch['context'])
-    wire=json.loads(payload['input'].split('Сообщения: ',1)[1])
+    wire=prompt_json(payload['input'], 'messages')
     for fragment in wire['inputs']:
         assert not {'date_utc','content_digest','fragment_start','fragment_end','step_key'} & fragment['input'].keys()
         assert 'date_utc' not in fragment['message']
         assert '4 июля' in fragment['message']['text']
-    context=json.loads(payload['input'].split('Контекст: ',1)[1].split('\nСообщения: ',1)[0])
+    context=prompt_json(payload['input'], 'context')
     assert all('date_utc' not in f['input'] and 'date_utc' not in f['message'] for f in context)
     assert batch==before and 'date_utc' in batch['messages'][0]['input']
 
@@ -33,7 +34,7 @@ def test_synthesis_transmits_all_facts_and_exact_quotes_with_shared_source_ident
     before=copy.deepcopy(view)
     payload=pipeline.build_synthesis_payload(job,view)
     from telegram_connector.tests.analysis_fixtures import expand_wire_quotes
-    raw=json.loads(payload['input'].split('Опорные записи: ',1)[1])
+    raw=prompt_json(payload['input'], 'evidence')
     assert raw['source_table'] and raw['quote_texts']
     assert 'groups' not in raw and raw['topic_components']
     wire=expand_wire_quotes(raw)
@@ -73,7 +74,7 @@ def test_repeated_source_text_does_not_displace_supported_facts(manifest_job):
     assert state['route']=='direct'
     view=pipeline._synthesis_evidence(store,store.get_job(job['job_id']))
     assert view['coverage']['ranking_scope']=='complete' and len(view['records'])==8
-    data=json.loads(pipeline.build_synthesis_payload(store.get_job(job['job_id']),view)['input'].split('Опорные записи: ',1)[1])
+    data=prompt_json(pipeline.build_synthesis_payload(store.get_job(job['job_id']),view)['input'], 'evidence')
     expanded=expand_wire_quotes(data)
     assert len(data['quote_texts'])==1
     assert all(row['payload']['source_refs'][0]['quote']==text for row in expanded['records'])

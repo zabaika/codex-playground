@@ -19,6 +19,7 @@ from telegram_connector import telegram_analysis as analysis
 from telegram_connector import telegram_bridge as bridge
 from telegram_connector import telegram_history_client as history
 from telegram_connector.analysis_store import AnalysisStore, StaleGenerationError
+from telegram_connector.tests.analysis_fixtures import write_prompt_bundle
 
 
 NOW = datetime(2026, 10, 15, 12, tzinfo=timezone.utc)
@@ -27,9 +28,10 @@ REAL_HISTORY_HANDLER = bridge.handle_history_command
 
 
 @pytest.fixture
-def config():
+def config(tmp_path):
     values = tomllib.loads((CONFIG_DIR / "runtime.example.toml").read_text())
     values["processing"]["model"] = "fixture-model"
+    values['analysis_prompts']['file'] = write_prompt_bundle(tmp_path)
     values["bridge"].update(allowed_chat_ids="100", allowed_user_ids="7", allowed_usernames="")
     return values
 

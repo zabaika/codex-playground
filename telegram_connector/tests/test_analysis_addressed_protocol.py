@@ -4,6 +4,7 @@ import copy
 
 import pytest
 
+from telegram_connector.tests.analysis_fixtures import prompt_json
 from telegram_connector import analysis_evidence as evidence, analysis_settings as settings
 from telegram_connector.tests.analysis_fixtures import CURRENT_EVIDENCE_FORMAT, CURRENT_SYNTHESIS_FORMAT
 from telegram_connector.tests.test_analysis_manifest import manifest_job
@@ -109,7 +110,7 @@ def test_addressed_worker_repairs_only_residual_and_reaches_local_delivery(manif
                     retained_record_ids=[], reason='Благодарность без события.')}}
         else:
             assert name == CURRENT_SYNTHESIS_FORMAT
-            records = expand_wire_quotes(json.loads(payload['input'].split('Опорные записи: ', 1)[1]))['records']
+            records = expand_wire_quotes(prompt_json(payload['input'], 'evidence'))['records']
             response = {'summary': 'Релиз ALPHA.', 'items': [
                 {'title': 'Релиз ALPHA', 'text': records[0]['payload']['claim'], 'contradictions': [], 'evidence_ids': [records[0]['record_id']]}],
                 'limitations': [], 'insufficient_information': False, 'saturated': False}

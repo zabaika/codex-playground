@@ -7,6 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from telegram_connector.tests.analysis_fixtures import prompt_json
 from telegram_connector.tests.analysis_fixtures import extraction_inputs, owned_response_from_records
 
 from telegram_connector import telegram_analysis as analysis
@@ -127,16 +128,16 @@ def engine_provider(store, job, calls):
                 records.append(value)
             output = owned_response_from_records(data, {"records": records, "saturated": False})
         elif kind == "telegram_relations_v2":
-            pairs = json.loads(data["input"].split("Кандидаты: ", 1)[1])["pairs"]
+            pairs = prompt_json(data["input"], 'records')["pairs"]
             output = {"decisions": [{"pair_id": pair["pair_id"], "relation": "unrelated", "reason": "Разные факты"} for pair in pairs], "saturated": False}
         elif kind == "telegram_merge_v1":
-            inputs = json.loads(data["input"].split("Записи: ", 1)[1])["inputs"]
+            inputs = prompt_json(data["input"], 'records')["inputs"]
             ids = [value["node_id"] for value in inputs]
             output = {"groups": [{"title": "Условия", "summary": "Все факты сохранены в lineage", "input_ids": ids}],
                 "dispositions": [{"input_id": key, "disposition": "merged", "reason": "Включено"} for key in ids], "saturated": False}
         else:
             assert kind in {"telegram_synthesis_v1", CURRENT_SYNTHESIS_FORMAT}
-            records = expand_wire_quotes(json.loads(data["input"].split("Опорные записи: ", 1)[1]))["records"]
+            records = expand_wire_quotes(prompt_json(data["input"], 'evidence'))["records"]
             output = {"summary": "Условия из истории", "items": [{'title': 'Факт', 'text': r['payload']['claim'], 'contradictions': [], 'evidence_ids': [r['record_id']]} for r in records],
                 "limitations": [], "insufficient_information": not records, "saturated": False}
         return Response(model_response(output))

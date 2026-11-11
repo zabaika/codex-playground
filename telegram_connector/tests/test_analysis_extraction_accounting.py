@@ -4,6 +4,7 @@ import json
 
 import pytest
 
+from telegram_connector.tests.analysis_fixtures import prompt_json
 from telegram_connector import analysis_evidence
 from telegram_connector.tests.test_analysis_manifest import manifest_job, seed, build
 from telegram_connector.tests.test_analysis_batching import batches
@@ -248,7 +249,7 @@ def test_worker_surfaces_missing_input_in_content_status_and_read_only_report(ma
         if payload['text']['format']['name'] == analysis_evidence.ADDRESSED_EVIDENCE_FORMATS[job['request']['settings']['schema_version']]:
             result = value
         else:
-            evidence = json.loads(payload['input'].split('Опорные записи: ', 1)[1])
+            evidence = prompt_json(payload['input'], 'evidence')
             result = {'summary': 'За период произошло событие.', 'items': [
                 {'title': 'Первое событие', 'text': 'Первое событие.',
                  'contradictions': [],
@@ -320,8 +321,11 @@ def test_residual_repair_preserves_first_record_and_sends_only_unresolved_input(
     assert result['partial'] is False, json.dumps({k: diagnostic[k] for k in (
         'record_errors', 'dispositions', 'unresolved_input_ids')}, ensure_ascii=False)
     assert len(requests) == 2
-    assert 'original_task' in requests[1]['input'] and 'event_at' not in requests[1]['input']
-    assert 'BETA' in requests[1]['input'] and 'ALPHA' not in requests[1]['input']
+    repair = prompt_json(requests[1], 'invalid_output')
+    assert 'original_task' in repair
+    assert all('event_at' not in row for row in repair['read_only_records'])
+    assert [row['message']['text'] for row in repair['inputs']] == ['Выпущен продукт BETA.']
+    assert not repair['read_only_records']
     saved = store.get_batch(batch['batch_id'])['payload']['extraction_progress']
     origins = list(saved['accepted_records'].values())
     assert len(origins) == 2 and origins[0]['attempt_id'] != origins[1]['attempt_id']
