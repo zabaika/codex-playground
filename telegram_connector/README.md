@@ -181,6 +181,8 @@ an unanswered question is insufficient evidence. Results retain source reference
 conditions and conflicting accounts rather than filling gaps with external knowledge.
 Conditions and exceptions are included when composing each item's text, without
 separate blocks or automatically appended detail lists.
+Duplicate evidence IDs trigger bounded synthesis repair; failure leaves an empty
+partial result. Valid IDs alone do not prove factual support.
 
 The bridge queues requests durably and remains responsive. One separate progress
 message per job is updated at the configured interval; `/status <job_id>` shows stage,

@@ -45,15 +45,26 @@ def test_digest_aggregation_does_not_reopen_a_nonpublishable_topics_input(manife
     assert e.record_source_eligible(store,store.get_job(job['job_id']),result['records'][0]['payload'])==(command!='topics')
 
 
-def test_current_duplicate_pointer_normalization_keeps_all_source_guards(manifest_job):
+def test_synthesis_duplicate_evidence_ids_are_rejected(manifest_job):
     from telegram_connector.tests.test_analysis_synthesis_contract import case
     store,job=manifest_job;job,rows,view,doc=case(store,job)
-    before=copy.deepcopy(doc)
     doc['items'][0]['evidence_ids']=[rows[0]['record_id']]*2
-    result=p._synthesis_result(job,view,doc)
-    assert result['items'][0]['evidence_ids']==[rows[0]['record_id']]
-    doc['items'][0]['evidence_ids']+=['foreign']
+    before=copy.deepcopy(doc)
+    with pytest.raises(ValueError,match='synthesis_evidence_duplicate'):
+        p._synthesis_result(job,view,doc)
+    assert doc == before
+    doc['items'][0]['evidence_ids']=[rows[0]['record_id'],'foreign']
     with pytest.raises(ValueError,match='synthesis_evidence_scope'):
+        p._synthesis_result(job,view,doc)
+
+
+def test_synthesis_alias_and_canonical_id_collision_rejected(manifest_job,monkeypatch):
+    from telegram_connector.tests.test_analysis_synthesis_contract import case
+    store,job=manifest_job;job,rows,view,doc=case(store,job)
+    original_id=rows[0]['record_id']
+    monkeypatch.setattr(p,'_record_aliases',lambda known: {original_id:'r_test'})
+    doc['items'][0]['evidence_ids']=['r_test',original_id]
+    with pytest.raises(ValueError,match='synthesis_evidence_duplicate'):
         p._synthesis_result(job,view,doc)
 
 

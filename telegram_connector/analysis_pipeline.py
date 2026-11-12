@@ -997,12 +997,14 @@ def _synthesis_result(job, evidence, document, *, reason=None):
     value = copy.deepcopy(document)
     canonical = {alias: key for key, alias in _record_aliases(known).items()}
     for item in value['items']:
-        item['evidence_ids'] = list(dict.fromkeys(canonical.get(key, key) for key in item['evidence_ids']))
+        item['evidence_ids'] = [canonical.get(key, key) for key in item['evidence_ids']]
     errors = []
     for item_index, item in enumerate(value["items"]):
         try:
             ids = item["evidence_ids"]
-            if not ids or len(set(ids)) != len(ids) or not set(ids) <= set(known):
+            if len(ids) != len(set(ids)):
+                raise ValueError("synthesis_evidence_duplicate")
+            if not ids or not set(ids) <= set(known):
                 raise ValueError("synthesis_evidence_scope")
             original_ids = set(ids)
             for relation in topic_edges:

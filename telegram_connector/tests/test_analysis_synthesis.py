@@ -132,6 +132,74 @@ def test_s20_detail_synthesis_rejects_unknown_evidence_ids(manifest_job, capsys)
     assert "Факт с источником" not in diagnostic
 
 
+@pytest.mark.parametrize('repair_limit,repair_succeeds', [
+    (1, True), (1, False), (0, False),
+])
+def test_synthesis_duplicate_ids_use_bounded_repair(
+        manifest_job, capsys, repair_limit, repair_succeeds):
+    store, job = manifest_job
+    records = records_fixture(store, job, [{'claim': 'Факт с источником'}])
+    change_setting(store, job, 'analysis', 'max_repair_attempts', repair_limit)
+    merge(store, job, merge_sender())
+    before = store.get_job(job['job_id'])
+    requests = []
+    documents = []
+
+    def sender(req, timeout):
+        body = json.loads(req.data)
+        if req.full_url.endswith('input_tokens'):
+            return Response({'input_tokens': 100})
+        requests.append(body)
+        if len(requests) == 1:
+            identity = prompt_json(body['input'], 'evidence')['records'][0]['record_id']
+        else:
+            identity = documents[0]['items'][0]['evidence_ids'][0]
+        ids = [identity] if len(requests) > 1 and repair_succeeds else [identity] * 3
+        document = {'summary': '', 'items': [{'title': 'Факт',
+            'text': 'Факт с источником', 'contradictions': [], 'evidence_ids': ids}],
+            'limitations': [], 'insufficient_information': False, 'saturated': False}
+        documents.append(document)
+        return Response(model_response(document))
+
+    result = synthesize(store, job, sender)
+    calls = 1 + repair_limit
+    current = store.get_job(job['job_id'])
+    assert len(requests) == calls
+    assert current['llm_calls'] - before['llm_calls'] == calls
+    assert current['provider_requests'] - before['provider_requests'] == calls * 2
+    assert current['result'] == result
+    batch_id, = store.conn.execute(
+        "SELECT batch_id FROM analysis_batches WHERE job_id=? AND kind='synthesize'",
+        (job['job_id'],)).fetchone()
+    batch = store.get_batch(batch_id)
+    attempts = [a for a in batch['attempts'] if a['request_kind'] == 'inference']
+    assert len(attempts) == calls
+    assert all(a['state'] == 'succeeded' and a['usage'] for a in attempts)
+    assert batch['payload'].get('repair_attempts', 0) == repair_limit
+    if repair_limit:
+        repair = prompt_json(requests[1]['input'], 'invalid_output')
+        assert repair['original_task'] == requests[0]['input']
+        assert json.loads(repair['invalid_output']) == documents[0]
+        assert 'synthesis_evidence_duplicate' in prompt_field(requests[1], 'validation_errors')
+    if repair_succeeds:
+        assert not result['partial']
+        assert result['items'][0]['evidence_ids'] == [records[0]['record_id']]
+        assert batch['state'] == 'succeeded'
+        assert batch['payload']['output'] == documents[-1]
+    else:
+        assert result['partial'] and result['items'] == []
+        assert 'invalid_schema' in result['reasons']
+        assert batch['state'] == 'failed'
+        assert batch['payload']['outcome'] == 'invalid_schema'
+        assert 'output' not in batch['payload']
+    diagnostic = capsys.readouterr().err
+    assert 'synthesis_evidence_duplicate' in diagnostic
+    assert 'Факт с источником' not in diagnostic
+    assert synthesize(store, job, lambda *a, **k: pytest.fail(
+        'A saved result must not retry or publish rejected items')) == result
+    assert store.get_job(job['job_id'])['provider_requests'] == current['provider_requests']
+
+
 def test_s38_synthesis_rejection_diagnostic_never_logs_exception_content(manifest_job, monkeypatch, capsys):
     store, job = manifest_job
     records_fixture(store, job, [{"claim": "Приватное исходное сообщение"}])

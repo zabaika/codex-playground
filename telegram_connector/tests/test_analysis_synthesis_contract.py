@@ -42,6 +42,17 @@ def test_topics_cannot_join_disconnected_or_unrelated_events(manifest_job, relat
         pipeline._synthesis_result(job, view, document)
 
 
+def test_unique_evidence_ids_do_not_prove_semantic_support(manifest_job):
+    """This structural validator cannot detect text borrowed from another record."""
+    store, job = manifest_job
+    job, records, view, document = case(store, job, related=False)
+    document['items'][0]['evidence_ids'] = [records[0]['record_id']]
+    result = pipeline._synthesis_result(job, view, document)
+    assert result['items'][0]['text'] == document['items'][0]['text']
+    assert 'Доступ по подписке' in result['items'][0]['text']
+    assert result['items'][0]['evidence_ids'] == [records[0]['record_id']]
+
+
 def test_partial_does_not_mean_topics_with_supported_items_have_no_information(manifest_job):
     store, job = manifest_job
     job, records, view, document = case(store, job)
