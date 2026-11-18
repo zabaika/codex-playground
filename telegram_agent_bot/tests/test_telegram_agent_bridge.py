@@ -7,6 +7,8 @@ import unittest
 from unittest.mock import patch
 from pathlib import Path
 
+from telegram_shared.openai_usage import AI_USAGE_SCHEMA_SQL
+
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "telegram_agent_bridge.py"
 SPEC = importlib.util.spec_from_file_location("telegram_agent_bridge_module", MODULE_PATH)
@@ -601,47 +603,7 @@ class TelegramAgentBridgeTests(unittest.TestCase):
             telegram_agent_bridge.AGENT_DB_FILE = Path(tmp_dir) / "telegram_agent.sqlite3"
             conn = sqlite3.connect(telegram_agent_bridge.AGENT_DB_FILE)
             try:
-                conn.executescript(
-                    """
-                    CREATE TABLE ai_usage_log (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        created_at TEXT NOT NULL,
-                        feature TEXT NOT NULL,
-                        stage TEXT NOT NULL,
-                        channel TEXT,
-                        since TEXT,
-                        until TEXT,
-                        model TEXT NOT NULL,
-                        response_id TEXT,
-                        prompt_cache_key TEXT,
-                        prompt_cache_retention TEXT,
-                        prompt_version_hash TEXT,
-                        request_index INTEGER,
-                        message_count INTEGER,
-                        system_chars INTEGER,
-                        prompt_chars INTEGER,
-                        shared_prefix_chars INTEGER,
-                        shared_prefix_hash TEXT,
-                        prompt_hash TEXT,
-                        previous_prompt_hash TEXT,
-                        previous_response_id TEXT,
-                        prefix_match_chars_with_previous INTEGER,
-                        prompt_text TEXT,
-                        input_tokens INTEGER,
-                        cached_input_tokens INTEGER,
-                        cache_write_tokens INTEGER,
-                        reasoning_tokens INTEGER,
-                        output_chars INTEGER,
-                        response_status TEXT,
-                        incomplete_reason TEXT,
-                        output_tokens INTEGER,
-                        total_tokens INTEGER,
-                        latency_ms INTEGER,
-                        status TEXT NOT NULL,
-                        error TEXT
-                    );
-                    """
-                )
+                conn.executescript(AI_USAGE_SCHEMA_SQL)
                 conn.execute(
                     """
                     INSERT INTO ai_usage_log (
@@ -651,9 +613,9 @@ class TelegramAgentBridgeTests(unittest.TestCase):
                     )
                     VALUES
                     ('2026-03-23T10:00:00+00:00', 'agent', 'round_1', '42', 'gpt-5.4-mini', 'resp_1',
-                     'agent:a', 1, 1, 'p1', 100, 40, 20, 120, 200, 'ok'),
+                     'agent:a', 1, 1, 'p1', 100, 40, 20, 120, 200, 'succeeded'),
                     ('2026-03-23T10:05:00+00:00', 'agent', 'round_2', '99', 'gpt-5.4-mini', 'resp_2',
-                     'agent:b', 2, 1, 'p2', 60, 0, 10, 70, 210, 'error')
+                     'agent:b', 2, 1, 'p2', 60, 0, 10, 70, 210, 'failed')
                     """
                 )
                 conn.commit()
@@ -665,6 +627,8 @@ class TelegramAgentBridgeTests(unittest.TestCase):
                 telegram_agent_bridge.AGENT_DB_FILE = original_db_file
         assert summary is not None
         self.assertEqual(summary["global"]["total_requests"], 2)
+        self.assertEqual(summary["global"]["ok_requests"], 1)
+        self.assertEqual(summary["global"]["error_requests"], 1)
         self.assertEqual(summary["global"]["cached_input_tokens"], 40)
         self.assertEqual(summary["filtered"]["total_requests"], 1)
         self.assertEqual(summary["filtered"]["cached_input_tokens"], 40)
@@ -677,47 +641,7 @@ class TelegramAgentBridgeTests(unittest.TestCase):
             telegram_agent_bridge.AGENT_DB_FILE = Path(tmp_dir) / "telegram_agent.sqlite3"
             conn = sqlite3.connect(telegram_agent_bridge.AGENT_DB_FILE)
             try:
-                conn.executescript(
-                    """
-                    CREATE TABLE ai_usage_log (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        created_at TEXT NOT NULL,
-                        feature TEXT NOT NULL,
-                        stage TEXT NOT NULL,
-                        channel TEXT,
-                        since TEXT,
-                        until TEXT,
-                        model TEXT NOT NULL,
-                        response_id TEXT,
-                        prompt_cache_key TEXT,
-                        prompt_cache_retention TEXT,
-                        prompt_version_hash TEXT,
-                        request_index INTEGER,
-                        message_count INTEGER,
-                        system_chars INTEGER,
-                        prompt_chars INTEGER,
-                        shared_prefix_chars INTEGER,
-                        shared_prefix_hash TEXT,
-                        prompt_hash TEXT,
-                        previous_prompt_hash TEXT,
-                        previous_response_id TEXT,
-                        prefix_match_chars_with_previous INTEGER,
-                        prompt_text TEXT,
-                        input_tokens INTEGER,
-                        cached_input_tokens INTEGER,
-                        cache_write_tokens INTEGER,
-                        reasoning_tokens INTEGER,
-                        output_chars INTEGER,
-                        response_status TEXT,
-                        incomplete_reason TEXT,
-                        output_tokens INTEGER,
-                        total_tokens INTEGER,
-                        latency_ms INTEGER,
-                        status TEXT NOT NULL,
-                        error TEXT
-                    );
-                    """
-                )
+                conn.executescript(AI_USAGE_SCHEMA_SQL)
                 conn.execute(
                     """
                     INSERT INTO ai_usage_log (
@@ -726,9 +650,9 @@ class TelegramAgentBridgeTests(unittest.TestCase):
                         input_tokens, cached_input_tokens, output_tokens, total_tokens, latency_ms, status
                     )
                     VALUES
-                    ('2026-03-23T10:00:00+00:00', 'agent', 'round_1', '42', 'gpt-5.4-mini', 'resp_1', 'agent:a', 1, 1, 'p1', 100, 50, 20, 120, 200, 'ok'),
-                    ('2026-03-23T10:05:00+00:00', 'agent', 'round_2', '42', 'gpt-5.4-mini', 'resp_2', 'agent:a', 2, 1, 'p2', 90, 10, 18, 108, 210, 'ok'),
-                    ('2026-03-23T10:10:00+00:00', 'agent', 'round_3', '42', 'gpt-5.4-mini', 'resp_3', 'agent:a', 3, 1, 'p3', 80, 0, 16, 96, 220, 'ok')
+                    ('2026-03-23T10:00:00+00:00', 'agent', 'round_1', '42', 'gpt-5.4-mini', 'resp_1', 'agent:a', 1, 1, 'p1', 100, 50, 20, 120, 200, 'succeeded'),
+                    ('2026-03-23T10:05:00+00:00', 'agent', 'round_2', '42', 'gpt-5.4-mini', 'resp_2', 'agent:a', 2, 1, 'p2', 90, 10, 18, 108, 210, 'succeeded'),
+                    ('2026-03-23T10:10:00+00:00', 'agent', 'round_3', '42', 'gpt-5.4-mini', 'resp_3', 'agent:a', 3, 1, 'p3', 80, 0, 16, 96, 220, 'succeeded')
                     """
                 )
                 conn.commit()

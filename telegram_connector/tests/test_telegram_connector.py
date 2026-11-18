@@ -9,6 +9,8 @@ from unittest.mock import patch
 from pathlib import Path
 from types import SimpleNamespace
 
+from telegram_shared.openai_usage import AI_USAGE_SCHEMA_SQL
+
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "telegram_bridge.py"
 SPEC = importlib.util.spec_from_file_location("telegram_bridge_module", MODULE_PATH)
@@ -37,6 +39,11 @@ def load_bridge_module_with_env(**env: str):
 
 class TelegramConnectorTests(unittest.TestCase):
     def setUp(self) -> None:
+        project = tempfile.TemporaryDirectory()
+        self.addCleanup(project.cleanup)
+        project_root = patch.object(telegram_connector, "PROJECT_ROOT", Path(project.name))
+        project_root.start()
+        self.addCleanup(project_root.stop)
         self._original_load_runtime_config = telegram_connector.load_runtime_config
         telegram_connector.load_runtime_config = lambda: {
             "sync": {
@@ -771,47 +778,7 @@ class TelegramConnectorTests(unittest.TestCase):
             conn = sqlite3.connect(db_path)
             conn.row_factory = sqlite3.Row
             try:
-                conn.executescript(
-                    """
-                    CREATE TABLE ai_usage_log (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        created_at TEXT NOT NULL,
-                        feature TEXT NOT NULL,
-                        stage TEXT NOT NULL,
-                        channel TEXT,
-                        since TEXT,
-                        until TEXT,
-                        model TEXT NOT NULL,
-                        response_id TEXT,
-                        prompt_cache_key TEXT,
-                        prompt_cache_retention TEXT,
-                        prompt_version_hash TEXT,
-                        request_index INTEGER,
-                        message_count INTEGER,
-                        system_chars INTEGER,
-                        prompt_chars INTEGER,
-                        shared_prefix_chars INTEGER,
-                        shared_prefix_hash TEXT,
-                        prompt_hash TEXT,
-                        previous_prompt_hash TEXT,
-                        previous_response_id TEXT,
-                        prefix_match_chars_with_previous INTEGER,
-                        prompt_text TEXT,
-                        input_tokens INTEGER,
-                        cached_input_tokens INTEGER,
-                        cache_write_tokens INTEGER,
-                        reasoning_tokens INTEGER,
-                        output_chars INTEGER,
-                        response_status TEXT,
-                        incomplete_reason TEXT,
-                        output_tokens INTEGER,
-                        total_tokens INTEGER,
-                        latency_ms INTEGER,
-                        status TEXT NOT NULL,
-                        error TEXT
-                    );
-                    """
-                )
+                conn.executescript(AI_USAGE_SCHEMA_SQL)
                 conn.execute(
                     """
                     INSERT INTO ai_usage_log (
@@ -820,9 +787,9 @@ class TelegramConnectorTests(unittest.TestCase):
                         total_tokens, latency_ms, status
                     )
                     VALUES
-                    ('2026-03-23T10:00:00+00:00', 'digest', 'batch', '@vcnews', '2026-03-22', '2026-03-22', 'gpt-5.4-mini', 'resp_1', 'digest:a', 1, 10, 'p1', 100, 50, 20, 120, 200, 'ok'),
-                    ('2026-03-23T10:05:00+00:00', 'digest', 'final', '@vcnews', '2026-03-22', '2026-03-22', 'gpt-5.4-mini', 'resp_2', 'digest:a', 2, 5, 'p2', 90, 10, 18, 108, 210, 'ok'),
-                    ('2026-03-23T10:10:00+00:00', 'digest', 'single', '@other', '2026-03-22', '2026-03-22', 'gpt-5.4-mini', 'resp_3', 'digest:b', 3, 5, 'p3', 80, 0, 16, 96, 220, 'ok')
+                    ('2026-03-23T10:00:00+00:00', 'digest', 'batch', '@vcnews', '2026-03-22', '2026-03-22', 'gpt-5.4-mini', 'resp_1', 'digest:a', 1, 10, 'p1', 100, 50, 20, 120, 200, 'succeeded'),
+                    ('2026-03-23T10:05:00+00:00', 'digest', 'final', '@vcnews', '2026-03-22', '2026-03-22', 'gpt-5.4-mini', 'resp_2', 'digest:a', 2, 5, 'p2', 90, 10, 18, 108, 210, 'succeeded'),
+                    ('2026-03-23T10:10:00+00:00', 'digest', 'single', '@other', '2026-03-22', '2026-03-22', 'gpt-5.4-mini', 'resp_3', 'digest:b', 3, 5, 'p3', 80, 0, 16, 96, 220, 'succeeded')
                     """
                 )
                 conn.commit()
@@ -859,7 +826,7 @@ class TelegramConnectorTests(unittest.TestCase):
                 "recent_rows": [
                     {
                         "stage": "final",
-                        "status": "ok",
+                        "status": "succeeded",
                         "input_tokens": 100,
                         "cached_input_tokens": 25,
                         "cache_write_tokens": 7,
@@ -883,7 +850,7 @@ class TelegramConnectorTests(unittest.TestCase):
         self.assertIn("single-pass requests: 1 (33.3%)", text)
         self.assertIn("analysis window: latest 200 requests", text)
         self.assertIn("Latest rounds:", text)
-        self.assertIn("final: ok, input=100, cached=25 (25.0%), cache-writes=7, output=15", text)
+        self.assertIn("final: succeeded, input=100, cached=25 (25.0%), cache-writes=7, output=15", text)
         self.assertIn("reasoning=9, visible-chars=200, response=incomplete, incomplete=max_output_tokens", text)
 
     def test_format_digest_usage_summary_hides_unavailable_metrics(self) -> None:
@@ -909,7 +876,7 @@ class TelegramConnectorTests(unittest.TestCase):
                 "recent_rows": [
                     {
                         "stage": "single",
-                        "status": "ok",
+                        "status": "succeeded",
                         "input_tokens": 100,
                         "cached_input_tokens": 0,
                         "cache_write_tokens": None,
@@ -925,7 +892,7 @@ class TelegramConnectorTests(unittest.TestCase):
         )
 
         self.assertNotIn("unavailable", text)
-        self.assertIn("single: ok, input=100, cached=0 (0.0%), output=10", text)
+        self.assertIn("single: succeeded, input=100, cached=0 (0.0%), output=10", text)
 
     def test_project_root_override_does_not_redirect_data_files(self) -> None:
         original = os.environ.get("TELEGRAM_CONNECTOR_PROJECT_ROOT")
@@ -1152,7 +1119,7 @@ class TelegramConnectorTests(unittest.TestCase):
             },
             "filtered": None,
             "recent_rows": [
-                {"stage": "final", "status": "ok", "input_tokens": 100, "cached_input_tokens": 20, "output_tokens": 15}
+                {"stage": "final", "status": "succeeded", "input_tokens": 100, "cached_input_tokens": 20, "output_tokens": 15}
             ],
             "row_limit": row_limit,
         }

@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import re
 import time
+from contextlib import contextmanager
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Any, Callable
 from urllib import error, request
@@ -18,6 +20,17 @@ TELEGRAM_TEXT_MESSAGE_MAX_CHARS = 4096
 DEFAULT_API_TIMEOUT_SECONDS = 65
 # Avoid splitting at the very beginning of a chunk; short prefixes read worse than a hard cut.
 MIN_NEWLINE_SPLIT_INDEX = 100
+_OBSERVER = ContextVar('bot_api_observer', default=None)
+
+
+@contextmanager
+def observe_calls(*, before, after, sleep):
+    """Scope optional observations without changing sender or retry policy."""
+    token = _OBSERVER.set((before, after, sleep))
+    try:
+        yield
+    finally:
+        _OBSERVER.reset(token)
 
 
 def _refusal_metadata(response, *, http_status=None):
@@ -32,7 +45,7 @@ def _refusal_metadata(response, *, http_status=None):
             "retry_after": delay if type(delay) is int and delay >= 0 else None}
 
 
-def api_call(
+def _api_call(
     token: str,
     method: str,
     payload: dict[str, Any] | None = None,
@@ -71,6 +84,25 @@ def api_call(
     return response["result"]
 
 
+def api_call(token, method, payload=None, *,
+             timeout_seconds=DEFAULT_API_TIMEOUT_SECONDS, urlopen_func=None):
+    observer = _OBSERVER.get()
+    identity = observer[0](method, payload) if observer else None
+    started = time.monotonic()
+    try:
+        result = _api_call(token, method, payload, timeout_seconds=timeout_seconds,
+                           urlopen_func=urlopen_func)
+    except BaseException as exc:
+        if observer:
+            observer[1](identity, None, exc,
+                        max(0, round((time.monotonic() - started) * 1000)))
+        raise
+    if observer:
+        observer[1](identity, result, None,
+                    max(0, round((time.monotonic() - started) * 1000)))
+    return result
+
+
 def is_retryable_bot_api_error(exc: BaseException, *, method: str) -> bool:
     message = str(exc)
     if (
@@ -101,7 +133,12 @@ def call_bot_api_with_retry(
             if attempt >= active_attempts or not is_retryable_bot_api_error(exc, method=method):
                 raise
             if backoff_seconds > 0:
-                sleep_func(backoff_seconds * attempt)
+                observer = _OBSERVER.get()
+                delay = backoff_seconds * attempt
+                if observer:
+                    observer[2](sleep_func, delay)
+                else:
+                    sleep_func(delay)
     raise RuntimeError("unreachable retry state")
 
 

@@ -327,10 +327,13 @@ def post_responses(
     urlopen_func: Callable[..., Any] | None = None,
     sleep_func: Callable[[float], None] = time.sleep,
     random_func: Callable[[], float] = random.random,
+    before_attempt: Callable[[int], Any] | None = None,
+    after_attempt: Callable[[Any, dict | None, OpenAIRequestError | None, int], None] | None = None,
 ) -> OpenAIResponse:
     return post_json(payload, api_key, endpoint="responses", timeout_seconds=timeout_seconds,
                      retry_attempts=retry_attempts, retry_backoff_seconds=retry_backoff_seconds,
-                     urlopen_func=urlopen_func, sleep_func=sleep_func, random_func=random_func)
+                     urlopen_func=urlopen_func, sleep_func=sleep_func, random_func=random_func,
+                     before_attempt=before_attempt, after_attempt=after_attempt)
 
 
 def post_json(

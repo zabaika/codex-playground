@@ -27,7 +27,7 @@ def run_worker_subprocess(
     *,
     cwd: Path,
     env: dict[str, str],
-    timeout_seconds: int,
+    timeout_seconds: int | None,
     run_func: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
 ) -> subprocess.CompletedProcess[str]:
     return run_func(

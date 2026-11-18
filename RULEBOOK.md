@@ -307,7 +307,7 @@ they do not waive mandatory security, authorization or verification requirements
 ### Workflow State and Entity Model
 
 - when a workflow tracks business progress over time, define one canonical entity vocabulary before adding UI views, agent wrappers, reports, or automations on top of it
-- define the independently meaningful processing unit and distinguish technical termination, coverage completeness, structural validity, semantic correctness and publication; one successful status or valid schema must not stand in for all five
+- define the independently meaningful processing unit and distinguish technical termination, coverage completeness, structural validity, semantic correctness and publication; none of these outcomes substitutes for the others, and complete input/processing counts do not establish semantic completeness
 - define atomicity and localize failures to the smallest contractually independent unit; retain confirmed partial progress when the operation allows it, distinguishing incomplete responses from valid empty results
 - define retry, repair, resume and invalidation at those boundaries; cover failure between an external call, its receipt and a checkpoint, reconciling uncertain effects before replay
 - for filtering, merging, deduplication, compaction, summarization and repair, define permitted information loss in the project contract; trace required facts, independent events, conditions and provenance through producer, transformations and final consumer; results must not claim completeness beyond the evidence
@@ -321,7 +321,7 @@ they do not waive mandatory security, authorization or verification requirements
 - preserve required dependencies or a supported reconstruction path for promised reading, verification, redelivery or restoration, even after a task completes or fails; distinguish these obligations from ordinary reuse-cache retention; after dependency expiry, apply the declared restoration/recomputation policy or explicitly refuse an operation that can no longer be supported
 - preserve confirmed and uncertain external-effect history independently of result validity and temporary execution state; recomputing or invalidating a result, deleting or restoring internal state does not authorize repeating a confirmed action; reconcile uncertain effects before retry
 - keep durable results, audit, usage, costs and delivery receipts distinct from temporary execution checkpoints and caches, each under its own existing retention contract; inspect cascade/delete dependencies so temporary cleanup cannot erase retained history
-- reading a retained historical result must not require executing an obsolete algorithm when the necessary data is already available; retain a supported legacy execution path while existing jobs still need it to resume
+- reading a retained historical result must not require executing an obsolete algorithm when the necessary data is already available; retain a supported legacy execution path while existing jobs still need it to resume; refuse explicitly retired versions on execution/resume instead of silently queuing replacement work
 
 These lifecycle rules require neither indefinite retention nor a new archive subsystem.
 
@@ -527,6 +527,8 @@ Rules:
 - logs must not contain secrets
 - logs must not contain absolute private file paths when avoidable
 - for scheduled jobs, keep a separate machine-readable last-attempt audit artifact with start time, finish time, status, and concise context; overwrite it on each run instead of accumulating unbounded history there
+- publish the new run identity and starting audit before potentially blocking initialization; keep any unresolved previous supervisor receipt recoverable until retained storage accepts it, without accumulating unbounded history in the last-attempt artifact
+- correlate worker and supervisor receipts by run identity; preserve timeout, external cancellation and failure as distinct outcomes, including the reason and signal when available, and never apply another run's receipt
 - for non-daemon jobs, last-attempt audit logs must include the configured total timeout, current phase, and terminal status on timeout
 - logs must not contain raw external-provider updates or full sensitive request payloads
 - log command metadata, not full sensitive payloads
@@ -589,6 +591,7 @@ Rules:
 - avoid putting highly variable metadata at the very start of a prompt when prompt caching matters
 - treat token usage as an observable production metric:
   log input tokens, cached input tokens, output tokens, total tokens, latency, model, stage, and status for every AI call
+- state the pricing basis and units for cost estimates; use measured usage and applicable model/service rates, preserve unknowns or conditional bounds for incomplete data, and distinguish estimates from provider invoices
 - optimize batch sizes using measured token usage and latency from real runs, not only record counts
 - when batching large inputs, preserve quality by keeping the batch format and rubric stable while varying only the content payload
 - for advisory, evaluative, or rewrite workflows such as resume reviews, career guidance, strategic assessments, or profile packaging, never invent missing facts, metrics, budgets, role scope, dates, or outcomes to make the output read better

@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import sqlite3
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, Hashable
+
+from .openai_usage import require_ai_usage_schema
 
 
 def fetch_ai_usage_summary(
@@ -14,53 +16,50 @@ def fetch_ai_usage_summary(
     row_limit: int,
     filter_channel: str | None = None,
     recent_rows_limit: int = 3,
+    operation_key: Callable[[dict[str, Any]], Hashable | None] | None = None,
 ) -> dict[str, Any] | None:
+    """The application defines operation identity; None means unavailable.
+
+    The callback receives bounded metadata, never prompt or response bodies.
+    Without a callback this reader does not infer logical operations.
+    """
     if not db_path.exists():
         return None
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     try:
-        columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(ai_usage_log)")}
+        require_ai_usage_schema(conn)
+        attempt_counts_sql = """SUM(CASE WHEN attempt_id IS NOT NULL THEN 1 ELSE 0 END) AS physical_attempts,
+            NULL AS observed_logical_operations,
+            SUM(CASE WHEN status='unknown' THEN 1 ELSE 0 END) AS unknown_requests,
+            SUM(CASE WHEN status='pending' THEN 1 ELSE 0 END) AS pending_requests,
+            SUM(CASE WHEN input_tokens IS NULL OR output_tokens IS NULL
+                THEN 1 ELSE 0 END) AS unknown_usage_requests,"""
         usage_row_count_sql = "SUM(CASE WHEN input_tokens IS NOT NULL THEN 1 ELSE 0 END)"
         cache_write_tokens_sum_sql = (
             f"CASE WHEN ({usage_row_count_sql}) = 0 "
             f"OR COUNT(cache_write_tokens) < ({usage_row_count_sql}) THEN NULL "
             "ELSE SUM(cache_write_tokens) END"
-            if "cache_write_tokens" in columns
-            else "NULL"
         )
-        cache_write_tokens_row_sql = "cache_write_tokens" if "cache_write_tokens" in columns else "NULL"
         prompt_versions_sql = (
             "CASE WHEN COUNT(prompt_version_hash) < COUNT(*) THEN NULL "
             "ELSE COUNT(DISTINCT NULLIF(prompt_version_hash, '')) END"
-            if "prompt_version_hash" in columns
-            else "NULL"
         )
         reasoning_tokens_sql = (
             f"CASE WHEN ({usage_row_count_sql}) = 0 "
             f"OR COUNT(reasoning_tokens) < ({usage_row_count_sql}) THEN NULL "
             "ELSE SUM(reasoning_tokens) END"
-            if "reasoning_tokens" in columns
-            else "NULL"
         )
         output_chars_sql = (
             f"CASE WHEN ({usage_row_count_sql}) = 0 "
             f"OR COUNT(output_chars) < ({usage_row_count_sql}) THEN NULL "
             "ELSE SUM(output_chars) END"
-            if "output_chars" in columns
-            else "NULL"
         )
-        reasoning_tokens_row_sql = "reasoning_tokens" if "reasoning_tokens" in columns else "NULL"
-        output_chars_row_sql = "output_chars" if "output_chars" in columns else "NULL"
         incomplete_responses_sql = (
             f"CASE WHEN ({usage_row_count_sql}) = 0 "
             f"OR COUNT(response_status) < ({usage_row_count_sql}) THEN NULL "
             "ELSE SUM(CASE WHEN response_status = 'incomplete' THEN 1 ELSE 0 END) END"
-            if "response_status" in columns
-            else "NULL"
         )
-        response_status_sql = "response_status" if "response_status" in columns else "NULL"
-        incomplete_reason_sql = "incomplete_reason" if "incomplete_reason" in columns else "NULL"
         global_row = conn.execute(
             f"""
             WITH recent AS (
@@ -72,8 +71,9 @@ def fetch_ai_usage_summary(
             )
             SELECT
                 COUNT(*) AS total_requests,
-                SUM(CASE WHEN status = 'ok' THEN 1 ELSE 0 END) AS ok_requests,
-                SUM(CASE WHEN status = 'error' THEN 1 ELSE 0 END) AS error_requests,
+                {attempt_counts_sql}
+                SUM(CASE WHEN status = 'succeeded' THEN 1 ELSE 0 END) AS ok_requests,
+                SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS error_requests,
                 SUM(CASE WHEN stage = 'single' THEN 1 ELSE 0 END) AS single_requests,
                 SUM(CASE WHEN COALESCE(cached_input_tokens, 0) > 0 THEN 1 ELSE 0 END) AS cached_requests,
                 COUNT(DISTINCT prompt_cache_key) AS cache_keys,
@@ -104,8 +104,9 @@ def fetch_ai_usage_summary(
                 )
                 SELECT
                     COUNT(*) AS total_requests,
-                    SUM(CASE WHEN status = 'ok' THEN 1 ELSE 0 END) AS ok_requests,
-                    SUM(CASE WHEN status = 'error' THEN 1 ELSE 0 END) AS error_requests,
+                    {attempt_counts_sql}
+                    SUM(CASE WHEN status = 'succeeded' THEN 1 ELSE 0 END) AS ok_requests,
+                    SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS error_requests,
                     SUM(CASE WHEN stage = 'single' THEN 1 ELSE 0 END) AS single_requests,
                     SUM(CASE WHEN COALESCE(cached_input_tokens, 0) > 0 THEN 1 ELSE 0 END) AS cached_requests,
                     MIN(created_at) AS first_request_at,
@@ -124,7 +125,7 @@ def fetch_ai_usage_summary(
                 (feature, row_limit, filter_channel),
             ).fetchone()
         recent_rows = conn.execute(
-            f"""
+            """
             WITH recent AS (
                 SELECT *
                 FROM ai_usage_log
@@ -133,9 +134,9 @@ def fetch_ai_usage_summary(
                 LIMIT ?
             )
             SELECT created_at, stage, channel, status, input_tokens, cached_input_tokens,
-                   {cache_write_tokens_row_sql} AS cache_write_tokens, output_tokens,
-                   {reasoning_tokens_row_sql} AS reasoning_tokens, {output_chars_row_sql} AS output_chars,
-                   {response_status_sql} AS response_status, {incomplete_reason_sql} AS incomplete_reason,
+                   cache_write_tokens, output_tokens,
+                   reasoning_tokens, output_chars,
+                   response_status, incomplete_reason,
                    prompt_cache_key
             FROM recent
             ORDER BY id DESC
@@ -143,6 +144,24 @@ def fetch_ai_usage_summary(
             """,
             (feature, row_limit, recent_rows_limit),
         ).fetchall()
+        global_row = dict(global_row) if global_row is not None else None
+        filtered_row = dict(filtered_row) if filtered_row is not None else None
+        if operation_key is not None and global_row is not None:
+            metadata = ('run_id', 'job_id', 'batch_id', 'generation',
+                        'channel', 'stage', 'request_index')
+            # Identifiers come only from the fixed metadata allowlist above.
+            observations = conn.execute(f"""SELECT {','.join(metadata)} FROM ai_usage_log
+                WHERE feature=? ORDER BY id DESC LIMIT ?""", (feature, row_limit)).fetchall()
+            identities = [(dict(row), operation_key(dict(row))) for row in observations]
+
+            def count_operations(items):
+                keys = {key for _, key in items if key is not None}
+                return len(keys) if keys or not items else None
+
+            global_row['observed_logical_operations'] = count_operations(identities)
+            if filtered_row is not None:
+                filtered_row['observed_logical_operations'] = count_operations([
+                    item for item in identities if item[0].get('channel') == filter_channel])
     finally:
         conn.close()
     if global_row is None or int(global_row["total_requests"] or 0) == 0:
@@ -191,6 +210,17 @@ def format_ai_usage_summary(
         f"- output tokens: {int(global_stats.get('output_tokens') or 0)}",
         f"- cached share of input tokens: {global_saved_pct}%",
     ]
+    for key, label in (
+        ('physical_attempts', 'identified physical attempts'),
+        ('observed_logical_operations', 'observed logical operations'),
+        ('unknown_requests', 'unknown outcomes'),
+        ('pending_requests', 'unfinished attempts'),
+        ('unknown_usage_requests', 'unknown usage requests'),
+    ):
+        if global_stats.get(key) is not None:
+            lines.append(f'- {label}: {int(global_stats[key])}')
+    if global_stats.get('unknown_usage_requests'):
+        lines.append('- token totals cover known counters only; unknown usage is not zero')
     for label, value in (
         ("prompt versions", global_stats.get("prompt_versions")),
         ("cache write tokens", global_stats.get("cache_write_tokens")),

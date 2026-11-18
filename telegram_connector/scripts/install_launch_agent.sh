@@ -87,6 +87,7 @@ cp "$SOURCE_ROOT/analysis_history.py" "$SERVICE_ROOT/analysis_history.py"
 cp "$SOURCE_ROOT/digest_settings.py" "$SERVICE_ROOT/digest_settings.py"
 cp "$SOURCE_ROOT/digest_rendering.py" "$SERVICE_ROOT/digest_rendering.py"
 cp "$SOURCE_ROOT/digest_pipeline.py" "$SERVICE_ROOT/digest_pipeline.py"
+cp "$SOURCE_ROOT/digest_telemetry.py" "$SERVICE_ROOT/digest_telemetry.py"
 cp "$SOURCE_ROOT/telegram_digest.py" "$SERVICE_ROOT/telegram_digest.py"
 cp "$SOURCE_ROOT/telegram_analysis.py" "$SERVICE_ROOT/telegram_analysis.py"
 cp "$SOURCE_ROOT/analysis_store.py" "$SERVICE_ROOT/analysis_store.py"
@@ -96,6 +97,7 @@ cp "$SOURCE_ROOT/analysis_rendering.py" "$SERVICE_ROOT/analysis_rendering.py"
 cp "$SOURCE_ROOT/analysis_settings.py" "$SERVICE_ROOT/analysis_settings.py"
 cp "$SOURCE_ROOT/analysis_telemetry.py" "$SERVICE_ROOT/analysis_telemetry.py"
 cp "$SOURCE_ROOT/scripts/report_analysis.py" "$SERVICE_ROOT/scripts/report_analysis.py"
+cp "$SOURCE_ROOT/scripts/report_digest.py" "$SERVICE_ROOT/scripts/report_digest.py"
 rm -rf "$SERVICE_ROOT/common"
 cp -R "$SOURCE_ROOT/../common" "$SERVICE_ROOT/common"
 rm -rf "$SERVICE_ROOT/telegram_shared"
@@ -175,39 +177,35 @@ STARTUP_LOG="\$TELEGRAM_CONNECTOR_PROJECT_ROOT/data/launchd/digest.startup.log"
 AUDIT_LOG="\$TELEGRAM_CONNECTOR_PROJECT_ROOT/data/launchd/digest.last_attempt.json"
 
 cd "\$ROOT"
-read -r RUN_TOTAL_TIMEOUT_SECONDS TERMINATION_GRACE_SECONDS < <(
-  "$PYTHON_BIN" - "\$ROOT" <<'PY'
+printf '[%s] starting telegram digest from %s\n' "\$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "\$ROOT" >> "\$STARTUP_LOG"
+exec "$PYTHON_BIN" - "\$ROOT" "\$AUDIT_LOG" "\$STARTUP_LOG" <<'PY'
+import os
 import sys
 import tomllib
+from datetime import datetime, timezone
 from pathlib import Path
 
 service_root = Path(sys.argv[1])
 if str(service_root) not in sys.path:
     sys.path.insert(0, str(service_root))
 
-from common import process as common_process
+from digest_settings import build_digest_supervisor_command, resolve_digest_process_limits
+from digest_telemetry import build_digest_run_id, prepare_supervised_audit
 
-defaults = common_process.load_process_config(service_root / "common" / "config" / "process.toml")
 with (service_root / "config" / "runtime.local.toml").open("rb") as fh:
     runtime = tomllib.load(fh)
-
-digest = runtime.get("digest") or {}
-print(
-    int(digest.get("run_total_timeout_seconds", defaults.default_run_total_timeout_seconds)),
-    int(digest.get("termination_grace_seconds", defaults.default_termination_grace_seconds)),
-)
+timeout, grace = resolve_digest_process_limits(runtime)
+with Path(sys.argv[3]).open("a") as log:
+    stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    print(f"[{stamp}] arming digest ttl={timeout}s grace={grace}s", file=log)
+audit_file = Path(sys.argv[2])
+run_id = build_digest_run_id()
+prepare_supervised_audit(audit_file, run_id)
+command = build_digest_supervisor_command(
+    [sys.executable, str(service_root / "telegram_digest.py"), "run"],
+    runtime, audit_file, run_id=run_id)
+os.execv(command[0], command)
 PY
-)
-printf '[%s] starting telegram digest from %s\n' "\$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "\$ROOT" >> "\$STARTUP_LOG"
-printf '[%s] arming digest ttl=%ss grace=%ss\n' "\$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "\$RUN_TOTAL_TIMEOUT_SECONDS" "\$TERMINATION_GRACE_SECONDS" >> "\$STARTUP_LOG"
-exec "$PYTHON_BIN" "\$ROOT/common/ttl_runner.py" \
-  --timeout-seconds "\$RUN_TOTAL_TIMEOUT_SECONDS" \
-  --grace-seconds "\$TERMINATION_GRACE_SECONDS" \
-  --audit-file "\$AUDIT_LOG" \
-  --timeout-reason process_ttl_expired \
-  --sleep-policy pause \
-  --use-caffeinate \
-  -- "$PYTHON_BIN" "\$ROOT/telegram_digest.py" run
 EOF
 
 chmod +x "$SERVICE_ROOT/scripts/run_telegram_digest.sh"

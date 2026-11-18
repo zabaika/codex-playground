@@ -24,9 +24,10 @@ It must stay operationally separate from `telegram_agent_bot`.
   - `history_session.py`: auth/reference and SDK sender/media adapters, exclusive Telethon session ownership and bounded startup/retry/cleanup; caller retains sync policy and outer TTL
   - `analysis_history.py`: durable history planning/pages/reservations, checkpoint recovery and FTS backfill; keeps message/index/checkpoint mutations atomic using the existing store connection
   - `telegram_digest.py`: digest orchestration and Telegram delivery
-  - `digest_settings.py`: digest config/prompts/window/profile resolution and lazy AI-key adapter; independent of entrypoints and pipeline
+  - `digest_settings.py`: digest config/prompts/window/profile resolution, shared supervised-launch policy and lazy AI-key adapter; independent of entrypoints and pipeline
   - `digest_rendering.py`: pure digest HTML/status messages, canonical headings and source-link repair; no pipeline, storage or delivery
   - `digest_pipeline.py`: bounded input packing, shared-provider adapter, cache/usage and single/batch/final synthesis; run audit/delivery remain in the digest entrypoint
+  - `digest_telemetry.py`: buffered run/phase and external-attempt observations, retained supervisor receipts and read-only run projections; snapshot mutations use `history_store.py`
   - `telegram_analysis.py`: analytics admission/control, legacy settings adapter, supervised worker, OCR, artifact and delivery orchestration; stable public CLI and compatibility exports
   - `analysis_settings.py`: analytics policy, prompts, profiles and reviewed model metadata; receives legacy settings from the entrypoint
   - `analysis_evidence.py`: evidence schemas, source snapshots, text/OCR offsets, citation/QA/URL validation
@@ -35,7 +36,7 @@ It must stay operationally separate from `telegram_agent_bot`.
   - `analysis_store.py`: SQL, transactions, durable budgets and provenance ledger
   - `analysis_telemetry.py`: phase-clock orchestration and read-only projections of the job/attempt/phase ledgers; SQL mutations remain in `analysis_store.py`
 - Internal analytics calls and dependency patches use the owning module, including evaluator capture hooks. Compatibility exports are for existing callers, not mutable lookup ownership.
-- Extracted history/digest owners must not import their entrypoints or bridge. Keep public facade calls compatible and apply [dependency lookup conventions](../CODE_CONVENTIONS.md#python-baseline) to runtime, tests and instrumentation.
+- Extracted history/digest owners must not import their entrypoints or bridge. Keep history public facade calls compatible; digest helpers are imported from their owning modules. Apply [dependency lookup conventions](../CODE_CONVENTIONS.md#python-baseline) to runtime, tests and instrumentation.
 - Extracted analytics modules must not import the entrypoint or bridge. Settings and rendering remain independent of pipeline and persistence. Keep related pipeline algorithms together to avoid scattering state and limit handling; revisit this agreed boundary when responsibilities change.
 - Keep `telegram_shared` limited to infrastructure primitives.
 - Do not move digest, history, OCR, analytics, export, or Telethon business logic into `telegram_shared`.
@@ -70,6 +71,8 @@ If README, code, and tests disagree, update them together.
 - When changing analytics extraction, linking, merge or synthesis, use [analysis_prompts.toml](./config/analysis_prompts.toml) for task semantics and the existing schemas, validators and regression tests for executable contracts; verify required information and source support in the actual final synthesis request, including after context packing or reduction, rather than only in stored intermediate records.
 - Run enabled, bounded OCR before freezing a new input manifest; resume must preserve existing manifest digests.
 - Keep result provenance and recovery dependencies separate from evictable cross-job reuse; invalidate dependent unsent delivery plans when results change, preserving confirmed/unknown send history.
+- Analytics results, prepared texts, usage/delivery receipts and phase history are retained records under the [workflow lifecycle rules](../RULEBOOK.md#workflow-state-and-entity-model), separate from checkpoint/cache reuse.
+- Analytics selection reports compare the saved model output with its saved synthesis input, separately from later result filtering and presentation. Unresolved references leave omission counts unknown; reporting must not re-score archived records.
 - Keep public analytics workers and evaluation `run` behind the shared outer hard TTL; private worker entrypoints are supervisor implementation details.
 
 ## Security And Runtime Rules
@@ -79,12 +82,13 @@ If README, code, and tests disagree, update them together.
 - Runtime data belongs under `data/`.
 - Treat `messages.text` as a Telegram-specific schema exception: it may remain `""` when Telegram explicitly provides no text body, while other optional string fields should still follow the repository-wide `NULL`-for-missing convention.
 - Bridge and digest logs must not leak secrets or full raw updates.
+- Apply the [audit rules](../RULEBOOK.md#5-logging-rules) before digest initialization. Both supervised launchers prepare the new audit through `digest_telemetry` before spawning the supervisor and pass its run identity to the worker. Until SQLite retains the previous supervisor receipt, carry it in the existing audit.
 - Bridge secret resolution should happen at daemon startup, not on every handled update.
 - Child subprocesses must receive only the allowlisted env subset they need.
 - After changing bridge code, `telegram_shared`, or `config/runtime.local.toml`, redeploy the launchd service with `scripts/install_launch_agent.sh`, not only `scripts/restart_launch_agent.sh`.
 - `restart_launch_agent.sh` only reloads the already installed plist/service-root copy; it does not recopy fresh code or config into `~/Library/Application Support/telegram_connector_service`.
 - Keep LaunchAgent `ProgramArguments[0]` pointed at the generated `telegram-connector-*-launcher` executable. The launcher invokes the shell runner through `/bin/bash`; do not restore direct plist execution of `run_telegram_*.sh`.
-- Scheduled `digest` is a one-shot job, not a daemon: keep the outer hard TTL in the shared runner and keep `bridge` free of that TTL mechanism.
+- Digest runs are one-shot jobs. `digest_settings.build_digest_supervisor_command` owns scheduled and Telegram digest launch commands. Delegate TTL and process-group cleanup to `common/ttl_runner.py`; bridge must not add a competing digest timeout.
 
 ## Testing
 

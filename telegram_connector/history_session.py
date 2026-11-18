@@ -3,9 +3,11 @@ import asyncio
 import errno
 import fcntl
 import os
+import secrets
 import socket
 import sys
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -92,10 +94,45 @@ async def _acquire_session_lock(runtime: history_settings.RuntimeConfig, auth_mo
         raise
 
 
+async def _ping_after_host_sleep(client, runtime):
+    """Prompt SDK transport recovery after sleep without replaying requests."""
+    from telethon.tl.functions import PingRequest
+
+    config = common_process.load_process_config()
+    continuous, awake = common_process.continuous_time(), common_process.awake_time()
+    while True:
+        await asyncio.sleep(config.poll_interval_seconds)
+        slept = common_process.sleep_elapsed(continuous, awake)
+        continuous, awake = common_process.continuous_time(), common_process.awake_time()
+        if slept < config.sleep_interruption_threshold_seconds:
+            continue
+        print(f"[{datetime.now(timezone.utc).isoformat()}] Telegram resume ping started "
+              f"(pid={os.getpid()}, sleep_seconds={slept:.3f})", file=sys.stderr, flush=True)
+        started = common_process.awake_time()
+        outcome, error_type = "cancelled", None
+        try:
+            await await_with_awake_timeout(
+                client(PingRequest(secrets.randbits(63))),
+                runtime.connection_timeout_seconds,
+                cleanup_timeout_seconds=runtime.connection_cleanup_timeout_seconds,
+            )
+            outcome = "succeeded"
+        except Exception as exc:
+            outcome, error_type = "failed", type(exc).__name__
+            if isinstance(exc, AsyncCleanupError):
+                raise
+        finally:
+            elapsed = common_process.awake_time() - started
+            print(f"[{datetime.now(timezone.utc).isoformat()}] Telegram resume ping finished "
+                  f"(pid={os.getpid()}, outcome={outcome}, elapsed_seconds={elapsed:.3f}, "
+                  f"error_type={error_type})", file=sys.stderr, flush=True)
+
+
 @asynccontextmanager
 async def open_telethon_session(runtime: history_settings.RuntimeConfig, auth_mode: str, *, managed_requests: bool = False):
     fd = await _acquire_session_lock(runtime, auth_mode)
     release = True
+    resume_ping = None
     try:
         try:
             client = (await open_telethon_client(runtime, auth_mode, managed_requests=True)
@@ -113,15 +150,29 @@ async def open_telethon_session(runtime: history_settings.RuntimeConfig, auth_mo
                 release = False
                 raise
             try:
+                if not managed_requests:
+                    resume_ping = asyncio.create_task(_ping_after_host_sleep(client, runtime))
                 yield client
             except AsyncCleanupError:
                 release = False
                 raise
         finally:
             try:
-                cleanup = client.disconnect() if managed_requests else client.__aexit__(*sys.exc_info())
-                await await_with_awake_timeout(cleanup, runtime.connection_cleanup_timeout_seconds,
-                                               cleanup_timeout_seconds=runtime.connection_cleanup_timeout_seconds)
+                context_error = sys.exc_info()
+                try:
+                    if resume_ping is not None:
+                        resume_ping.cancel()
+                        result = await await_with_awake_timeout(
+                            asyncio.gather(resume_ping, return_exceptions=True),
+                            runtime.connection_cleanup_timeout_seconds,
+                            cleanup_timeout_seconds=runtime.connection_cleanup_timeout_seconds,
+                        )
+                        if isinstance(result[0], Exception):
+                            raise result[0]
+                finally:
+                    cleanup = client.disconnect() if managed_requests else client.__aexit__(*context_error)
+                    await await_with_awake_timeout(cleanup, runtime.connection_cleanup_timeout_seconds,
+                                                   cleanup_timeout_seconds=runtime.connection_cleanup_timeout_seconds)
             except BaseException as exc:
                 release = False
                 if isinstance(exc, (KeyboardInterrupt, SystemExit)):

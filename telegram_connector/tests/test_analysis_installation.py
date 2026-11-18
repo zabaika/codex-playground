@@ -24,6 +24,7 @@ MODULES = (
     "digest_settings.py",
     "digest_rendering.py",
     "digest_pipeline.py",
+    "digest_telemetry.py",
     "telegram_analysis.py", "analysis_store.py", "analysis_evidence.py",
     "analysis_settings.py", "analysis_rendering.py", "analysis_pipeline.py",
     "analysis_telemetry.py",
@@ -41,6 +42,7 @@ def installation(tmp_path):
         shutil.copy2(ROOT / "telegram_connector" / name, project / name)
     shutil.copy2(installer, project / "scripts/install_launch_agent.sh")
     shutil.copy2(ROOT / "telegram_connector/scripts/report_analysis.py", project / "scripts/report_analysis.py")
+    shutil.copy2(ROOT / "telegram_connector/scripts/report_digest.py", project / "scripts/report_digest.py")
     shutil.copy2(ROOT / "telegram_connector/requirements.txt", project / "requirements.txt")
     shutil.copytree(ROOT / "telegram_connector/third_party", project / "third_party")
     for name in ("runtime.example.toml", "digest_prompts.toml", "analysis_prompts.toml"):
@@ -181,7 +183,8 @@ def test_analytics_modules_preserve_ownership_boundaries():
         "analysis_history": {"history_settings", "history_messages", "history_store", "history_session", "analysis_store"},
         "digest_settings": {"history_settings"},
         "digest_rendering": set(),
-        "digest_pipeline": {"digest_settings", "digest_rendering", "history_messages", "history_store"},
+        "digest_pipeline": {"digest_settings", "digest_rendering", "history_messages", "history_store", "digest_telemetry"},
+        "digest_telemetry": {"history_store"},
         "analysis_settings": set(),
         "analysis_evidence": {"analysis_settings", "analysis_store"},
         "analysis_rendering": set(),
@@ -314,3 +317,39 @@ conn.close()
         assert observed.returncode == 0, observed.stderr
         assert json.loads(observed.stdout)["messages"] == (1 if phase == "before" else 2)
     assert not marker.exists()
+
+
+def test_scheduled_digest_uses_canonical_supervisor_in_installed_runtime(installation):
+    project, staging, env, marker = installation
+    outcome = install(installation)
+    assert outcome.returncode == 0, outcome.stderr
+    service = staging / 'telegram_connector_service'
+    # Replace only the isolated fixture worker, never an operator runtime.
+    (service / 'telegram_digest.py').write_text('''import json, os, sys
+from pathlib import Path
+path = Path(os.environ['TELEGRAM_CONNECTOR_PROJECT_ROOT']) / 'data/launchd/digest.last_attempt.json'
+payload = json.loads(path.read_text())
+assert payload['run_id'] == sys.argv[sys.argv.index('--audit-run-id') + 1]
+payload.update(status='sent', phase='completed', worker_args=sys.argv[1:])
+path.write_text(json.dumps(payload))
+print('{"status":"sent"}')
+''')
+    audit_path = project / 'data/launchd/digest.last_attempt.json'
+    previous = {'run_id': 'previous', 'status': 'sent', 'elapsed_seconds': 1800,
+                'ttl_elapsed_seconds': 1650, 'sleep_seconds': 150}
+    audit_path.parent.mkdir(parents=True, exist_ok=True)
+    audit_path.write_text(json.dumps(previous))
+    completed = subprocess.run(['bash', str(service / 'scripts/run_telegram_digest.sh')],
+        env={**env, 'TELEGRAM_CONNECTOR_PROJECT_ROOT': str(project)},
+        text=True, capture_output=True, timeout=10)
+    assert completed.returncode == 0, completed.stderr
+    audit = json.loads((project / 'data/launchd/digest.last_attempt.json').read_text())
+    assert audit['run_id'] != previous['run_id']
+    assert audit['previous_supervisor'] == previous
+    assert audit['status'] == 'sent'
+    assert audit['worker_args'] == ['run', '--audit-run-id', audit['run_id']]
+    assert audit['sleep_policy'] == 'pause'
+    assert all(audit[key] >= 0 for key in ('elapsed_seconds', 'ttl_elapsed_seconds', 'sleep_seconds'))
+    assert 'caffeinate' in audit
+    assert not marker.exists()
+    assert (project / 'data/telegram_history.sqlite3').read_text() == 'source database fixture'

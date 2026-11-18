@@ -42,7 +42,8 @@ text_chunk_size = "3900"
 # Maximum number of latest ai_usage_log rows scanned by /agent-stats.
 # Values are clamped to 1..2000.
 agent_stats_row_limit = "200"
-# Wall-clock timeout in seconds for one bridge-launched worker subprocess, such as /digest, /update, /tail, /ocr, or /exportcsv.
+# Timeout in seconds for bridge-launched history workers: /update, /tail, /ocr or /exportcsv.
+# Digest and InfoExt use their own outer supervisor.
 # Analytics workers reuse this ceiling; evaluation CLI `run` applies it to the whole invocation, including --case all.
 # Values are clamped to 60..14400.
 worker_process_timeout_seconds = "3600"
@@ -80,18 +81,13 @@ ocr = "true"
 [digest]
 # Time in local machine time for the daily launchd digest schedule.
 time = "08:00"
-# Hard wall-clock TTL in seconds for the whole one-shot digest run.
-# Enforced outside Python at the process-group boundary so a stuck Telethon cleanup cannot leave launchd in state=running forever.
+# Outer process-group TTL in awake seconds for scheduled and Telegram digest runs.
+# Host sleep pauses this budget; awake network/retry waits count.
 run_total_timeout_seconds = "1800"
 # Grace period in seconds between SIGTERM and SIGKILL when the hard digest TTL expires.
 termination_grace_seconds = "10"
-# Wall-clock timeout in seconds for the whole digest prep-sync stage across all channels.
-# This is a soft in-process timeout for prep-sync diagnostics, not the outer hard process TTL above.
+# Soft in-process prep-sync timeout across all channels, separate from the outer TTL.
 sync_total_timeout_seconds = "1800"
-# Optional digest-only network timeout in seconds for each AI request attempt.
-# Absent or blank inherits digest_ai.openai_timeout_seconds (120 by default).
-# Values are clamped to 1 or more. Does not change analytics request timeouts.
-# openai_timeout_seconds = "30"
 # Optional separator appended to the end of each digest message. Leave empty to disable.
 separator_text = "──────────────────────────────\n──────────────────────────────"
 # Default analysis window start. Supports today, yesterday, week, month, and -Nd.
@@ -124,7 +120,7 @@ max_output_tokens = "1200"
 reasoning_effort = "none"
 # Reasoning summary returned by the OpenAI Responses API with each digest request. Use auto, concise, or detailed; none omits the API field and disables summary output.
 reasoning_summary = "auto"
-# Shared AI network timeout in seconds per request attempt; digest may override it in [digest].
+# Network timeout in seconds per digest AI request attempt; analytics has its own setting.
 # Values are clamped to 1 or more.
 openai_timeout_seconds = "120"
 # Number of OpenAI digest retry attempts for transient network/OS, HTTP 408, retryable HTTP 429, HTTP 500/502/503/504, and edge/origin HTTP 520-525/530 failures.

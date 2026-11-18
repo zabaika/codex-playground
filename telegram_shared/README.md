@@ -35,6 +35,9 @@ The shared usage summary exposes prompt-cache signals and response diagnostics:
 
 Older database rows and API responses that omit a diagnostic are stored as unavailable rather than being treated as zero. The connector and agent bot Telegram summaries omit unavailable fields and retain known zeroes. Normal logging stores usage telemetry and hashes, not full prompt text. These counters make cache behavior observable; they do not guarantee a future cache hit.
 
+Attempt-aware summaries distinguish physical API attempts from logical operations.
+Token totals cover reported counters only when some attempts omit usage.
+
 ## Access Boundary
 
 `is_user_allowed` fails closed: when both the allowed user-id and username lists are empty, no Telegram user is authorized. The owning app configures those allowlists.
@@ -83,9 +86,10 @@ bounds request time and retry waits, while the application still owns the outer 
 Applications own reservations, cumulative budgets, unknown outcomes and idempotency;
 counted callers use the hooks to admit and settle retries against that ledger.
 
-`openai_usage.log_openai_usage` can correlate a usage row with
+`openai_usage.insert_openai_usage` can correlate a usage row with
 `(job_id, batch_id, attempt_id)` and retain measured failure latency without usage tokens.
-The owning application initializes the corresponding schema. Missing usage is not zero
+Applications initialize `openai_usage.AI_USAGE_SCHEMA_SQL`; the shared reader rejects missing columns.
+Missing usage is not zero
 and does not release an uncertain reservation. Prompt-text persistence stays opt-in.
 
 Retryable OpenAI failures are network errors, including OS-level connection and temporary DNS failures; client errors `408` and eligible `429`; standard transient server errors `500`/`502`/`503`/`504`; and edge/origin errors `520` through `525` plus `530`. HTTP `3xx` responses are never retried: a redirect that reaches the classifier needs an explicitly validated target and is not a transient API failure. Every other HTTP `4xx` response is also not retried: it indicates a request, authentication, permission, quota, policy, or resource-state problem that another identical POST cannot resolve. A `429` with a permanent quota type or code is also not retried. Explicit local OS failures such as invalid descriptors and permission errors, HTTP `501`, and edge certificate error `526` are not retried. The helper honors `Retry-After`; otherwise it uses exponential backoff with jitter.

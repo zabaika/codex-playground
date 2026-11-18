@@ -189,7 +189,7 @@ class TelegramAgentWorkerTests(unittest.TestCase):
                     model="gpt-5.4-mini",
                     request_index=1,
                     message_count=1,
-                    status="ok",
+                    status="succeeded",
                     cache_info=cache_info_1,
                     prompt_text="prefix\n\nfirst",
                     usage=telegram_agent_worker.OpenAIUsage(10, 4, 2, 3, 13, 200),
@@ -210,7 +210,7 @@ class TelegramAgentWorkerTests(unittest.TestCase):
                     model="gpt-5.4-mini",
                     request_index=2,
                     message_count=1,
-                    status="ok",
+                    status="succeeded",
                     cache_info=cache_info_2,
                     prompt_text="prefix\n\nfirst plus more",
                     usage=telegram_agent_worker.OpenAIUsage(12, 8, 1, 5, 17, 250),
@@ -238,31 +238,35 @@ class TelegramAgentWorkerTests(unittest.TestCase):
         self.assertEqual(row["prompt_cache_key"], "agent:test-cache")
         self.assertEqual(row["feature"], "agent")
 
-    def test_init_db_migrates_existing_usage_log_cache_metrics(self) -> None:
-        legacy_schema = telegram_agent_worker.SCHEMA_SQL
-        for column in (
-            "    prompt_version_hash TEXT,\n",
-            "    cache_write_tokens INTEGER,\n",
-            "    reasoning_tokens INTEGER,\n",
-            "    output_chars INTEGER,\n",
-            "    response_status TEXT,\n",
-            "    incomplete_reason TEXT,\n",
-        ):
-            legacy_schema = legacy_schema.replace(column, "")
-        conn = sqlite3.connect(":memory:")
+    def test_init_db_creates_current_shared_schema_with_nullable_metadata(self) -> None:
+        from telegram_shared.openai_usage import AI_USAGE_COLUMNS
+        from telegram_shared.ai_usage_stats import fetch_ai_usage_summary
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / 'agent.sqlite3'
+            with sqlite3.connect(path) as conn:
+                telegram_agent_worker.init_db(conn)
+                columns = {row[1] for row in conn.execute('PRAGMA table_info(ai_usage_log)')}
+                self.assertEqual(columns, set(AI_USAGE_COLUMNS))
+                conn.execute("""INSERT INTO ai_usage_log
+                    (created_at,feature,stage,model,status)
+                    VALUES ('2026-11-17','agent','round_1','fixture','succeeded')""")
+            summary = fetch_ai_usage_summary(path, feature='agent', row_limit=1)
+            self.assertEqual(summary['global']['total_requests'], 1)
+            self.assertIsNone(summary['global']['observed_logical_operations'])
+            self.assertIsNone(summary['global']['reasoning_tokens'])
+
+    def test_init_db_rejects_incomplete_usage_schema(self) -> None:
+        conn = sqlite3.connect(':memory:')
         try:
-            conn.executescript(legacy_schema)
-            telegram_agent_worker.init_db(conn)
-            columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(ai_usage_log)")}
+            conn.executescript(telegram_agent_worker.SCHEMA_SQL)
+            conn.execute('ALTER TABLE ai_usage_log DROP COLUMN reasoning_tokens')
+            with self.assertRaisesRegex(RuntimeError, 'missing columns reasoning_tokens'):
+                telegram_agent_worker.init_db(conn)
+            columns = {row[1] for row in conn.execute('PRAGMA table_info(ai_usage_log)')}
+            self.assertNotIn('reasoning_tokens', columns)
         finally:
             conn.close()
-
-        self.assertIn("prompt_version_hash", columns)
-        self.assertIn("cache_write_tokens", columns)
-        self.assertIn("reasoning_tokens", columns)
-        self.assertIn("output_chars", columns)
-        self.assertIn("response_status", columns)
-        self.assertIn("incomplete_reason", columns)
 
     def test_serialize_tool_result_truncates_oversized_payload(self) -> None:
         result = {"content": "x" * (telegram_agent_worker.DEFAULT_MAX_TOOL_OUTPUT_CHARS + 5000)}

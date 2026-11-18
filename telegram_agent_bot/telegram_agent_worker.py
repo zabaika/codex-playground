@@ -33,7 +33,9 @@ from telegram_shared.openai_usage import build_prompt_cache_info as shared_build
 from telegram_shared.openai_usage import common_prefix_length as shared_common_prefix_length
 from telegram_shared.openai_usage import extract_usage as shared_extract_usage
 from telegram_shared.openai_usage import hash_cache_key as shared_hash_cache_key
-from telegram_shared.openai_usage import log_openai_usage as shared_log_openai_usage
+from telegram_shared.openai_usage import insert_openai_usage
+from common import sqlite as common_sqlite
+from telegram_shared.openai_usage import AI_USAGE_SCHEMA_SQL, require_ai_usage_schema
 from telegram_shared.openai_usage import short_hash as shared_short_hash
 
 
@@ -70,46 +72,10 @@ AGENT_TOOL_OUTPUT_PROMPT_VERSION_TEMPLATE = "function_call_output JSON"
 OP_REFERENCE_PREFIX = shared_secrets.OP_REFERENCE_PREFIX
 _SECRET_CACHE = shared_secrets._SECRET_CACHE
 
-SCHEMA_SQL = """
+SCHEMA_SQL = f"""
 PRAGMA journal_mode = WAL;
 
-CREATE TABLE IF NOT EXISTS ai_usage_log (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    created_at TEXT NOT NULL,
-    feature TEXT NOT NULL,
-    stage TEXT NOT NULL,
-    channel TEXT,
-    since TEXT,
-    until TEXT,
-    model TEXT NOT NULL,
-    response_id TEXT,
-    prompt_cache_key TEXT,
-    prompt_cache_retention TEXT,
-    prompt_version_hash TEXT,
-    request_index INTEGER,
-    message_count INTEGER,
-    system_chars INTEGER,
-    prompt_chars INTEGER,
-    shared_prefix_chars INTEGER,
-    shared_prefix_hash TEXT,
-    prompt_hash TEXT,
-    previous_prompt_hash TEXT,
-    previous_response_id TEXT,
-    prefix_match_chars_with_previous INTEGER,
-    prompt_text TEXT,
-    input_tokens INTEGER,
-    cached_input_tokens INTEGER,
-    cache_write_tokens INTEGER,
-    output_tokens INTEGER,
-    reasoning_tokens INTEGER,
-    output_chars INTEGER,
-    total_tokens INTEGER,
-    latency_ms INTEGER,
-    response_status TEXT,
-    incomplete_reason TEXT,
-    status TEXT NOT NULL,
-    error TEXT
-);
+{AI_USAGE_SCHEMA_SQL}
 
 CREATE INDEX IF NOT EXISTS idx_ai_usage_log_created_at ON ai_usage_log(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_ai_usage_log_cache_key ON ai_usage_log(prompt_cache_key, id DESC);
@@ -327,17 +293,7 @@ def connect_db() -> sqlite3.Connection:
 
 def init_db(conn: sqlite3.Connection) -> None:
     conn.executescript(SCHEMA_SQL)
-    columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(ai_usage_log)")}
-    for column_name, column_type in {
-        "prompt_version_hash": "TEXT",
-        "cache_write_tokens": "INTEGER",
-        "reasoning_tokens": "INTEGER",
-        "output_chars": "INTEGER",
-        "response_status": "TEXT",
-        "incomplete_reason": "TEXT",
-    }.items():
-        if column_name not in columns:
-            conn.execute(f"ALTER TABLE ai_usage_log ADD COLUMN {column_name} {column_type}")
+    require_ai_usage_schema(conn)
     conn.commit()
 
 
@@ -865,25 +821,26 @@ def log_openai_usage(
     error: str | None = None,
     store_prompt_text: bool = False,
 ) -> None:
-    shared_log_openai_usage(
-        conn,
-        feature="agent",
-        created_at=now_utc(),
-        stage=stage,
-        channel=channel,
-        since=None,
-        until=None,
-        model=model,
-        request_index=request_index,
-        message_count=message_count,
-        status=status,
-        cache_info=cache_info,
-        prompt_text=prompt_text,
-        usage=usage,
-        response_id=response_id,
-        error=optional_text(error),
-        store_prompt_text=store_prompt_text,
-    )
+    with common_sqlite.write_tx(conn):
+        insert_openai_usage(
+            conn,
+            feature="agent",
+            created_at=now_utc(),
+            stage=stage,
+            channel=channel,
+            since=None,
+            until=None,
+            model=model,
+            request_index=request_index,
+            message_count=message_count,
+            status=status,
+            cache_info=cache_info,
+            prompt_text=prompt_text,
+            usage=usage,
+            response_id=response_id,
+            error=optional_text(error),
+            store_prompt_text=store_prompt_text,
+        )
 
 
 def extract_output_text(response: dict[str, Any]) -> str:
@@ -1028,7 +985,7 @@ def run_agent(prompt: str, chat_id: str, username: str) -> dict[str, Any]:
                     model=runtime["model"],
                     request_index=round_index,
                     message_count=message_count,
-                    status="error",
+                    status="failed",
                     cache_info=cache_info,
                     prompt_text=prompt_log_text,
                     error=str(exc),
@@ -1045,7 +1002,7 @@ def run_agent(prompt: str, chat_id: str, username: str) -> dict[str, Any]:
                 model=runtime["model"],
                 request_index=round_index,
                 message_count=message_count,
-                status="ok",
+                status="succeeded",
                 cache_info=cache_info,
                 prompt_text=prompt_log_text,
                 usage=usage,

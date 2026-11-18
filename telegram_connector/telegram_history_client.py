@@ -109,7 +109,6 @@ latest_processed_message_id = history_store.latest_processed_message_id
 latest_stored_message_id = history_store.latest_stored_message_id
 media_needs_download = history_store.media_needs_download
 message_exists = history_store.message_exists
-migrate_ai_usage_log_schema = history_store.migrate_ai_usage_log_schema
 migrate_sqlite_schema = history_store.migrate_sqlite_schema
 now_utc = history_store.now_utc
 prepare_history_write = history_store.prepare_history_write

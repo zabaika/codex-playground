@@ -1,4 +1,9 @@
 #!/usr/bin/env python3
+"""Bot API long-polling bridge for authorized commands and worker dispatch.
+
+Digest workers delegate TTL and process-group cleanup to the shared runner.
+"""
+
 import argparse
 import fcntl
 import hashlib
@@ -1118,11 +1123,16 @@ def resolve_history_db_path(config: dict[str, Any]) -> Path:
 
 
 def fetch_digest_usage_summary(config: dict[str, Any], *, row_limit: int, recent_rounds_limit: int = 3) -> dict[str, Any] | None:
+    if __package__:
+        from .digest_telemetry import usage_operation_key
+    else:
+        from digest_telemetry import usage_operation_key
     return shared_fetch_ai_usage_summary(
         resolve_history_db_path(config),
         feature="digest",
         row_limit=row_limit,
         recent_rows_limit=recent_rounds_limit,
+        operation_key=usage_operation_key,
     )
 
 
@@ -1413,7 +1423,27 @@ def handle_history_command(token: str, config: dict[str, Any], update: dict[str,
         send_text_message(token, chat_id, f"Bridge command target not found: {script_path.name}")
         return
 
-    worker_timeout_seconds = resolve_worker_process_timeout_seconds(config)
+    is_digest_command = script_path == DIGEST_FILE
+    process_argv = argv
+    if is_digest_command:
+        if __package__:
+            from . import digest_settings, digest_telemetry
+        else:
+            import digest_settings
+            import digest_telemetry
+        try:
+            digest_settings.resolve_digest_process_limits(config)
+            audit_file = PROJECT_ROOT / "data/launchd/digest.last_attempt.json"
+            run_id = digest_telemetry.build_digest_run_id()
+            digest_telemetry.prepare_supervised_audit(audit_file, run_id)
+            process_argv = digest_settings.build_digest_supervisor_command(
+                argv, config, audit_file, run_id=run_id)
+        except (ValueError, OSError) as exc:
+            send_text_message(token, chat_id, str(exc))
+            return
+
+    worker_timeout_seconds = (None if is_infoext_command or is_digest_command
+                              else resolve_worker_process_timeout_seconds(config))
     child_env = build_history_client_subprocess_env({} if is_infoext_command else secret_env or {})
     run_func = subprocess.run
     if is_infoext_command:
@@ -1424,12 +1454,11 @@ def handle_history_command(token: str, config: dict[str, Any], update: dict[str,
             run_func = partial(subprocess.run, input=json.dumps(query))
     try:
         completed = shared_run_worker_subprocess(
-            argv,
+            process_argv,
             cwd=script_path.parent if is_infoext_command else BASE_DIR,
             env=child_env,
-            # InfoExt owns its hard TTL and process-group cleanup. Killing its
-            # supervisor with a second timeout could orphan the browser worker.
-            timeout_seconds=None if is_infoext_command else worker_timeout_seconds,
+            # Supervised commands own their TTL and process-group cleanup.
+            timeout_seconds=worker_timeout_seconds,
             run_func=run_func,
         )
     except subprocess.TimeoutExpired:
@@ -1947,7 +1976,7 @@ def cmd_listen(args: argparse.Namespace) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Minimal Telegram bot bridge using Bot API long polling.")
+    parser = argparse.ArgumentParser(description="Telegram Bot API bridge for history, digest, analytics and InfoExt commands.")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     get_me = subparsers.add_parser("get-me", help="Check bot connectivity and print bot metadata.")
@@ -1965,7 +1994,7 @@ def build_parser() -> argparse.ArgumentParser:
     listen.add_argument(
         "--run-commands",
         action="store_true",
-        help="Allow incoming bot commands to control telegram_history_client.py for approved chat ids.",
+        help="Enable supported bot commands for authorized chats and users.",
     )
     listen.add_argument(
         "--from-scratch",

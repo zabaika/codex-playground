@@ -4,6 +4,7 @@ import contextlib
 import json
 import os
 import sys
+import time
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -19,97 +20,22 @@ from common.http import pooled_http_session
 from common.json_io import write_json_atomic
 import telegram_bridge as bridge
 import telegram_history_client as history_client
-# Public compatibility types; request implementation belongs to digest_pipeline.
-from telegram_shared.openai_usage import OpenAIUsage, PromptCacheInfo
-from telegram_shared.openai_api import OpenAIRequestError
 from telegram_shared.bot_api import is_retryable_bot_api_error as shared_is_retryable_bot_api_error
-from telegram_shared.formatting import build_message_link
 
 if __package__:
     from . import digest_pipeline
 else:
     import digest_pipeline
 
-ChannelDigestInput = digest_pipeline.ChannelDigestInput
-OUTPUT_TOKEN_LIMIT_EMPTY_RESPONSE_TEXT = digest_pipeline.OUTPUT_TOKEN_LIMIT_EMPTY_RESPONSE_TEXT
-OpenAIDigestRequestError = digest_pipeline.OpenAIDigestRequestError
-OpenAIResult = digest_pipeline.OpenAIResult
-batch_overlap_size = digest_pipeline.batch_overlap_size
-build_batch_digest_prompt = digest_pipeline.build_batch_digest_prompt
-build_final_digest_prompt = digest_pipeline.build_final_digest_prompt
-build_prompt_cache_info = digest_pipeline.build_prompt_cache_info
-build_prompt_cache_key = digest_pipeline.build_prompt_cache_key
-build_single_digest_prompt = digest_pipeline.build_single_digest_prompt
-common_prefix_length = digest_pipeline.common_prefix_length
-explicit_prompt_cache_parts = digest_pipeline.explicit_prompt_cache_parts
-extract_response_text = digest_pipeline.extract_response_text
-extract_usage = digest_pipeline.extract_usage
-has_reached_output_token_limit = digest_pipeline.has_reached_output_token_limit
-iter_message_batches = digest_pipeline.iter_message_batches
-iter_rendered_message_batches = digest_pipeline.iter_rendered_message_batches
-log_openai_usage = digest_pipeline.log_openai_usage
-openai_usage_error_message = digest_pipeline.openai_usage_error_message
-render_message_block = digest_pipeline.render_message_block
-render_message_entry = digest_pipeline.render_message_entry
-render_sender_label = digest_pipeline.render_sender_label
-request_digest_with_usage = digest_pipeline.request_digest_with_usage
-run_openai_digest = digest_pipeline.run_openai_digest
-summarize_channel_batches = digest_pipeline.summarize_channel_batches
-truncate_text = digest_pipeline.truncate_text
-
 if __package__:
     from . import digest_rendering
 else:
     import digest_rendering
 
-MAIN_TOPICS_DAY_HEADING = digest_rendering.MAIN_TOPICS_DAY_HEADING
-MOST_POPULAR_HEADING = digest_rendering.MOST_POPULAR_HEADING
-OPEN_QUESTIONS_HEADING = digest_rendering.OPEN_QUESTIONS_HEADING
-POPULAR_LINK_LINE_RE = digest_rendering.POPULAR_LINK_LINE_RE
-QUESTION_ANSWER_LINKS_HEADING = digest_rendering.QUESTION_ANSWER_LINKS_HEADING
-build_channel_digest_message = digest_rendering.build_channel_digest_message
-build_channel_digest_skip_message = digest_rendering.build_channel_digest_skip_message
-build_digest_error_message = digest_rendering.build_digest_error_message
-build_digest_message = digest_rendering.build_digest_message
-build_popular_link_candidates = digest_rendering.build_popular_link_candidates
-format_digest_channel_reference = digest_rendering.format_digest_channel_reference
-format_digest_delivery_error = digest_rendering.format_digest_delivery_error
-format_digest_summary_for_telegram = digest_rendering.format_digest_summary_for_telegram
-is_telegram_message_link = digest_rendering.is_telegram_message_link
-normalize_similarity_tokens = digest_rendering.normalize_similarity_tokens
-repair_popular_links_in_summary = digest_rendering.repair_popular_links_in_summary
-score_popular_link_candidate = digest_rendering.score_popular_link_candidate
-
 if __package__:
     from . import digest_settings
 else:
     import digest_settings
-
-DEFAULT_DIGEST_SYNC_TOTAL_TIMEOUT_SECONDS = digest_settings.DEFAULT_DIGEST_SYNC_TOTAL_TIMEOUT_SECONDS
-DEFAULT_OPENAI_DIGEST_MAX_OUTPUT_TOKENS = digest_settings.DEFAULT_OPENAI_DIGEST_MAX_OUTPUT_TOKENS
-DEFAULT_OPENAI_DIGEST_RETRY_ATTEMPTS = digest_settings.DEFAULT_OPENAI_DIGEST_RETRY_ATTEMPTS
-DEFAULT_OPENAI_DIGEST_RETRY_BACKOFF_SECONDS = digest_settings.DEFAULT_OPENAI_DIGEST_RETRY_BACKOFF_SECONDS
-DEFAULT_OPENAI_DIGEST_TIMEOUT_SECONDS = digest_settings.DEFAULT_OPENAI_DIGEST_TIMEOUT_SECONDS
-DEFAULT_PROCESS_CONFIG = digest_settings.DEFAULT_PROCESS_CONFIG
-DIGEST_PROMPT_REQUIRED_KEYS = digest_settings.DIGEST_PROMPT_REQUIRED_KEYS
-DigestConfig = digest_settings.DigestConfig
-DigestLimits = digest_settings.DigestLimits
-OPENAI_DIGEST_RETRY_ATTEMPTS = digest_settings.OPENAI_DIGEST_RETRY_ATTEMPTS
-PROMPT_CACHE_BREAKPOINT_PLACEHOLDER = digest_settings.PROMPT_CACHE_BREAKPOINT_PLACEHOLDER
-VALID_OPENAI_REASONING_EFFORTS = digest_settings.VALID_OPENAI_REASONING_EFFORTS
-VALID_OPENAI_REASONING_SUMMARIES = digest_settings.VALID_OPENAI_REASONING_SUMMARIES
-digest_profile_name = digest_settings.digest_profile_name
-get_nested_section = digest_settings.get_nested_section
-load_digest_prompts = digest_settings.load_digest_prompts
-normalize_digest_window_values = digest_settings.normalize_digest_window_values
-parse_bool = digest_settings.parse_bool
-require_openai_api_key = digest_settings.require_openai_api_key
-resolve_digest_config = digest_settings.resolve_digest_config
-resolve_digest_limits = digest_settings.resolve_digest_limits
-resolve_digest_prompt_file = digest_settings.resolve_digest_prompt_file
-resolve_digest_window = digest_settings.resolve_digest_window
-resolve_relative_date_token = digest_settings.resolve_relative_date_token
-
 
 APP_DIR = MODULE_DIR
 PROJECT_ROOT = Path(os.environ.get("TELEGRAM_CONNECTOR_PROJECT_ROOT", "")).expanduser() if os.environ.get("TELEGRAM_CONNECTOR_PROJECT_ROOT") else APP_DIR
@@ -144,10 +70,6 @@ class TeeStream:
 
 def audit_timestamp() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
-
-
-def build_digest_run_id() -> str:
-    return f"digest-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}-{os.getpid()}"
 
 
 def build_launch_context() -> dict[str, Any]:
@@ -247,6 +169,8 @@ async def run_sync(
                     mark_read=mark_read,
                     auth_mode=auth_mode,
                 )
+                observer = digest_pipeline.digest_telemetry.CURRENT.get()
+                channel_started = observer.clock() if observer else None
                 try:
                     results.append(
                         await history_client.sync_one_channel(
@@ -269,6 +193,12 @@ async def run_sync(
                             "error": str(exc) or exc.__class__.__name__,
                         }
                     )
+                finally:
+                    if observer:
+                        timings = observer.payload.setdefault('sync_channels', [])
+                        timings.append({'channel': plan.channel,
+                            'elapsed_ms': max(0, round((observer.clock() - channel_started) * 1000))})
+                        observer.dirty = True
         return results
     finally:
         conn.close()
@@ -394,7 +324,14 @@ def is_fatal_openai_error(exc: digest_pipeline.OpenAIDigestRequestError) -> bool
 
 
 def send_digest_message(token: str, chat_id: str | int, text: str) -> None:
-    bridge.send_text_chunks(token, chat_id, text, parse_mode="HTML")
+    recorder = digest_pipeline.digest_telemetry.CURRENT.get()
+    if recorder is None:
+        bridge.send_text_chunks(token, chat_id, text, parse_mode="HTML")
+        return
+    channel = recorder.phase.get('channel') if recorder.phase else None
+    role = 'channel' if channel is not None else 'error_summary'
+    with recorder.observe_delivery(channel, role=role):
+        bridge.send_text_chunks(token, chat_id, text, parse_mode="HTML")
 
 
 def prepare_channel_digest(
@@ -451,7 +388,8 @@ def prepare_channel_digest(
 
 
 def cmd_run(args: argparse.Namespace) -> int:
-    run_id = getattr(args, "audit_run_id", None) or build_digest_run_id()
+    worker_started = time.monotonic()
+    run_id = getattr(args, "audit_run_id", None) or digest_pipeline.digest_telemetry.build_digest_run_id()
     started_at = getattr(args, "audit_started_at", None) or audit_timestamp()
     launch_context = build_launch_context()
     audit_payload = {
@@ -467,7 +405,12 @@ def cmd_run(args: argparse.Namespace) -> int:
         "until_override": args.until,
         "auth_mode_override": args.auth_mode,
     }
-    write_digest_last_attempt(audit_payload)
+    try:
+        previous_audit = json.loads(DIGEST_LAST_ATTEMPT_LOG.read_text())
+        if not isinstance(previous_audit, dict):
+            previous_audit = None
+    except (OSError, ValueError):
+        previous_audit = None
 
     def persist_attempt(**changes: Any) -> None:
         nonlocal audit_payload
@@ -477,6 +420,16 @@ def cmd_run(args: argparse.Namespace) -> int:
             "updated_at": audit_timestamp(),
         }
         write_digest_last_attempt(audit_payload)
+        if recorder is not None:
+            phase = changes.get('phase')
+            mapped = {'sync_pending': 'sync', 'sync_complete': 'prepare',
+                      'analyzing_channel': 'prepare', 'sending_channel': 'deliver',
+                      'sending_error_summary': 'deliver'}.get(phase)
+            if mapped:
+                recorder.enter(mapped, changes.get('current_channel'))
+            if phase == 'sync_complete':
+                recorder.update(sync_results=sync_results)
+                recorder.flush()
 
     runtime = None
     config = None
@@ -492,9 +445,21 @@ def cmd_run(args: argparse.Namespace) -> int:
     analysis_errors: list[dict[str, Any]] = []
     conn = None
     log_conn = None
+    recorder = None
+    telemetry_token = None
     token = None
     chat_id = None
     http_sessions = contextlib.ExitStack()
+    # Until storage opens, carry one compact receipt in the existing audit.
+    # No recorder row is created while an older receipt is still pending.
+    previous_receipt = digest_pipeline.digest_telemetry.supervisor_receipt(previous_audit)
+    if previous_audit:
+        pending = digest_pipeline.digest_telemetry.supervisor_receipt(
+            previous_audit.get('previous_supervisor'))
+        previous_receipt = pending or previous_receipt
+    if previous_receipt:
+        audit_payload['previous_supervisor'] = previous_receipt
+    write_digest_last_attempt(audit_payload)
     try:
         http_sessions.enter_context(pooled_http_session())
         import asyncio
@@ -512,6 +477,30 @@ def cmd_run(args: argparse.Namespace) -> int:
         limits = digest_settings.resolve_digest_limits(config, since, until)
         channels = history_client.resolve_channels_argument(runtime, args.channel)
         sync_timeout_seconds = digest_config.sync_total_timeout_seconds
+        log_conn = history_client.connect_db(runtime)
+        history_client.init_db(log_conn)
+        digest_pipeline.digest_telemetry.retain_supervisor_outcome(
+            log_conn, previous_receipt)
+        audit_payload.pop('previous_supervisor', None)
+        write_digest_last_attempt(audit_payload)
+        recorder = digest_pipeline.digest_telemetry.DigestRecorder(log_conn, run_id, started_at,
+                                                                 initial_clock=worker_started)
+        recorder.update(since=since, until=until, channels=channels,
+            settings={'model': digest_config.model,
+                'sync_mode': digest_config.sync_mode, 'auth_mode': auth_mode,
+                'sync_limit': limits.sync_limit,
+                'messages_per_ai_pass': limits.messages_per_ai_pass,
+                'message_text_max_chars': limits.message_text_max_chars,
+                'message_ocr_max_chars': limits.message_ocr_max_chars,
+                'message_block_max_chars': limits.message_block_max_chars,
+                **{key: getattr(digest_config, key) for key in (
+                    'run_total_timeout_seconds', 'termination_grace_seconds',
+                    'sync_total_timeout_seconds', 'min_messages_for_ai',
+                    'openai_reasoning_effort', 'openai_reasoning_summary',
+                    'openai_max_output_tokens', 'openai_timeout_seconds',
+                    'openai_retry_attempts', 'openai_retry_backoff_seconds')}})
+        recorder.flush()
+        telemetry_token = digest_pipeline.digest_telemetry.CURRENT.set(recorder)
         persist_attempt(
             phase="sync_pending",
             since=since,
@@ -573,8 +562,6 @@ def cmd_run(args: argparse.Namespace) -> int:
         if not chat_id:
             raise SystemExit("Missing telegram.default_chat_id for digest delivery.")
         conn = history_client.connect_db(runtime)
-        log_conn = history_client.connect_db(runtime)
-        history_client.init_db(log_conn)
 
         sync_result_by_channel = {item.get("channel"): item for item in sync_results}
         api_key: str | None = None
@@ -605,6 +592,7 @@ def cmd_run(args: argparse.Namespace) -> int:
             nonlocal api_key
             if api_key is None:
                 api_key = digest_settings.require_openai_api_key(digest_config)
+            recorder.enter('ai', channel)
             try:
                 return digest_pipeline.summarize_channel_batches(
                     log_conn,
@@ -624,6 +612,7 @@ def cmd_run(args: argparse.Namespace) -> int:
                     messages=message_rows,
                 )
             except digest_pipeline.OpenAIDigestRequestError as exc:
+                recorder.close_phase('failed')
                 error_details = {
                     "channel": channel,
                     "channel_name": channel_name,
@@ -643,6 +632,9 @@ def cmd_run(args: argparse.Namespace) -> int:
                     raise
                 return None
             except Exception as exc:
+                if isinstance(exc, digest_pipeline.digest_telemetry.TelemetryStorageError):
+                    raise
+                recorder.close_phase('failed')
                 errors.append(
                     f"{digest_rendering.format_digest_channel_reference(channel, channel_name)}: "
                     f"analysis failed: {str(exc) or exc.__class__.__name__}"
@@ -708,7 +700,10 @@ def cmd_run(args: argparse.Namespace) -> int:
             "errors": errors,
             "analysis_errors": analysis_errors,
         }
+        recorder.enter('cleanup')
         http_sessions.close()
+        recorder.finish(payload['status'], sent_channel_messages=sent_channel_messages,
+                        errors=errors, analysis_errors=analysis_errors)
         print(json.dumps(payload, ensure_ascii=False, indent=2))
         persist_attempt(
             current_channel=None,
@@ -718,6 +713,11 @@ def cmd_run(args: argparse.Namespace) -> int:
         )
         return 0
     except BaseException as exc:
+        if recorder is not None and not isinstance(exc, digest_pipeline.digest_telemetry.TelemetryStorageError):
+            try:
+                recorder.finish('failed', error=type(exc).__name__)
+            except Exception as telemetry_exc:
+                exc.add_note(f'Digest telemetry finalization failed: {type(telemetry_exc).__name__}')
         persist_attempt(
             finished_at=audit_timestamp(),
             status="failed",
@@ -731,6 +731,8 @@ def cmd_run(args: argparse.Namespace) -> int:
         )
         raise
     finally:
+        if telemetry_token is not None:
+            digest_pipeline.digest_telemetry.CURRENT.reset(telemetry_token)
         try:
             if conn is not None:
                 conn.close()
@@ -749,6 +751,7 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--since", help="Optional override for digest since window.")
     run.add_argument("--until", help="Optional override for digest until window.")
     run.add_argument("--auth-mode", choices=["auto", "bot", "user"], help="Optional auth mode override.")
+    run.add_argument("--audit-run-id", help=argparse.SUPPRESS)
     run.set_defaults(func=cmd_run)
 
     return parser
@@ -758,7 +761,7 @@ def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
     if getattr(args, "command", None) == "run":
-        args.audit_run_id = build_digest_run_id()
+        args.audit_run_id = args.audit_run_id or digest_pipeline.digest_telemetry.build_digest_run_id()
         args.audit_started_at = audit_timestamp()
     with configure_digest_cli_logging():
         return args.func(args)

@@ -149,9 +149,32 @@ def load_digest_prompts(config: dict[str, Any], *, base_dir: Path | None = None)
     return prompts
 
 
+def resolve_digest_process_limits(config: dict[str, Any]) -> tuple[int, int]:
+    """Resolve the one outer lifetime policy without loading prompts or secrets."""
+    try:
+        timeout = int(history_settings.get_config_value(config, "digest", "run_total_timeout_seconds")
+                      or DEFAULT_PROCESS_CONFIG.default_run_total_timeout_seconds)
+        grace = int(history_settings.get_config_value(config, "digest", "termination_grace_seconds")
+                    or DEFAULT_PROCESS_CONFIG.default_termination_grace_seconds)
+    except ValueError as exc:
+        raise ValueError("Invalid digest.run_total_timeout_seconds or digest.termination_grace_seconds.") from exc
+    return max(1, timeout), max(1, grace)
+
+
+def build_digest_supervisor_command(worker_command: list[str], config: dict[str, Any],
+                                    audit_file: Path, *, run_id: str) -> list[str]:
+    """Shared launch contract for the bridge and generated scheduled runner."""
+    timeout, grace = resolve_digest_process_limits(config)
+    return [worker_command[0], str(Path(common_process.__file__).with_name("ttl_runner.py")),
+            "--timeout-seconds", str(timeout), "--grace-seconds", str(grace),
+            "--audit-file", str(audit_file), "--timeout-reason", "process_ttl_expired",
+            "--sleep-policy", "pause", "--use-caffeinate", "--", *worker_command,
+            "--audit-run-id", run_id]
+
+
 def resolve_digest_config(config: dict[str, Any]) -> DigestConfig:
     prompts = load_digest_prompts(config)
-    shared_ai_section = get_nested_section(config, "digest_ai")
+    ai_section = get_nested_section(config, "digest_ai")
     model = history_settings.get_config_value(config, "processing", "model")
     if not model:
         raise SystemExit(
@@ -162,32 +185,23 @@ def resolve_digest_config(config: dict[str, Any]) -> DigestConfig:
         history_settings.get_config_value(config, "digest", "sync_total_timeout_seconds")
         or str(DEFAULT_DIGEST_SYNC_TOTAL_TIMEOUT_SECONDS)
     )
-    raw_run_total_timeout_seconds = (
-        history_settings.get_config_value(config, "digest", "run_total_timeout_seconds")
-        or str(DEFAULT_PROCESS_CONFIG.default_run_total_timeout_seconds)
-    )
-    raw_termination_grace_seconds = (
-        history_settings.get_config_value(config, "digest", "termination_grace_seconds")
-        or str(DEFAULT_PROCESS_CONFIG.default_termination_grace_seconds)
-    )
     raw_openai_max_output_tokens = str(
-        shared_ai_section.get("max_output_tokens", DEFAULT_OPENAI_DIGEST_MAX_OUTPUT_TOKENS)
+        ai_section.get("max_output_tokens", DEFAULT_OPENAI_DIGEST_MAX_OUTPUT_TOKENS)
     ).strip()
-    openai_reasoning_effort = str(shared_ai_section.get("reasoning_effort", "")).strip().lower()
-    openai_reasoning_summary = str(shared_ai_section.get("reasoning_summary", "")).strip().lower()
-    raw_openai_timeout_seconds = history_settings.get_config_value(config, "digest", "openai_timeout_seconds") or str(
-        shared_ai_section.get("openai_timeout_seconds", DEFAULT_OPENAI_DIGEST_TIMEOUT_SECONDS)
+    openai_reasoning_effort = str(ai_section.get("reasoning_effort", "")).strip().lower()
+    openai_reasoning_summary = str(ai_section.get("reasoning_summary", "")).strip().lower()
+    raw_openai_timeout_seconds = str(
+        ai_section.get("openai_timeout_seconds", DEFAULT_OPENAI_DIGEST_TIMEOUT_SECONDS)
     ).strip()
     raw_openai_retry_attempts = str(
-        shared_ai_section.get("openai_retry_attempts", DEFAULT_OPENAI_DIGEST_RETRY_ATTEMPTS)
+        ai_section.get("openai_retry_attempts", DEFAULT_OPENAI_DIGEST_RETRY_ATTEMPTS)
     ).strip()
     raw_openai_retry_backoff_seconds = str(
-        shared_ai_section.get("openai_retry_backoff_seconds", DEFAULT_OPENAI_DIGEST_RETRY_BACKOFF_SECONDS)
+        ai_section.get("openai_retry_backoff_seconds", DEFAULT_OPENAI_DIGEST_RETRY_BACKOFF_SECONDS)
     ).strip()
     try:
         min_messages_for_ai = max(0, int(raw_min_messages_for_ai))
-        run_total_timeout_seconds = max(1, int(raw_run_total_timeout_seconds))
-        termination_grace_seconds = max(1, int(raw_termination_grace_seconds))
+        run_total_timeout_seconds, termination_grace_seconds = resolve_digest_process_limits(config)
         sync_total_timeout_seconds = max(1, int(raw_sync_total_timeout_seconds))
         openai_max_output_tokens = max(1, int(raw_openai_max_output_tokens))
         openai_timeout_seconds = max(1, int(raw_openai_timeout_seconds))
@@ -196,7 +210,7 @@ def resolve_digest_config(config: dict[str, Any]) -> DigestConfig:
     except ValueError as exc:
         raise SystemExit(
             "Invalid digest.min_messages_for_ai, digest.run_total_timeout_seconds, digest.termination_grace_seconds, "
-            "digest.sync_total_timeout_seconds, digest.openai_timeout_seconds, digest_ai.max_output_tokens, digest_ai.openai_timeout_seconds, "
+            "digest.sync_total_timeout_seconds, digest_ai.max_output_tokens, digest_ai.openai_timeout_seconds, "
             "digest_ai.openai_retry_attempts, or digest_ai.openai_retry_backoff_seconds in runtime config."
         ) from exc
     if not openai_reasoning_effort:
@@ -249,7 +263,7 @@ def resolve_digest_config(config: dict[str, Any]) -> DigestConfig:
         openai_timeout_seconds=openai_timeout_seconds,
         openai_retry_attempts=openai_retry_attempts,
         openai_retry_backoff_seconds=openai_retry_backoff_seconds,
-        store_prompt_text=parse_bool(str(shared_ai_section.get("store_prompt_text", "")).strip(), default=False),
+        store_prompt_text=parse_bool(str(ai_section.get("store_prompt_text", "")).strip(), default=False),
     )
 
 

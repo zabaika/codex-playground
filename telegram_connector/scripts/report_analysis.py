@@ -12,17 +12,26 @@ if str(APP_DIR) not in sys.path:
     sys.path.insert(0, str(APP_DIR))
 
 from analysis_store import AnalysisStore
-from analysis_telemetry import summarize_job
+from analysis_telemetry import PRICING_RATE_KEYS, summarize_job
 from common import process as common_process
 from common import ttl_runner
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=f"""Pricing JSON (--pricing):
+  Rate keys: {', '.join(PRICING_RATE_KEYS)}.
+  Each rate is a finite nonnegative number in USD per 1,000,000 tokens.
+  Include model and service_tier matching the recorded provider receipts;
+  missing or mismatched identity leaves the total unknown.
+  Incomplete usage leaves an unknown estimate or conditional bounds, not zero.
+  Estimates are not invoices: taxes, invoice adjustments and non-model services
+  are excluded.""")
     parser.add_argument("--db", type=Path, required=True)
     parser.add_argument("--job-id", required=True)
     parser.add_argument("--pricing", type=Path,
-                        help="Reviewed per-million USD rates; omission leaves cost unknown")
+                        help="Reviewed pricing JSON snapshot (format below); omission leaves cost unknown")
     parser.add_argument("--worker-inner", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
     if not args.worker_inner:

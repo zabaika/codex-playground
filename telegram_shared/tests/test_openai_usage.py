@@ -1,51 +1,15 @@
 import sqlite3
 import unittest
 
+from common import sqlite as common_sqlite
+
 from telegram_shared.openai_usage import OpenAIUsage
 from telegram_shared.openai_usage import build_prompt_cache_info
 from telegram_shared.openai_usage import extract_usage
-from telegram_shared.openai_usage import log_openai_usage
+from telegram_shared.openai_usage import insert_openai_usage
 
 
-AI_USAGE_SCHEMA = """
-CREATE TABLE ai_usage_log (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    created_at TEXT NOT NULL,
-    feature TEXT NOT NULL,
-    stage TEXT NOT NULL,
-    channel TEXT,
-    since TEXT,
-    until TEXT,
-    model TEXT NOT NULL,
-    response_id TEXT,
-    prompt_cache_key TEXT,
-    prompt_cache_retention TEXT,
-    prompt_version_hash TEXT,
-    request_index INTEGER,
-    message_count INTEGER,
-    system_chars INTEGER,
-    prompt_chars INTEGER,
-    shared_prefix_chars INTEGER,
-    shared_prefix_hash TEXT,
-    prompt_hash TEXT,
-    previous_prompt_hash TEXT,
-    previous_response_id TEXT,
-    prefix_match_chars_with_previous INTEGER,
-    prompt_text TEXT,
-    input_tokens INTEGER,
-    cached_input_tokens INTEGER,
-    cache_write_tokens INTEGER,
-    output_tokens INTEGER,
-    reasoning_tokens INTEGER,
-    output_chars INTEGER,
-    total_tokens INTEGER,
-    latency_ms INTEGER,
-    response_status TEXT,
-    incomplete_reason TEXT,
-    status TEXT NOT NULL,
-    error TEXT
-)
-"""
+from telegram_shared.openai_usage import AI_USAGE_SCHEMA_SQL as AI_USAGE_SCHEMA
 
 
 class OpenAIUsageLoggingTests(unittest.TestCase):
@@ -120,26 +84,27 @@ class OpenAIUsageLoggingTests(unittest.TestCase):
 
         self.assertEqual(usage.cache_write_tokens, 0)
 
-    def test_log_openai_usage_does_not_store_prompt_text_by_default(self) -> None:
+    def test_insert_openai_usage_does_not_store_prompt_text_by_default(self) -> None:
         conn = self.connect()
         try:
-            log_openai_usage(
-                conn,
-                feature="digest",
-                created_at="2026-07-03T10:00:00+00:00",
-                stage="single",
-                channel="@channel",
-                since="2026-07-02",
-                until="2026-07-02",
-                model="gpt-5.4-mini",
-                request_index=1,
-                message_count=12,
-                status="ok",
-                cache_info=self.cache_info("prefix\n\nsensitive prompt text"),
-                prompt_text="prefix\n\nsensitive prompt text",
-                usage=OpenAIUsage(10, 4, 2, 3, 13, 200),
-                response_id="resp_1",
-            )
+            with common_sqlite.write_tx(conn):
+                insert_openai_usage(
+                    conn,
+                    feature="digest",
+                    created_at="2026-07-03T10:00:00+00:00",
+                    stage="single",
+                    channel="@channel",
+                    since="2026-07-02",
+                    until="2026-07-02",
+                    model="gpt-5.4-mini",
+                    request_index=1,
+                    message_count=12,
+                    status="succeeded",
+                    cache_info=self.cache_info("prefix\n\nsensitive prompt text"),
+                    prompt_text="prefix\n\nsensitive prompt text",
+                    usage=OpenAIUsage(10, 4, 2, 3, 13, 200),
+                    response_id="resp_1",
+                )
             row = conn.execute("SELECT * FROM ai_usage_log WHERE response_id = 'resp_1'").fetchone()
         finally:
             conn.close()
@@ -157,43 +122,45 @@ class OpenAIUsageLoggingTests(unittest.TestCase):
         self.assertIsNone(row["incomplete_reason"])
         self.assertIsNone(row["output_chars"])
 
-    def test_log_openai_usage_can_store_prompt_text_for_debugging(self) -> None:
+    def test_insert_openai_usage_can_store_prompt_text_for_debugging(self) -> None:
         conn = self.connect()
         try:
-            log_openai_usage(
-                conn,
-                feature="digest",
-                created_at="2026-07-03T10:00:00+00:00",
-                stage="single",
-                channel="@channel",
-                since="2026-07-02",
-                until="2026-07-02",
-                model="gpt-5.4-mini",
-                request_index=1,
-                message_count=12,
-                status="ok",
-                cache_info=self.cache_info("prefix\n\nfirst"),
-                prompt_text="prefix\n\nfirst",
-                response_id="resp_1",
-                store_prompt_text=True,
-            )
-            log_openai_usage(
-                conn,
-                feature="digest",
-                created_at="2026-07-03T10:01:00+00:00",
-                stage="single",
-                channel="@channel",
-                since="2026-07-02",
-                until="2026-07-02",
-                model="gpt-5.4-mini",
-                request_index=2,
-                message_count=13,
-                status="ok",
-                cache_info=self.cache_info("prefix\n\nfirst plus more"),
-                prompt_text="prefix\n\nfirst plus more",
-                response_id="resp_2",
-                store_prompt_text=True,
-            )
+            with common_sqlite.write_tx(conn):
+                insert_openai_usage(
+                    conn,
+                    feature="digest",
+                    created_at="2026-07-03T10:00:00+00:00",
+                    stage="single",
+                    channel="@channel",
+                    since="2026-07-02",
+                    until="2026-07-02",
+                    model="gpt-5.4-mini",
+                    request_index=1,
+                    message_count=12,
+                    status="succeeded",
+                    cache_info=self.cache_info("prefix\n\nfirst"),
+                    prompt_text="prefix\n\nfirst",
+                    response_id="resp_1",
+                    store_prompt_text=True,
+                )
+            with common_sqlite.write_tx(conn):
+                insert_openai_usage(
+                    conn,
+                    feature="digest",
+                    created_at="2026-07-03T10:01:00+00:00",
+                    stage="single",
+                    channel="@channel",
+                    since="2026-07-02",
+                    until="2026-07-02",
+                    model="gpt-5.4-mini",
+                    request_index=2,
+                    message_count=13,
+                    status="succeeded",
+                    cache_info=self.cache_info("prefix\n\nfirst plus more"),
+                    prompt_text="prefix\n\nfirst plus more",
+                    response_id="resp_2",
+                    store_prompt_text=True,
+                )
             row = conn.execute("SELECT * FROM ai_usage_log WHERE response_id = 'resp_2'").fetchone()
         finally:
             conn.close()

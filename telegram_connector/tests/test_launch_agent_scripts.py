@@ -40,12 +40,12 @@ class LaunchAgentScriptTests(unittest.TestCase):
         self.assertIn('exec "$PYTHON_BIN" "\\$ROOT/telegram_bridge.py" listen --run-commands', content)
         self.assertIn('exec /bin/bash "$SERVICE_ROOT/scripts/run_telegram_bridge.sh"', content)
         self.assertIn('AUDIT_LOG="\\$TELEGRAM_CONNECTOR_PROJECT_ROOT/data/launchd/digest.last_attempt.json"', content)
-        self.assertIn('arming digest ttl=%ss grace=%ss', content)
-        self.assertIn('exec "$PYTHON_BIN" "\\$ROOT/common/ttl_runner.py" \\', content)
-        self.assertIn('--audit-file "\\$AUDIT_LOG" \\', content)
-        self.assertIn('--use-caffeinate \\', content)
-        self.assertIn('--sleep-policy pause \\', content)
-        self.assertIn('-- "$PYTHON_BIN" "\\$ROOT/telegram_digest.py" run', content)
+        self.assertIn('arming digest ttl={timeout}s grace={grace}s', content)
+        self.assertIn('from digest_settings import build_digest_supervisor_command, resolve_digest_process_limits', content)
+        self.assertLess(content.index('prepare_supervised_audit(audit_file, run_id)'),
+                        content.index('os.execv(command[0], command)'))
+        self.assertIn('runtime, audit_file, run_id=run_id)', content)
+        self.assertIn('os.execv(command[0], command)', content)
         self.assertIn('exec /bin/bash "$SERVICE_ROOT/scripts/run_telegram_digest.sh"', content)
 
     def test_installer_sets_project_root_env_in_plist(self) -> None:

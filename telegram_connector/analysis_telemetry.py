@@ -18,6 +18,9 @@ else:
     from analysis_store import StaleGenerationError, canonical_json, SOURCE_VERIFICATION_FIELDS, result_evidence_ids, model_selection_ids
 
 
+PRICING_RATE_KEYS = ('input', 'cached_input', 'cache_write_30m', 'cache_write_12h', 'output')
+
+
 def utc_now():
     return datetime.now(timezone.utc)
 
@@ -100,9 +103,8 @@ def _cost(rows, pricing):
               "unknown_attempts": len(missing), "reason": "pricing_not_supplied"}
     if pricing is None:
         return result
-    keys = ("input", "cached_input", "cache_write_30m", "cache_write_12h", "output")
     if any(type(pricing.get(key)) not in {int, float} or not math.isfinite(pricing[key])
-           or pricing[key] < 0 for key in keys):
+           or pricing[key] < 0 for key in PRICING_RATE_KEYS):
         raise ValueError("Expected finite nonnegative per-million token prices")
     result["pricing"] = pricing
     amount, lower, upper, bounded, unknown = 0.0, 0.0, 0.0, True, set()

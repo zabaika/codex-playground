@@ -8,6 +8,74 @@ from dataclasses import dataclass
 from typing import Any
 
 
+AI_USAGE_STATUSES = frozenset({'pending', 'succeeded', 'failed', 'unknown'})
+
+# One current storage contract for every application using the shared writers/readers.
+AI_USAGE_COLUMNS = {
+    'id': 'INTEGER PRIMARY KEY AUTOINCREMENT',
+    'created_at': 'TEXT NOT NULL',
+    'feature': 'TEXT NOT NULL',
+    'stage': 'TEXT NOT NULL',
+    'channel': 'TEXT',
+    'since': 'TEXT',
+    'until': 'TEXT',
+    'model': 'TEXT NOT NULL',
+    'response_id': 'TEXT',
+    'prompt_cache_key': 'TEXT',
+    'prompt_cache_retention': 'TEXT',
+    'prompt_version_hash': 'TEXT',
+    'request_index': 'INTEGER',
+    'message_count': 'INTEGER',
+    'system_chars': 'INTEGER',
+    'prompt_chars': 'INTEGER',
+    'shared_prefix_chars': 'INTEGER',
+    'shared_prefix_hash': 'TEXT',
+    'prompt_hash': 'TEXT',
+    'previous_prompt_hash': 'TEXT',
+    'previous_response_id': 'TEXT',
+    'prefix_match_chars_with_previous': 'INTEGER',
+    'prompt_text': 'TEXT',
+    'input_tokens': 'INTEGER',
+    'cached_input_tokens': 'INTEGER',
+    'cache_write_tokens': 'INTEGER',
+    'output_tokens': 'INTEGER',
+    'reasoning_tokens': 'INTEGER',
+    'output_chars': 'INTEGER',
+    'total_tokens': 'INTEGER',
+    'latency_ms': 'INTEGER',
+    'response_status': 'TEXT',
+    'incomplete_reason': 'TEXT',
+    'status': 'TEXT NOT NULL',
+    'error': 'TEXT',
+    'run_id': 'TEXT',
+    'attempt_index': 'INTEGER',
+    'job_id': 'TEXT',
+    'batch_id': 'TEXT',
+    'attempt_id': 'TEXT',
+    'generation': 'INTEGER',
+    'phase_sequence': 'INTEGER',
+    'started_at': 'TEXT',
+    'backoff_ms': 'INTEGER',
+    'backoff_requested_ms': 'INTEGER',
+    'cache_write_30m_tokens': 'INTEGER',
+    'cache_write_12h_tokens': 'INTEGER',
+    'actual_model': 'TEXT',
+    'actual_service_tier': 'TEXT',
+}
+AI_USAGE_SCHEMA_SQL = 'CREATE TABLE IF NOT EXISTS ai_usage_log (\n' + ',\n'.join(
+    f'    {name} {declaration}' for name, declaration in AI_USAGE_COLUMNS.items()
+) + '\n);'
+
+
+def require_ai_usage_schema(conn: sqlite3.Connection) -> None:
+    """Reject incomplete schemas without changing them or substituting NULL columns."""
+    columns = {str(row[1]) for row in conn.execute('PRAGMA table_info(ai_usage_log)')}
+    missing = AI_USAGE_COLUMNS.keys() - columns
+    if missing:
+        raise RuntimeError('Incompatible ai_usage_log schema: missing columns '
+                           + ', '.join(sorted(missing)))
+
+
 @dataclass
 class OpenAIUsage:
     input_tokens: int
@@ -102,7 +170,7 @@ def build_prompt_cache_info(
     )
 
 
-def log_openai_usage(
+def insert_openai_usage(
     conn: sqlite3.Connection,
     *,
     feature: str,
@@ -123,13 +191,18 @@ def log_openai_usage(
     store_prompt_text: bool = False,
     correlation: tuple[str, str, str] | None = None,
     latency_ms: int | None = None,
-) -> None:
+) -> int:
+    if status not in AI_USAGE_STATUSES:
+        raise ValueError('Invalid AI usage status')
+    if not conn.in_transaction:
+        raise RuntimeError('Usage insert requires an explicit transaction')
     previous = conn.execute(
         """
         SELECT response_id, prompt_hash, prompt_text
         FROM ai_usage_log
         WHERE feature = ?
           AND prompt_cache_key = ?
+          AND status != 'pending'
         ORDER BY id DESC
         LIMIT 1
         """,
@@ -191,4 +264,75 @@ def log_openai_usage(
     )
     if correlation is not None:
         conn.execute("UPDATE ai_usage_log SET job_id=?,batch_id=?,attempt_id=? WHERE id=?", (*correlation, inserted.lastrowid))
-    conn.commit()
+    return inserted.lastrowid
+
+
+def begin_openai_attempt(conn, *, run_id, attempt_id, attempt_index, **fields):
+    """Persist any feature's intent inside the caller's transaction.
+
+    The application owns run identity and schema migration. This API requires
+    the extended ai_usage_log attempt/native-metric columns.
+    """
+    if not conn.in_transaction:
+        raise RuntimeError('Attempt intent requires an explicit transaction')
+    row_id = insert_openai_usage(conn, status='pending', **fields)
+    conn.execute("""UPDATE ai_usage_log SET run_id=?,attempt_id=?,attempt_index=?,
+        started_at=?,backoff_ms=0,backoff_requested_ms=0 WHERE id=?""",
+        (run_id, attempt_id, attempt_index, fields['created_at'], row_id))
+    return row_id
+
+
+def write_openai_backoff(conn, *, run_id, attempt_id, elapsed_ms, requested_ms):
+    """Join the existing receipt/snapshot transaction, without its own commit."""
+    if not conn.in_transaction:
+        raise RuntimeError('Backoff requires an explicit transaction')
+    conn.execute("""UPDATE ai_usage_log SET backoff_ms=?,backoff_requested_ms=?
+        WHERE run_id=? AND attempt_id=?""",
+        (elapsed_ms, requested_ms, run_id, attempt_id))
+
+
+def settle_openai_attempt(conn, row_id, *, response, status, error, latency_ms,
+                          output_chars=None):
+    """Missing/invalid provider counters remain unknown, including on success."""
+    if not conn.in_transaction:
+        raise RuntimeError('Attempt receipt requires an explicit transaction')
+    if status not in AI_USAGE_STATUSES - {'pending'}:
+        raise ValueError('Invalid terminal AI usage status')
+    native = response or {}
+    raw = native.get('usage')
+    raw = raw if isinstance(raw, dict) else {}
+    details = raw.get('input_tokens_details')
+    details = details if isinstance(details, dict) else {}
+    output_details = raw.get('output_tokens_details')
+    output_details = output_details if isinstance(output_details, dict) else {}
+    writes = details.get('cache_write_tokens_details')
+    writes = writes if isinstance(writes, dict) else {}
+
+    def counter(value):
+        return value if type(value) is int and value >= 0 else None
+
+    incoming, outgoing = counter(raw.get('input_tokens')), counter(raw.get('output_tokens'))
+    cached = counter(details.get('cached_tokens'))
+    if incoming is not None and cached is not None and cached > incoming:
+        cached = None
+    incomplete = native.get('incomplete_details')
+    incomplete = incomplete if isinstance(incomplete, dict) else {}
+
+    def native_text(value):
+        return value if isinstance(value, str) and value else None
+
+    changed = conn.execute("""UPDATE ai_usage_log SET status=?,error=?,latency_ms=?,
+        response_id=?,input_tokens=?,output_tokens=?,total_tokens=?,cached_input_tokens=?,
+        cache_write_tokens=?,reasoning_tokens=?,response_status=?,incomplete_reason=?,
+        actual_model=?,actual_service_tier=?,cache_write_30m_tokens=?,cache_write_12h_tokens=?,
+        output_chars=?
+        WHERE id=? AND status='pending'""",
+        (status, error, latency_ms, native_text(native.get('id')), incoming, outgoing,
+         incoming + outgoing if incoming is not None and outgoing is not None else None,
+         cached, counter(details.get('cache_write_tokens')),
+         counter(output_details.get('reasoning_tokens')), native_text(native.get('status')),
+         native_text(incomplete.get('reason')), native_text(native.get('model')),
+         native_text(native.get('service_tier')), counter(writes.get('ttl_30m_tokens')),
+         counter(writes.get('ttl_12h_tokens')), counter(output_chars), row_id)).rowcount
+    if changed != 1:
+        raise ValueError('Attempt receipt is outside pending scope')

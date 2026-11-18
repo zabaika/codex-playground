@@ -60,6 +60,8 @@ def test_infoext_fixed_command_and_arguments(bridge):
 @pytest.mark.parametrize("command", ["/infoext", "infoext", "INFOEXT", "/infoext@mybot"])
 def test_infoext_authorization_environment_and_safe_response(bridge, monkeypatch, authorized, command):
     module, config = bridge
+    monkeypatch.setattr(module, "resolve_worker_process_timeout_seconds",
+                        lambda *a: pytest.fail("Supervised InfoExt must not resolve bridge timeout"))
     messages, calls = [], []
     monkeypatch.setattr(module, "send_text_message", lambda _, __, text: messages.append(text))
     def worker(argv, **kwargs):

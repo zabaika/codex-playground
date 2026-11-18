@@ -17,14 +17,16 @@ from telegram_shared.openai_usage import build_prompt_cache_info as shared_build
 from telegram_shared.openai_usage import common_prefix_length as shared_common_prefix_length
 from telegram_shared.openai_usage import extract_usage as shared_extract_usage
 from telegram_shared.openai_usage import hash_cache_key as shared_hash_cache_key
-from telegram_shared.openai_usage import log_openai_usage as shared_log_openai_usage
+from telegram_shared.openai_usage import insert_openai_usage
+from common import sqlite as common_sqlite
 if __package__:
-    from . import digest_rendering, digest_settings, history_messages, history_store
+    from . import digest_rendering, digest_settings, history_messages, history_store, digest_telemetry
 else:
     import digest_rendering
     import digest_settings
     import history_messages
     import history_store
+    import digest_telemetry
 
 
 OUTPUT_TOKEN_LIMIT_EMPTY_RESPONSE_TEXT = (
@@ -372,25 +374,26 @@ def log_openai_usage(
     error: str | None = None,
     store_prompt_text: bool = False,
 ) -> None:
-    shared_log_openai_usage(
-        conn,
-        feature="digest",
-        created_at=history_store.now_utc(),
-        stage=stage,
-        channel=channel,
-        since=since,
-        until=until,
-        model=model,
-        request_index=request_index,
-        message_count=message_count,
-        status=status,
-        cache_info=cache_info,
-        prompt_text=prompt_text,
-        usage=usage,
-        response_id=response_id,
-        error=history_messages.optional_text(error),
-        store_prompt_text=store_prompt_text,
-    )
+    with common_sqlite.write_tx(conn):
+        insert_openai_usage(
+            conn,
+            feature="digest",
+            created_at=history_store.now_utc(),
+            stage=stage,
+            channel=channel,
+            since=since,
+            until=until,
+            model=model,
+            request_index=request_index,
+            message_count=message_count,
+            status=status,
+            cache_info=cache_info,
+            prompt_text=prompt_text,
+            usage=usage,
+            response_id=response_id,
+            error=history_messages.optional_text(error),
+            store_prompt_text=store_prompt_text,
+        )
 
 
 def openai_usage_error_message(exc: Exception) -> str:
@@ -416,6 +419,8 @@ def run_openai_digest(
     urlopen_func: Callable[..., Any] | None = None,
     sleep_func: Callable[[float], None] = time.sleep,
     random_func: Callable[[], float] = random.random,
+    before_attempt=None,
+    after_attempt=None,
 ) -> OpenAIResult:
     reasoning: dict[str, str] = {"effort": reasoning_effort}
     if reasoning_summary != "none":
@@ -454,6 +459,8 @@ def run_openai_digest(
         urlopen_func=urlopen_func,
         sleep_func=sleep_func,
         random_func=random_func,
+        before_attempt=before_attempt,
+        after_attempt=after_attempt,
     )
     response = openai_response.response
     text = extract_response_text(response)
@@ -490,42 +497,36 @@ def request_digest_with_usage(
     cache_info: PromptCacheInfo,
     prompt: str,
 ) -> OpenAIResult:
-    usage_fields = {
-        "stage": stage,
-        "channel": channel,
-        "since": since,
-        "until": until,
-        "model": config.model,
-        "request_index": request_index,
-        "message_count": message_count,
-        "cache_info": cache_info,
-        "prompt_text": prompt,
-        "store_prompt_text": config.store_prompt_text,
-    }
-    try:
-        result = run_openai_digest(
-            api_key,
-            config.model,
-            config.system_instructions,
-            prompt,
-            prompt_cache_key=cache_info.cache_key,
-            cache_breakpoint_marker=config.cache_breakpoint_marker,
-            reasoning_effort=config.openai_reasoning_effort,
-            reasoning_summary=config.openai_reasoning_summary,
-            max_output_tokens=config.openai_max_output_tokens,
-            timeout_seconds=config.openai_timeout_seconds,
-            retry_attempts=config.openai_retry_attempts,
-            retry_backoff_seconds=config.openai_retry_backoff_seconds,
-        )
-    except Exception as exc:
-        log_openai_usage(
-            log_conn, **usage_fields, status="error", error=openai_usage_error_message(exc),
-        )
-        raise
-    log_openai_usage(
-        log_conn, **usage_fields, status="ok", usage=result.usage, response_id=result.response_id,
+    recorder = digest_telemetry.CURRENT.get()
+    if recorder is None:
+        raise RuntimeError('Digest usage recorder is required')
+    fields = dict(stage=stage, channel=channel, since=since, until=until,
+        model=config.model, request_index=request_index, message_count=message_count,
+        cache_info=cache_info, prompt_text=prompt, store_prompt_text=config.store_prompt_text)
+
+    def after_attempt(identity, response, exc, latency):
+        chars = None
+        if response is not None:
+            try:
+                chars = len(extract_response_text(response))
+            except (TypeError, AttributeError):
+                pass  # Original output validation follows; no invented character count.
+        recorder.end_ai(identity, response, exc, latency, output_chars=chars)
+
+    return run_openai_digest(
+        api_key, config.model, config.system_instructions, prompt,
+        prompt_cache_key=cache_info.cache_key,
+        cache_breakpoint_marker=config.cache_breakpoint_marker,
+        reasoning_effort=config.openai_reasoning_effort,
+        reasoning_summary=config.openai_reasoning_summary,
+        max_output_tokens=config.openai_max_output_tokens,
+        timeout_seconds=config.openai_timeout_seconds,
+        retry_attempts=config.openai_retry_attempts,
+        retry_backoff_seconds=config.openai_retry_backoff_seconds,
+        before_attempt=lambda index: recorder.begin_ai(index, fields),
+        after_attempt=after_attempt,
+        sleep_func=lambda delay: recorder.measured_sleep(time.sleep, delay),
     )
-    return result
 
 
 def summarize_channel_batches(

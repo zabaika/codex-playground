@@ -26,7 +26,8 @@ else:
     import analysis_telemetry
 
 from telegram_shared import openai_api
-from telegram_shared.openai_usage import build_prompt_cache_info, log_openai_usage
+from telegram_shared.openai_usage import build_prompt_cache_info, insert_openai_usage
+from common import sqlite as common_sqlite
 
 
 def request_analysis_json(store, job_id, batch_id, *, generation, endpoint, payload, api_key,
@@ -78,14 +79,15 @@ def request_analysis_json(store, job_id, batch_id, *, generation, endpoint, payl
                                           outcome=outcome, usage=usage)
         finally:
             current = store.get_job(job_id)
-            log_openai_usage(store.conn, feature=job["command"], created_at=datetime.now(timezone.utc).isoformat(),
-                stage=f"{batch['kind']}:{request_kind}", channel="", since=None, until=None,
-                model=settings["processing"]["model"], request_index=current["provider_requests"], message_count=0,
-                status=outcome, cache_info=cache_info, prompt_text=serialized,
-                usage=analysis_telemetry.reported_usage(response, usage, latency),
-                response_id=response.get("id") if response is not None else None,
-                error=(f"http_{exc.status_code}" if exc.status_code is not None else exc.error_type) if exc else None,
-                store_prompt_text=ai["store_prompt_text"], correlation=(job_id, batch_id, identity), latency_ms=latency)
+            with common_sqlite.write_tx(store.conn):
+                insert_openai_usage(store.conn, feature=job["command"], created_at=datetime.now(timezone.utc).isoformat(),
+                    stage=f"{batch['kind']}:{request_kind}", channel="", since=None, until=None,
+                    model=settings["processing"]["model"], request_index=current["provider_requests"], message_count=0,
+                    status=outcome, cache_info=cache_info, prompt_text=serialized,
+                    usage=analysis_telemetry.reported_usage(response, usage, latency),
+                    response_id=response.get("id") if response is not None else None,
+                    error=(f"http_{exc.status_code}" if exc.status_code is not None else exc.error_type) if exc else None,
+                    store_prompt_text=ai["store_prompt_text"], correlation=(job_id, batch_id, identity), latency_ms=latency)
             raw_usage = (response or {}).get("usage")
             details = raw_usage.get("input_tokens_details", {}) if isinstance(raw_usage, dict) else {}
             writes = details.get("cache_write_tokens_details", {}) if isinstance(details, dict) else {}

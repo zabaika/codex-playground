@@ -78,8 +78,7 @@ def analysis_module():
 
 
 def test_digest_specific_timeout_does_not_change_analytics_timeout(legacy_config):
-    legacy_config.setdefault("digest", {})["openai_timeout_seconds"] = "30"
-    legacy_config["digest_ai"]["openai_timeout_seconds"] = "120"
+    legacy_config["digest_ai"]["openai_timeout_seconds"] = "30"
     settings = analysis_module().resolve_analysis_settings(legacy_config, config_dir=CONFIG_DIR)
     assert settings["analysis"]["ai"]["request_timeout_seconds"] == 600
 

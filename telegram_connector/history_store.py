@@ -12,6 +12,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from common import sqlite as common_sqlite
+from telegram_shared.openai_usage import AI_USAGE_SCHEMA_SQL, require_ai_usage_schema
 if __package__:
     from . import history_messages, history_settings
 else:
@@ -29,7 +30,7 @@ FTS_INDEX_ADMISSION_KEY = f"internal:fts:v{FTS_INDEX_VERSION}"
 SQLITE_CONFIG = common_sqlite.load_sqlite_config()
 
 
-SCHEMA_SQL = """
+SCHEMA_SQL = f"""
 CREATE TABLE IF NOT EXISTS channels (
     channel_id INTEGER PRIMARY KEY,
     access_hash TEXT,
@@ -90,47 +91,27 @@ CREATE TABLE IF NOT EXISTS sync_state (
     last_error TEXT
 );
 
-CREATE TABLE IF NOT EXISTS ai_usage_log (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    created_at TEXT NOT NULL,
-    feature TEXT NOT NULL,
-    stage TEXT NOT NULL,
-    channel TEXT,
-    since TEXT,
-    until TEXT,
-    model TEXT NOT NULL,
-    response_id TEXT,
-    prompt_cache_key TEXT,
-    prompt_cache_retention TEXT,
-    prompt_version_hash TEXT,
-    request_index INTEGER,
-    message_count INTEGER,
-    system_chars INTEGER,
-    prompt_chars INTEGER,
-    shared_prefix_chars INTEGER,
-    shared_prefix_hash TEXT,
-    prompt_hash TEXT,
-    previous_prompt_hash TEXT,
-    previous_response_id TEXT,
-    prefix_match_chars_with_previous INTEGER,
-    prompt_text TEXT,
-    input_tokens INTEGER,
-    cached_input_tokens INTEGER,
-    cache_write_tokens INTEGER,
-    output_tokens INTEGER,
-    reasoning_tokens INTEGER,
-    output_chars INTEGER,
-    total_tokens INTEGER,
-    latency_ms INTEGER,
-    response_status TEXT,
-    incomplete_reason TEXT,
-    status TEXT NOT NULL,
-    error TEXT
-);
+{AI_USAGE_SCHEMA_SQL}
 
 CREATE INDEX IF NOT EXISTS idx_messages_channel_date ON messages(channel_id, date_utc DESC, message_id DESC);
 CREATE INDEX IF NOT EXISTS idx_media_assets_ocr_status ON media_assets(ocr_status, created_at);
 CREATE INDEX IF NOT EXISTS idx_ai_usage_log_created_at ON ai_usage_log(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_ai_usage_digest_run ON ai_usage_log(run_id,id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_ai_usage_digest_attempt
+    ON ai_usage_log(attempt_id) WHERE feature='digest' AND run_id IS NOT NULL
+    AND attempt_id IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS digest_runs (
+    run_id TEXT PRIMARY KEY CHECK(length(trim(run_id)) > 0),
+    started_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    finished_at TEXT,
+    status TEXT NOT NULL CHECK(status IN
+        ('started','running','sent','partial','failed','timed_out','interrupted')),
+    payload_json TEXT NOT NULL CHECK(json_valid(payload_json)
+        AND json_extract(payload_json, '$.version') IS 1)
+);
+CREATE INDEX IF NOT EXISTS idx_digest_runs_started ON digest_runs(started_at);
 """
 
 
@@ -292,6 +273,7 @@ def connect_db(runtime: history_settings.RuntimeConfig) -> sqlite3.Connection:
 
 def init_db(conn: sqlite3.Connection) -> None:
     conn.executescript(SCHEMA_SQL)
+    require_ai_usage_schema(conn)
     migrate_sqlite_schema(conn)
     conn.commit()
     # Execute DDL statements individually: executescript would implicitly commit
@@ -393,43 +375,16 @@ def table_columns(conn: sqlite3.Connection, table_name: str) -> list[str]:
     return [str(row[1]) for row in rows]
 
 
-def migrate_ai_usage_log_schema(conn: sqlite3.Connection) -> None:
-    ai_usage_columns = set(table_columns(conn, "ai_usage_log"))
-    ai_usage_additions = {
-        "response_id": "TEXT",
-        "prompt_cache_key": "TEXT",
-        "prompt_cache_retention": "TEXT",
-        "prompt_version_hash": "TEXT",
-        "system_chars": "INTEGER",
-        "prompt_chars": "INTEGER",
-        "shared_prefix_chars": "INTEGER",
-        "shared_prefix_hash": "TEXT",
-        "prompt_hash": "TEXT",
-        "previous_prompt_hash": "TEXT",
-        "previous_response_id": "TEXT",
-        "prefix_match_chars_with_previous": "INTEGER",
-        "prompt_text": "TEXT",
-        "cache_write_tokens": "INTEGER",
-        "reasoning_tokens": "INTEGER",
-        "output_chars": "INTEGER",
-        "response_status": "TEXT",
-        "incomplete_reason": "TEXT",
-        "job_id": "TEXT",
-        "batch_id": "TEXT",
-        "attempt_id": "TEXT",
-        "generation": "INTEGER",
-        "phase_sequence": "INTEGER",
-        "started_at": "TEXT",
-        "backoff_ms": "INTEGER",
-        "backoff_requested_ms": "INTEGER",
-        "cache_write_30m_tokens": "INTEGER",
-        "cache_write_12h_tokens": "INTEGER",
-        "actual_model": "TEXT",
-        "actual_service_tier": "TEXT",
-    }
-    for column_name, column_type in ai_usage_additions.items():
-        if ai_usage_columns and column_name not in ai_usage_columns:
-            conn.execute(f"ALTER TABLE ai_usage_log ADD COLUMN {column_name} {column_type}")
+def write_digest_run(conn, *, run_id, started_at, updated_at, finished_at,
+                     status, payload_json):
+    """Write a prepared snapshot inside the caller's short transaction."""
+    if not conn.in_transaction:
+        raise RuntimeError('Digest snapshot requires an explicit transaction')
+    conn.execute("""INSERT INTO digest_runs VALUES (?,?,?,?,?,?)
+        ON CONFLICT(run_id) DO UPDATE SET updated_at=excluded.updated_at,
+        finished_at=excluded.finished_at,status=excluded.status,
+        payload_json=excluded.payload_json""",
+        (run_id, started_at, updated_at, finished_at, status, payload_json))
 
 
 def migrate_sqlite_schema(conn: sqlite3.Connection) -> None:
@@ -441,7 +396,6 @@ def migrate_sqlite_schema(conn: sqlite3.Connection) -> None:
         conn.execute("UPDATE channels SET access_hash = NULL WHERE access_hash = ''")
         conn.execute("UPDATE messages SET grouped_id = NULL WHERE grouped_id = ''")
         conn.execute("UPDATE messages SET sender_id = NULL WHERE sender_id = ''")
-        migrate_ai_usage_log_schema(conn)
         return
 
     conn.execute("PRAGMA foreign_keys = OFF")
@@ -495,7 +449,6 @@ def migrate_sqlite_schema(conn: sqlite3.Connection) -> None:
     conn.execute("CREATE INDEX IF NOT EXISTS idx_media_assets_ocr_status ON media_assets(ocr_status, created_at)")
     conn.execute("UPDATE channels SET access_hash = NULL WHERE access_hash = ''")
     conn.execute("PRAGMA foreign_keys = ON")
-    migrate_ai_usage_log_schema(conn)
 
 
 class TelegramPeerIdentityError(ValueError):
