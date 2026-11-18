@@ -88,7 +88,7 @@ Keep documentation split by responsibility:
 #### Contract Ownership and Validation
 
 - when renaming or moving a rule section, search for references to its previous title or anchor; update affected consumers in the same change, preserving the rule's meaning and canonical ownership
-- if behavior changes, update code, tests, and the relevant source-of-truth document in the same change
+- if behavior changes, reconcile affected code, tests and documented contracts in the same change; use [Documentation Rules](#14-documentation-rules) to decide whether new documentation is needed
 - when a top-level project, tool, or workflow becomes a meaningful navigation anchor, update both the root `README.md` project index and the root `AGENTS.md` repo layout in the same change
 - when a workflow grows beyond a few pages of rules, split it into one thin entrypoint plus canonical reference docs; keep the entrypoint focused on sequencing and keep detailed policy in the deepest owning reference file
 - when a stateful workflow grows beyond a small prototype, define a rollout split such as `core`, `optional`, and later stages instead of treating every planned capability as equally urgent
@@ -117,7 +117,7 @@ Keep documentation split by responsibility:
 - do not replace concrete useful material such as examples, templates, checklists, structured specimens, or other directly usable blocks with a more abstract summary unless a clearly identifiable functional equivalent survives in the same workflow
 - when de-branding, anonymizing, or generalizing source-specific material, preserve any underlying quality baseline, contrast pattern, or validation value that the original example provided; remove incidental identity, not the practical standard it was teaching
 - when one workflow produces multiple artifacts with different operational roles, prefer cleanly separated artifacts over hybrids, and make each artifact responsible for one role rather than blending several incompatible responsibilities into one file
-- before compressing or deleting a useful block because it feels too heavy in its current location, first test whether it belongs under a different canonical owner; relocate to the correct owner before choosing lossier transformations
+- before compressing or deleting a useful block because it feels too heavy in its current location, apply [Documentation Rules](#14-documentation-rules); when its continued role justifies retention, test relocation to the correct canonical owner before choosing lossier transformations
 - for complex multi-file or multi-output systems, maintain a regression harness for mechanically checkable contract rules and update that harness in the same change when the output contract evolves
 
 ### Agent Coding Discipline
@@ -179,6 +179,7 @@ Keep documentation split by responsibility:
 - translate vague tasks into verifiable outcomes before implementation
 - before substantial planning, consolidate the current mandatory requirements, latest corrections, scope exclusions, and open decisions; distinguish user decisions, observed facts, and proposed assumptions
 - prefer checks that can prove the change, such as a reproducing test, a contract check, or an explicit observable behavior change
+- for defect fixes, verify that the change addresses the established cause of the contract violation; exception suppression, fallback values and retries count as a correction only when they implement the intended failure-handling contract
 - for multi-step tasks, state a short plan where each step names its verification check
 - for substantial multi-step implementation, organize the plan into small, independently verifiable steps
 - each step must state its outcome, prerequisites, relevant contracts/settings, mandatory conditions, test scenarios, and completion checks; verify that it can be followed using the shared contract, the step, and its precise references, with dependencies and checks available at that point
@@ -303,12 +304,16 @@ they do not waive mandatory security, authorization or verification requirements
 - do not let UI or other interface layers write directly to the database; every mutation must go through command handlers in the canonical service layer
 - do not let skills, wrappers, or interface adapters own canonical operational logic when a shared service layer exists; they should orchestrate or adapt that logic, not redefine it
 - route all state-changing operations through command handlers and all queue/view construction through query or projection handlers instead of ad hoc SQL from multiple surfaces
+- validate and parse external data at the applicable trust boundary; internal consumers use the established contract; revalidate at a new trust boundary or when a guarantee may no longer hold, including authorization, freshness and concurrent-state checks where required
+- where it simplifies verification, separate business computations from network, filesystem and other side effects without introducing unnecessary layers or splitting canonical transaction and mutation ownership
+- before adding synchronization, check whether shared mutable state is necessary; give independent operations independent state, while retaining one canonical owner for shared business facts; for genuinely shared state, define mutation ownership and how concurrent writes are coordinated
 
 ### Workflow State and Entity Model
 
 - when a workflow tracks business progress over time, define one canonical entity vocabulary before adding UI views, agent wrappers, reports, or automations on top of it
+- for new or changed models, express material invariants through suitable types, constructors or storage constraints where practical without unnecessary model complexity; enforce remaining invariants in the canonical state-changing handlers
 - define the independently meaningful processing unit and distinguish technical termination, coverage completeness, structural validity, semantic correctness and publication; none of these outcomes substitutes for the others, and complete input/processing counts do not establish semantic completeness
-- define atomicity and localize failures to the smallest contractually independent unit; retain confirmed partial progress when the operation allows it, distinguishing incomplete responses from valid empty results
+- define atomicity and localize failures to the smallest contractually independent unit; retain confirmed partial progress when the operation allows it, distinguishing incomplete responses from valid empty results; before continuing after a handled failure, record the completed unit's actual outcome rather than inferring success from advancing to the next unit; distinguish attempt, phase, source and whole-run outcomes
 - define retry, repair, resume and invalidation at those boundaries; cover failure between an external call, its receipt and a checkpoint, reconciling uncertain effects before replay
 - for filtering, merging, deduplication, compaction, summarization and repair, define permitted information loss in the project contract; trace required facts, independent events, conditions and provenance through producer, transformations and final consumer; results must not claim completeness beyond the evidence
 - distinguish primary business entities from their occurrences, events, or derived views; do not collapse canonical records, source-specific sightings, reminders, audit entries, and projections into one overloaded table or object
@@ -527,7 +532,7 @@ Rules:
 - logs must not contain secrets
 - logs must not contain absolute private file paths when avoidable
 - for scheduled jobs, keep a separate machine-readable last-attempt audit artifact with start time, finish time, status, and concise context; overwrite it on each run instead of accumulating unbounded history there
-- publish the new run identity and starting audit before potentially blocking initialization; keep any unresolved previous supervisor receipt recoverable until retained storage accepts it, without accumulating unbounded history in the last-attempt artifact
+- publish the new run identity and starting audit as the first audit write of the new run, before diagnostics from any participant, including launcher, supervisor and worker, and before potentially blocking initialization; keep any unresolved previous supervisor receipt recoverable with its identity and values unchanged until retained storage accepts it, without accumulating unbounded history in the last-attempt artifact
 - correlate worker and supervisor receipts by run identity; preserve timeout, external cancellation and failure as distinct outcomes, including the reason and signal when available, and never apply another run's receipt
 - for non-daemon jobs, last-attempt audit logs must include the configured total timeout, current phase, and terminal status on timeout
 - logs must not contain raw external-provider updates or full sensitive request payloads
@@ -800,6 +805,8 @@ Choose verification by the meaning and impact of the change, not its file extens
 - fresh model runs and other costly or external checks remain subject to their existing authorization and budget boundaries; if required verification cannot run, record the gap and leave the corresponding acceptance condition unverified rather than treating another check as a substitute
 
 ## 14. Documentation Rules
+
+Before adding or relocating engineering documentation, name the operator action or recurring agent decision it supports. Use its existing canonical owner and update or merge the explanation there. Internal changes do not require new README or AGENTS text while their documented contracts remain accurate. Apply the same admission check to relocated text; keep experiment history and execution progress in the current plan or logs rather than moving them into permanent guidance.
 
 README must explicitly document:
 

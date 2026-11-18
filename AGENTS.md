@@ -141,7 +141,7 @@ If README, code, and tests disagree, update them together rather than fixing onl
 - keep reference-file links and explanations in the skill-local `README.md`, not in root catalog documents such as `skills/README.md`
 - add audit, security-review, or third-party review documents for a skill only when its provenance or risk profile justifies them
 - when a local skill needs operator-facing maintenance docs, keep them in the repository copy and reinstall them together with the rest of the skill so the installed copy stays in sync
-- before finishing behavior changes, update docs in the same change and verify the relevant tests pass
+- before finishing behavior changes, apply [Contract Ownership and Validation](./RULEBOOK.md#contract-ownership-and-validation) and [Documentation Rules](./RULEBOOK.md#14-documentation-rules), and complete the applicable verification
 
 ## Coding Guardrails
 
