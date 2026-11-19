@@ -176,8 +176,10 @@ unavailable, inspect `/status` or use search `--mode full`.
 
 ## Dependencies
 
-Use Python 3 with [requirements.txt](requirements.txt); image OCR needs Tesseract.
-See shared runtime setup above and [developer checks](AGENTS.md#testing).
+Use Python 3 with the tested [requirements.lock](requirements.lock);
+[requirements.txt](requirements.txt) declares supported ranges. Before deployment,
+follow the [test-first update workflow](../common/README.md#python-runtime-selection) and
+[developer checks](AGENTS.md#testing). Image OCR needs Tesseract.
 
 ## Local Quality Evaluation
 

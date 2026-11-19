@@ -1,15 +1,11 @@
-"""Cold pip resolution uses repo inputs, independent of operator caches."""
+"""Cold resolution uses the declared lock and an explicitly supplied wheel cache."""
 import hashlib
-from html.parser import HTMLParser
-import importlib.metadata
 import json
 import os
 from pathlib import Path
 import shutil
 import subprocess
 import sys
-from urllib.parse import parse_qs, urlsplit
-import zipfile
 
 import pytest
 
@@ -20,27 +16,17 @@ ROOT = Path(__file__).resolve().parents[2]
 def cold_requirements(tmp_path):
     project = tmp_path / "source with spaces/telegram_connector"
     project.mkdir(parents=True)
-    assets = ROOT / "telegram_connector/third_party/pyaes"
-    if assets.exists():
-        shutil.copytree(assets, project / "third_party/pyaes")
-    index = tmp_path / "fixture index"
+    assets = Path(os.environ.get("PIP_FIND_LINKS") or
+                  ROOT / "telegram_connector/third_party").expanduser()
+    index = project / "wheel cache"
     index.mkdir()
-    # Only other dependencies are metadata-only fixtures. PyAES must be real.
-    for name in ("telethon", "urllib3", "pytest"):
-        version = importlib.metadata.version(name)
-        prefix = f"{name}-{version}.dist-info"
-        with zipfile.ZipFile(index / f"{name}-{version}-py3-none-any.whl", "w") as wheel:
-            wheel.writestr(prefix + "/METADATA", (
-                f"Metadata-Version: 2.1\nName: {name}\nVersion: {version}\n"
-                + ("Requires-Dist: pyaes\n" if name == "telethon" else "")
-            ))
-            wheel.writestr(prefix + "/WHEEL", "Wheel-Version: 1.0\nRoot-Is-Purelib: true\nTag: py3-none-any\n")
-            wheel.writestr(prefix + "/RECORD", "")
-    requirements = project / "requirements.txt"
-    requirements.write_text(
-        "--no-index\n--find-links " + index.as_uri() + "\n"
-        + (ROOT / "telegram_connector/requirements.txt").read_text(),
-    )
+    for source in assets.glob("*.whl"):
+        shutil.copy2(source, index / source.name)
+    assert list(index.glob("*.whl")), "Supply the reviewed wheels before testing cold installation"
+    requirements = project / "requirements.lock"
+    selected_lock = Path(os.environ.get('PYTHON_RUNTIME_TEST_LOCK') or
+                         ROOT / 'telegram_connector/requirements.lock')
+    requirements.write_bytes(selected_lock.read_bytes())
     home = tmp_path / "empty-home"
     home.mkdir()
     env = {
@@ -51,31 +37,27 @@ def cold_requirements(tmp_path):
 
 
 def resolve(cold_requirements, tmp_path):
-    _, requirements, env = cold_requirements
+    project, requirements, env = cold_requirements
     report = tmp_path / "report.json"
     result = subprocess.run([
         sys.executable, "-I", "-m", "pip", "install", "--dry-run",
         "--ignore-installed", "--only-binary=:all:", "--report", str(report),
-        "-r", str(requirements),
+        "-r", str(requirements), "--require-hashes", "--no-index",
+        "--find-links", str(project / "wheel cache"),
     ], cwd=tmp_path, env=env, text=True, capture_output=True, timeout=30)
     return result, report
 
 
-def test_cold_plan_uses_repo_pyaes_without_manual_find_links(cold_requirements, tmp_path):
+def test_cold_plan_uses_reviewed_local_wheels_and_lock(cold_requirements, tmp_path):
     project, _, _ = cold_requirements
     result, report = resolve(cold_requirements, tmp_path)
     assert result.returncode == 0, result.stderr
     package = next(item for item in json.loads(report.read_text())["install"]
                    if item["metadata"]["name"].lower() == "pyaes")
-    wheel = next((project / "third_party/pyaes").glob("*.whl"))
-    class WheelIndex(HTMLParser):
-        def handle_starttag(self, tag, attrs):
-            if tag == "a":
-                self.href = dict(attrs)["href"]
-
-    index = WheelIndex()
-    index.feed((project / "third_party/pyaes/index.html").read_text())
-    expected = parse_qs(urlsplit(index.href).fragment)["sha256"][0]
+    wheel = next((project / "wheel cache").glob("pyaes-*.whl"))
+    line = next(line for line in (project / "requirements.lock").read_text().splitlines()
+                if line.startswith("pyaes=="))
+    expected = line.split("--hash=sha256:")[1]
     assert package["download_info"]["url"] == wheel.as_uri()
     assert package["download_info"]["archive_info"]["hashes"]["sha256"] == expected
     assert hashlib.sha256(wheel.read_bytes()).hexdigest() == expected
@@ -84,7 +66,7 @@ def test_cold_plan_uses_repo_pyaes_without_manual_find_links(cold_requirements, 
 @pytest.mark.parametrize("fault", ["missing", "corrupt"])
 def test_unavailable_reviewed_wheel_cannot_enter_cold_plan(cold_requirements, tmp_path, fault):
     project, _, _ = cold_requirements
-    wheel = next((project / "third_party/pyaes").glob("*.whl"))
+    wheel = next((project / "wheel cache").glob("pyaes-*.whl"))
     if fault == "missing":
         wheel.unlink()
     else:
@@ -93,3 +75,13 @@ def test_unavailable_reviewed_wheel_cannot_enter_cold_plan(cold_requirements, tm
     assert result.returncode != 0
     if fault == "corrupt":
         assert "HASHES" in result.stderr.upper() or "HASH" in result.stderr.upper()
+
+
+def test_cold_requirements_use_selected_candidate_lock(tmp_path, monkeypatch, request):
+    source = Path(os.environ.get('PYTHON_RUNTIME_TEST_LOCK') or
+                  ROOT / 'telegram_connector/requirements.lock')
+    candidate = tmp_path / 'selected candidate.lock'
+    candidate.write_bytes(source.read_bytes() + b'\n# selected candidate fixture\n')
+    monkeypatch.setenv('PYTHON_RUNTIME_TEST_LOCK', str(candidate))
+    _, requirements, _ = request.getfixturevalue('cold_requirements')
+    assert requirements.read_bytes() == candidate.read_bytes()

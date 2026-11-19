@@ -9,6 +9,8 @@ import time
 import uuid
 
 from common import sqlite as common_sqlite
+from common import python_environment
+from common.python_runtime import RuntimeSelectionError
 from common.json_io import write_json_atomic
 from common.ttl_runner import load_audit_payload
 from telegram_shared import openai_usage
@@ -211,6 +213,18 @@ def prepare_supervised_audit(audit_file, run_id):
     if receipt is not None:
         payload['previous_supervisor'] = receipt
     write_json_atomic(audit_file, payload)
+
+
+def verify_supervised_runtime(audit_file, *, record_path=None, requirements=None, required=False):
+    """A startup refusal belongs to the freshly prepared run, not its receipt."""
+    try:
+        python_environment.verify_current_environment(record_path=record_path,
+            requirements=requirements, required=required)
+    except RuntimeSelectionError:
+        payload = load_audit_payload(audit_file)
+        payload.update(status='failed', reason='runtime_drift', finished_at=utc_now())
+        write_json_atomic(audit_file, payload)
+        raise
 
 
 def retain_supervisor_outcome(conn, audit):

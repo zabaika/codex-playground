@@ -80,6 +80,7 @@ If README, code, and tests disagree, update them together.
 - Never commit machine-specific paths, usernames, or plaintext secrets.
 - `runtime.local.toml` is local-only and must stay ignored.
 - Runtime data belongs under `data/`.
+- Connector's approved exception to tracked binary assets is an external audited wheel directory; follow the [shared setup workflow](../common/README.md#python-runtime-selection).
 - Treat `messages.text` as a Telegram-specific schema exception: it may remain `""` when Telegram explicitly provides no text body, while other optional string fields should still follow the repository-wide `NULL`-for-missing convention.
 - Bridge and digest logs must not leak secrets or full raw updates.
 - Apply the [audit rules](../RULEBOOK.md#5-logging-rules) before digest initialization. Both supervised launchers prepare the new audit through `digest_telemetry` before spawning the supervisor and pass its run identity to the worker. Until SQLite retains the previous supervisor receipt, carry it in the existing audit.
@@ -95,8 +96,7 @@ If README, code, and tests disagree, update them together.
 Preferred test workflow:
 
 ```bash
-python3 -m venv .venv-test-gap-detection
-.venv-test-gap-detection/bin/python -m pip install -r telegram_connector/requirements.txt
+bash common/setup_python.sh tests
 .venv-test-gap-detection/bin/python -m pytest telegram_connector/tests -q
 ```
 

@@ -3,6 +3,7 @@
 import ast
 import json
 import io
+import hashlib
 import os
 from pathlib import Path
 import plistlib
@@ -44,7 +45,23 @@ def installation(tmp_path):
     shutil.copy2(ROOT / "telegram_connector/scripts/report_analysis.py", project / "scripts/report_analysis.py")
     shutil.copy2(ROOT / "telegram_connector/scripts/report_digest.py", project / "scripts/report_digest.py")
     shutil.copy2(ROOT / "telegram_connector/requirements.txt", project / "requirements.txt")
-    shutil.copytree(ROOT / "telegram_connector/third_party", project / "third_party")
+    selected_lock = Path(os.environ.get('PYTHON_RUNTIME_TEST_LOCK') or
+                         ROOT / 'telegram_connector/requirements.lock')
+    shutil.copy2(selected_lock, project / 'requirements.lock')
+    from common import python_runtime
+    tested = {**python_runtime.probe_python(sys.executable),
+              'packages': python_runtime.installed_packages(sys.executable),
+              'dependency_inputs': {'constraints:requirements.txt': hashlib.sha256(
+                  (project / 'requirements.txt').read_bytes()).hexdigest()},
+              'lock_sha256': hashlib.sha256((project / 'requirements.lock').read_bytes()).hexdigest()}
+    tested['verification'] = {'status': 'succeeded', 'lock_sha256': tested['lock_sha256'],
+                              'commands': [['fixture', 'successful-regression']]}
+    reference = project.parent / '.venv-test-gap-detection/.python-runtime.json'
+    reference.parent.mkdir()
+    reference.write_text(json.dumps(tested))
+    assets = Path(os.environ.get('PIP_FIND_LINKS') or
+                  ROOT / 'telegram_connector/third_party').expanduser()
+    shutil.copytree(assets, project / 'third_party')
     for name in ("runtime.example.toml", "digest_prompts.toml", "analysis_prompts.toml"):
         shutil.copy2(ROOT / "telegram_connector/config" / name, project / "config" / name)
     shutil.copy2(project / "config/runtime.example.toml", project / "config/runtime.local.toml")
@@ -83,10 +100,10 @@ def test_s37_runtime_bundle_staging_parity_imports_and_reinstall(installation):
                               env=env, text=True, capture_output=True, timeout=10)
     assert reporter.returncode == 0, reporter.stderr
     assert "--job-id" in reporter.stdout
-    binding = json.loads((project / "data/runtime/python.json").read_text())
+    binding = json.loads((service / ".python-runtime.json").read_text())
     assert binding["policy_digest"]
     assert binding["architecture"] == "arm64"
-    assert binding["dependency_inputs"]["requirements.txt"]
+    assert binding["dependency_inputs"]["requirements.lock"]
     for name in MODULES:
         assert (service / name).read_bytes() == (project / name).read_bytes()
     for name in ("digest_prompts.toml", "analysis_prompts.toml", "runtime.local.toml"):
@@ -353,3 +370,350 @@ print('{"status":"sent"}')
     assert 'caffeinate' in audit
     assert not marker.exists()
     assert (project / 'data/telegram_history.sqlite3').read_text() == 'source database fixture'
+
+
+def test_unverified_lock_cannot_replace_runtime_or_binding(installation):
+    project, staging, _, marker = installation
+    reference = project.parent / '.venv-test-gap-detection/.python-runtime.json'
+    saved = json.loads(reference.read_text())
+    saved.pop('verification')
+    reference.write_text(json.dumps(saved))
+    binding = project / 'data/runtime/python.json'
+    binding.parent.mkdir()
+    binding.write_text('{"previous":true}')
+    outcome = install(installation)
+    assert outcome.returncode != 0
+    assert binding.read_text() == '{"previous":true}'
+    assert not (staging / 'telegram_connector_service').exists()
+    assert not marker.exists()
+
+
+def test_scheduled_runtime_drift_fails_new_audit_preserving_previous(installation):
+    project, staging, env, marker = installation
+    outcome = install(installation)
+    assert outcome.returncode == 0, outcome.stderr
+    service = staging / 'telegram_connector_service'
+    binding = service / '.python-runtime.json'
+    saved = json.loads(binding.read_text())
+    saved['packages']['telethon'] = '999.0'
+    binding.write_text(json.dumps(saved))
+    audit = project / 'data/launchd/digest.last_attempt.json'
+    previous = {'run_id': 'previous', 'status': 'sent', 'elapsed_seconds': 1800,
+                'ttl_elapsed_seconds': 1650, 'sleep_seconds': 150}
+    audit.write_text(json.dumps(previous))
+    called = project / 'worker-called'
+    (service / 'telegram_digest.py').write_text(
+        'from pathlib import Path\nPath(' + repr(str(called)) + ').touch()\n')
+    result = subprocess.run(['bash', str(service / 'scripts/run_telegram_digest.sh')],
+        env={**env, 'TELEGRAM_CONNECTOR_PROJECT_ROOT': str(project)},
+        text=True, capture_output=True, timeout=10)
+    assert result.returncode != 0
+    payload = json.loads(audit.read_text())
+    assert payload['run_id'] != previous['run_id']
+    assert payload['previous_supervisor'] == previous
+    assert payload['status'] == 'failed'
+    assert payload['reason'] == 'runtime_drift'
+    assert payload['finished_at']
+    assert not called.exists()
+    assert not marker.exists()
+
+
+def test_installer_creates_service_venv_from_verified_lock_offline(installation):
+    project, staging, env, marker = installation
+    env.pop('PYTHON_BIN', None)
+    env.pop('BASE_PYTHON_BIN', None)
+    outcome = install(installation)
+    assert outcome.returncode == 0, outcome.stderr
+    service = staging / 'telegram_connector_service'
+    binding = json.loads((service / '.python-runtime.json').read_text())
+    assert Path(binding['executable']).resolve() == (service / '.venv/bin/python').resolve()
+    assert binding['lock_sha256'] == hashlib.sha256((service / 'requirements.lock').read_bytes()).hexdigest()
+    assert binding['verification']['status'] == 'succeeded'
+    assert not (service / '.python-runtime.json').is_symlink()
+    result = subprocess.run([binding['executable'], '-I', str(service / 'common/python_environment.py'),
+        '--check', '--requirements', str(service / 'requirements.lock'),
+        '--record', str(service / '.python-runtime.json')],
+        capture_output=True, text=True, timeout=15)
+    assert result.returncode == 0, result.stderr
+    assert not marker.exists()
+    assert (project / 'data/telegram_history.sqlite3').read_text() == 'source database fixture'
+
+
+@pytest.mark.parametrize('explicit_python', [True, False])
+def test_installer_uses_external_wheels_without_project_cache(
+        installation, tmp_path, explicit_python):
+    project, staging, env, marker = installation
+    wheels = tmp_path / 'external audited wheels'
+    (project / 'third_party').rename(wheels)
+    env['PIP_FIND_LINKS'] = str(wheels)
+    if not explicit_python:
+        env.pop('PYTHON_BIN', None)
+        env.pop('BASE_PYTHON_BIN', None)
+    outcome = install(installation)
+    assert outcome.returncode == 0, outcome.stderr
+    assert (staging / 'telegram_connector_service/.python-runtime.json').exists()
+    assert not (project / 'third_party').exists()
+    assert not marker.exists()
+
+
+@pytest.mark.parametrize('explicit_python', [True, False])
+@pytest.mark.parametrize('failure', ['schedule', 'bundle', 'publication'])
+def test_failed_redeploy_preserves_installed_lock_and_runtime_binding(
+        installation, explicit_python, failure):
+    project, staging, env, marker = installation
+    if not explicit_python:
+        env.pop('PYTHON_BIN', None)
+        env.pop('BASE_PYTHON_BIN', None)
+    outcome = install(installation)
+    assert outcome.returncode == 0, outcome.stderr
+    service = staging / 'telegram_connector_service'
+    binding = service / '.python-runtime.json'
+    old_binding = binding.read_bytes()
+    old_lock = (service / 'requirements.lock').read_bytes()
+    lock = project / 'requirements.lock'
+    lock.write_bytes(old_lock + b'\n# reviewed candidate\n')
+    reference = project.parent / '.venv-test-gap-detection/.python-runtime.json'
+    tested = json.loads(reference.read_text())
+    tested['lock_sha256'] = hashlib.sha256(lock.read_bytes()).hexdigest()
+    tested['verification']['lock_sha256'] = tested['lock_sha256']
+    reference.write_text(json.dumps(tested))
+    if explicit_python and failure != 'schedule':
+        from common import python_environment, python_runtime
+        prepared = python_environment.prepare_venv(
+            python_runtime.probe_python(sys.executable), project.parent / 'candidate environment',
+            requirements=lock, constraints=project / 'requirements.txt',
+            wheels=project / 'third_party', require_hashes=True)
+        env['PYTHON_BIN'] = prepared['executable']
+    if failure == 'schedule':
+        config = project / 'config/runtime.local.toml'
+        config.write_text(config.read_text().replace('time = "08:00"', 'time = "invalid"'))
+    elif failure == 'bundle':
+        (project / 'config/analysis_prompts.toml').unlink()
+    else:
+        io_module = project.parent / 'common/json_io.py'
+        io_module.write_text(io_module.read_text() + '\n'
+            '_original_write = write_text_atomic\n'
+            'def write_text_atomic(path, text):\n'
+            '    result = _original_write(path, text)\n'
+            f'    if str(path) == {str(binding)!r} and {tested["lock_sha256"]!r} in text:\n'
+            '        raise OSError("fixture publication failure")\n'
+            '    return result\n')
+    outcome = install(installation)
+    assert outcome.returncode != 0
+    assert binding.read_bytes() == old_binding
+    assert (service / 'requirements.lock').read_bytes() == old_lock
+    check = subprocess.run([sys.executable if explicit_python else
+        str(service / '.venv/bin/python'), '-I', str(service / 'common/python_environment.py'),
+        '--check', '--requirements', str(service / 'requirements.lock'),
+        '--record', str(binding)], capture_output=True, text=True, timeout=15)
+    assert check.returncode == 0, check.stderr
+    assert not marker.exists()
+
+
+def test_installation_uses_selected_candidate_lock(tmp_path, monkeypatch, request):
+    source = Path(os.environ.get('PYTHON_RUNTIME_TEST_LOCK') or
+                  ROOT / 'telegram_connector/requirements.lock')
+    candidate = tmp_path / 'selected candidate.lock'
+    candidate.write_bytes(source.read_bytes() + b'\n# selected candidate fixture\n')
+    monkeypatch.setenv('PYTHON_RUNTIME_TEST_LOCK', str(candidate))
+    project, _, _, _ = request.getfixturevalue('installation')
+    assert (project / 'requirements.lock').read_bytes() == candidate.read_bytes()
+
+
+def test_non_directory_venv_is_preserved_on_rejected_install(installation):
+    _, staging, env, marker = installation
+    env.pop('PYTHON_BIN', None)
+    env.pop('BASE_PYTHON_BIN', None)
+    service = staging / 'telegram_connector_service'
+    service.mkdir(parents=True)
+    path = service / '.venv'
+    path.write_text('not an owned environment')
+    outcome = install(installation)
+    assert outcome.returncode != 0
+    assert path.read_text() == 'not an owned environment'
+    assert not marker.exists()
+
+
+@pytest.mark.parametrize('managed_venv', [False, True])
+def test_failed_legacy_upgrade_restores_startup_bundle(installation, tmp_path, managed_venv):
+    project, staging, env, marker = installation
+    baseline = '22dbfcd'  # Last recorded installer before lock-based startup.
+    available = subprocess.run(['git', 'cat-file', '-e', baseline + ':telegram_connector'],
+                               cwd=ROOT, capture_output=True)
+    if available.returncode:
+        pytest.skip('Legacy installer fixture needs its recorded git object')
+    current = tmp_path / 'current source'
+    for path in (project, project.parent / 'common', project.parent / 'telegram_shared'):
+        shutil.copytree(path, current / path.name)
+        shutil.rmtree(path)
+    archive = subprocess.run(['git', 'archive', baseline, 'telegram_connector', 'common',
+                              'telegram_shared'], cwd=ROOT, capture_output=True, check=True).stdout
+    with tarfile.open(fileobj=io.BytesIO(archive)) as snapshot:
+        snapshot.extractall(project.parent, filter='data')
+    shutil.copy2(current / project.name / 'config/runtime.local.toml',
+                 project / 'config/runtime.local.toml')
+    shutil.copytree(current / project.name / 'data', project / 'data', dirs_exist_ok=True)
+    outcome = install(installation)
+    assert outcome.returncode == 0, outcome.stderr
+    service = staging / 'telegram_connector_service'
+    binding = project / 'data/runtime/python.json'
+    old_binding = binding.read_bytes()
+    assert 'lock_sha256' not in json.loads(old_binding)
+    assert not (service / 'requirements.lock').exists()
+    started = tmp_path / 'legacy-started'
+    (service / 'telegram_bridge.py').write_text(
+        'from pathlib import Path\nPath(' + repr(str(started)) + ').touch()\n')
+
+    def startup_contents():
+        result = {}
+        for path in service.rglob('*'):
+            relative = path.relative_to(service)
+            if relative.parts[0] == 'data':
+                continue
+            result[str(relative)] = (('link', os.readlink(path)) if path.is_symlink()
+                else ('dir',) if path.is_dir() else ('file', path.read_bytes()))
+        return result
+
+    old_startup = startup_contents()
+    for name in (project.name, 'common', 'telegram_shared'):
+        target = project.parent / name
+        if name != project.name:
+            shutil.rmtree(target)
+        shutil.copytree(current / name, target, dirs_exist_ok=True,
+                        ignore=shutil.ignore_patterns('data') if name == project.name else None)
+    retained = service / 'data/retained.txt'
+    retained.write_text('before attempt')
+    io_module = project.parent / 'common/json_io.py'
+    io_module.write_text(io_module.read_text() + '\n'
+        '_original_write = write_text_atomic\n'
+        'def write_text_atomic(path, text):\n'
+        '    result = _original_write(path, text)\n'
+        f'    if str(path) == {str(service / ".python-runtime.json")!r} and "lock_sha256" in text:\n'
+        f'        Path({str(retained)!r}).write_text("retained during attempt")\n'
+        '        raise OSError("fixture legacy publication failure")\n'
+        '    return result\n')
+    if managed_venv:
+        env.pop('PYTHON_BIN', None)
+        env.pop('BASE_PYTHON_BIN', None)
+    outcome = install(installation)
+    assert outcome.returncode != 0
+    assert binding.read_bytes() == old_binding
+    restored = startup_contents()
+    assert restored.keys() == old_startup.keys()
+    assert [name for name in old_startup if restored[name] != old_startup[name]] == []
+    assert retained.read_text() == 'retained during attempt'
+    result = subprocess.run(['bash', str(service / 'scripts/run_telegram_bridge.sh')],
+        env={'PATH': os.defpath, 'HOME': str(tmp_path), 'PYTHONDONTWRITEBYTECODE': '1',
+             'TELEGRAM_CONNECTOR_PROJECT_ROOT': str(project)},
+        capture_output=True, text=True, timeout=10)
+    assert result.returncode == 0, result.stderr
+    assert started.exists()
+    assert not marker.exists()
+
+
+@pytest.mark.parametrize('second_fails', [False, True])
+def test_staging_roots_keep_independent_runtime_bindings(installation, tmp_path, second_fails):
+    project, staging, env, marker = installation
+    env.pop('PYTHON_BIN', None)
+    env.pop('BASE_PYTHON_BIN', None)
+    outcome = install(installation)
+    assert outcome.returncode == 0, outcome.stderr
+    first = staging / 'telegram_connector_service'
+    record = first / '.python-runtime.json'
+    first_binding = record.read_bytes()
+    first_lock = (first / 'requirements.lock').read_bytes()
+    shared = project / 'data/runtime/python.json'
+    shared_before = shared.read_bytes() if shared.exists() else None
+    lock = project / 'requirements.lock'
+    lock.write_bytes(first_lock + b'\n# second installation\n')
+    reference = project.parent / '.venv-test-gap-detection/.python-runtime.json'
+    tested = json.loads(reference.read_text())
+    tested['lock_sha256'] = hashlib.sha256(lock.read_bytes()).hexdigest()
+    tested['verification']['lock_sha256'] = tested['lock_sha256']
+    reference.write_text(json.dumps(tested))
+    second_stage = tmp_path / 'second staging'
+    second = second_stage / 'telegram_connector_service'
+    if second_fails:
+        io_module = project.parent / 'common/json_io.py'
+        io_module.write_text(io_module.read_text() + '\n'
+            '_original_write = write_text_atomic\n'
+            'def write_text_atomic(path, text):\n'
+            '    result = _original_write(path, text)\n'
+            f'    if str(path) == {str(second / ".python-runtime.json")!r}:\n'
+            '        raise OSError("fixture second installation failure")\n'
+            '    return result\n')
+    outcome = install((project, second_stage, env, marker))
+    assert (outcome.returncode != 0) == second_fails, outcome.stderr
+    assert record.read_bytes() == first_binding
+    assert (first / 'requirements.lock').read_bytes() == first_lock
+    assert (shared.read_bytes() if shared.exists() else None) == shared_before
+    assert not record.is_symlink()
+    if not second_fails:
+        second_record = second / '.python-runtime.json'
+        assert not second_record.is_symlink()
+        saved = json.loads(second_record.read_text())
+        checked = subprocess.run([saved['executable'], '-I',
+            str(second / 'common/python_environment.py'), '--check',
+            '--requirements', str(second / 'requirements.lock'), '--record', str(second_record)],
+            capture_output=True, text=True, timeout=15)
+        assert checked.returncode == 0, checked.stderr
+    runner_env = {**env, 'TELEGRAM_CONNECTOR_PROJECT_ROOT': str(project)}
+    for name, module in [('bridge', 'telegram_bridge.py'), ('digest', 'telegram_digest.py')]:
+        called = tmp_path / (name + '-started')
+        (first / module).write_text('from pathlib import Path\nPath(' + repr(str(called)) + ').touch()\n')
+        checked = subprocess.run(['/bin/bash', str(first / 'scripts' / ('run_telegram_' + name + '.sh'))],
+            env=runner_env, capture_output=True, text=True, timeout=15)
+        assert checked.returncode == 0, checked.stderr
+        assert called.exists()
+    assert not marker.exists()
+
+
+@pytest.mark.parametrize('publication_fails', [False, True])
+def test_existing_binding_symlink_preserves_shared_record(installation, publication_fails):
+    project, staging, env, marker = installation
+    env.pop('PYTHON_BIN', None)
+    env.pop('BASE_PYTHON_BIN', None)
+    outcome = install(installation)
+    assert outcome.returncode == 0, outcome.stderr
+    service = staging / 'telegram_connector_service'
+    record = service / '.python-runtime.json'
+    old_binding = record.read_bytes()
+    shared = project / 'data/runtime/python.json'
+    shared.parent.mkdir(parents=True, exist_ok=True)
+    shared.write_bytes(old_binding)
+    record.unlink()
+    record.symlink_to(shared)
+    old_lock = (service / 'requirements.lock').read_bytes()
+    lock = project / 'requirements.lock'
+    lock.write_bytes(old_lock + b'\n# migrate former shared binding\n')
+    reference = project.parent / '.venv-test-gap-detection/.python-runtime.json'
+    tested = json.loads(reference.read_text())
+    tested['lock_sha256'] = hashlib.sha256(lock.read_bytes()).hexdigest()
+    tested['verification']['lock_sha256'] = tested['lock_sha256']
+    reference.write_text(json.dumps(tested))
+    if publication_fails:
+        io_module = project.parent / 'common/json_io.py'
+        io_module.write_text(io_module.read_text() + '\n'
+            '_original_write = write_text_atomic\n'
+            'def write_text_atomic(path, text):\n'
+            '    result = _original_write(path, text)\n'
+            f'    if str(path) == {str(record)!r}:\n'
+            '        raise OSError("fixture symlink publication failure")\n'
+            '    return result\n')
+    outcome = install(installation)
+    assert (outcome.returncode != 0) == publication_fails, outcome.stderr
+    assert shared.read_bytes() == old_binding
+    assert record.is_symlink() is publication_fails
+    if publication_fails:
+        assert record.read_bytes() == old_binding
+        assert os.readlink(record) == str(shared)
+        assert (service / 'requirements.lock').read_bytes() == old_lock
+    else:
+        assert json.loads(record.read_text())['lock_sha256'] == tested['lock_sha256']
+    saved = json.loads(record.read_text())
+    checked = subprocess.run([saved['executable'], '-I',
+        str(service / 'common/python_environment.py'), '--check',
+        '--requirements', str(service / 'requirements.lock'), '--record', str(record)],
+        capture_output=True, text=True, timeout=15)
+    assert checked.returncode == 0, checked.stderr
+    assert not marker.exists()

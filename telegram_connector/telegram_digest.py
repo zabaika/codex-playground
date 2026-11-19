@@ -17,6 +17,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from common.http import pooled_http_session
+from common import python_environment
 from common.json_io import write_json_atomic
 import telegram_bridge as bridge
 import telegram_history_client as history_client
@@ -461,6 +462,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         audit_payload['previous_supervisor'] = previous_receipt
     write_digest_last_attempt(audit_payload)
     try:
+        python_environment.verify_application_environment(APP_DIR)
         http_sessions.enter_context(pooled_http_session())
         import asyncio
 

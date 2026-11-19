@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 import argparse
+import importlib.metadata
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 import shutil
 import subprocess
@@ -71,11 +73,12 @@ def load_policy(path: Path = POLICY_PATH) -> dict:
     return section
 
 
-def _run(command: list[str]) -> subprocess.CompletedProcess:
+def _run(command: list[str], *, pass_env: tuple[str, ...] = ()) -> subprocess.CompletedProcess:
     # CLI callers additionally have one outer TTL for the complete operation.
     config = process.load_process_config()
     env = {key: os.environ[key] for key in
-           ("PATH", "HOME", "TMPDIR", "LANG", "LC_ALL") if key in os.environ}
+           ("PATH", "HOME", "TMPDIR", "LANG", "LC_ALL", *pass_env)
+           if key in os.environ}
     env.update(PYTHONDONTWRITEBYTECODE="1", PIP_CONFIG_FILE=os.devnull,
                PIP_DISABLE_PIP_VERSION_CHECK="1")
     try:
@@ -100,6 +103,25 @@ def probe_python(executable: str) -> dict:
         return json.loads(result.stdout)
     except (ValueError, TypeError) as exc:
         raise RuntimeSelectionError("Invalid Python probe result") from exc
+
+
+def installed_packages(executable: str) -> dict:
+    """Observe distribution versions without importing application packages."""
+    if executable == sys.executable:
+        return {re.sub(r'[-_.]+', '-', entry.metadata['Name']).lower(): entry.version
+                for entry in importlib.metadata.distributions()}
+    result = _run([executable, "-I", "-c",
+        "import importlib.metadata,json,re; "
+        "print(json.dumps({re.sub(r'[-_.]+','-',d.metadata['Name']).lower():d.version "
+        "for d in importlib.metadata.distributions()}))"])
+    try:
+        packages = json.loads(result.stdout)
+        if result.returncode or not isinstance(packages, dict) or not all(
+                isinstance(k, str) and isinstance(v, str) for k, v in packages.items()):
+            raise ValueError
+        return packages
+    except ValueError as exc:
+        raise RuntimeSelectionError("Cannot inspect installed package versions") from exc
 
 
 def validate_descriptor(binding: dict, policy: dict) -> None:
@@ -225,7 +247,7 @@ def validate_requirements(
     binding: dict, requirements: Path, scratch: Path, *,
     wheels: Path | None = None, require_hashes: bool = False,
     constraints: Path | None = None, use_installed: bool = False,
-) -> None:
+) -> dict:
     """Resolve the real dependency plan before touching a working runtime."""
     scratch.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(dir=scratch) as directory:
@@ -247,13 +269,21 @@ def validate_requirements(
         result = _run(command)
         if result.returncode or result.stderr.strip():
             raise RuntimeSelectionError(
-                "Python requirements preflight failed; working runtime "
-                "has not been replaced",
+                ("Hash-locked requirements preflight failed; supply matching reviewed wheels "
+                 "with --find-links/PIP_FIND_LINKS; working runtime has not been replaced")
+                if require_hashes else
+                "Python requirements preflight failed; working runtime has not been replaced",
             )
+        planned = json.loads((Path(directory) / 'report.json').read_text()).get('install', [])
+        if use_installed and planned:
+            raise RuntimeSelectionError("Installed packages do not satisfy requirements")
+        packages = {re.sub(r'[-_.]+', '-', item['metadata']['name']).lower():
+                    item['metadata']['version'] for item in planned}
     inputs = binding.setdefault("dependency_inputs", {})
     inputs[requirements.name] = hashlib.sha256(
         requirements.read_bytes(),
     ).hexdigest()
+    return packages
 
 
 def check_installed_python(binding: dict, scratch: Path) -> None:

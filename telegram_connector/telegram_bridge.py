@@ -1436,6 +1436,7 @@ def handle_history_command(token: str, config: dict[str, Any], update: dict[str,
             audit_file = PROJECT_ROOT / "data/launchd/digest.last_attempt.json"
             run_id = digest_telemetry.build_digest_run_id()
             digest_telemetry.prepare_supervised_audit(audit_file, run_id)
+            digest_telemetry.verify_supervised_runtime(audit_file)
             process_argv = digest_settings.build_digest_supervisor_command(
                 argv, config, audit_file, run_id=run_id)
         except (ValueError, OSError) as exc:
@@ -1863,6 +1864,8 @@ def create_bridge_supervisor(config, secret_env, access):
 
 
 def cmd_listen(args: argparse.Namespace) -> int:
+    from common.python_environment import verify_application_environment
+    verify_application_environment(APP_DIR)
     config = load_runtime_config()
     secret_env = resolve_bridge_secrets(config)
     token = require_bot_token_from_secrets(secret_env)

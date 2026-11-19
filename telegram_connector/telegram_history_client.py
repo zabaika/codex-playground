@@ -824,6 +824,8 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
+    from common.python_environment import verify_application_environment
+    verify_application_environment(Path(__file__).resolve().parent)
     if hasattr(args, "func"):
         return args.func(args)
 

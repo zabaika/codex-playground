@@ -1020,6 +1020,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--db", required=True, type=Path)
     parser.add_argument("--worker-inner", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
+    from common.python_environment import verify_application_environment
+    verify_application_environment(Path(__file__).resolve().parent)
     from common import sqlite as common_sqlite
     try:
         conn = common_sqlite.connect_sqlite(args.db)

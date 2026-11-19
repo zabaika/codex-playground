@@ -19,6 +19,10 @@ def test_below_policy_floor_is_rejected_before_runtime_is_changed(tmp_path, proj
     (project / "scripts").mkdir(parents=True)
     (project / "config").mkdir()
     (project / "config/runtime.local.toml").write_text('[digest]\ntime="08:00"\n')
+    if project_name == 'telegram_connector':
+        selected_lock = Path(os.environ.get('PYTHON_RUNTIME_TEST_LOCK') or
+                             REPO_ROOT / project_name / 'requirements.lock')
+        shutil.copy2(selected_lock, project / 'requirements.lock')
     shutil.copytree(REPO_ROOT / "common", tmp_path / "common")
     installer = project / "scripts/install_launch_agent.sh"
     shutil.copy2(REPO_ROOT / project_name / "scripts/install_launch_agent.sh", installer)

@@ -114,8 +114,8 @@ modules. Compatible environments are reused; changed base, ABI or architecture
 requires reconstruction. A failed preparation restores the previous directory.
 Automatic selection checks every destination's reuse or fresh dependency plan
 before accepting a candidate. If its wheels are incompatible, discovery continues
-to the next candidate; invalid explicit or local choices still fail. Healthy
-existing environments can be reused without requiring fresh wheels. Preparation
+to the next candidate; invalid explicit or local choices still fail. With unlocked
+requirements, healthy environments can be reused without fresh wheels. Preparation
 rechecks the selected candidate before replacement; it does not switch Python
 after starting to change an environment.
 `--venv` can be repeated to prepare multiple consumers from one selected base.
@@ -125,6 +125,26 @@ reviewed wheels. Preparation never builds dependencies from source.
 Prepare shared environments from the repository root with
 `bash common/setup_python.sh tests` or `bash common/setup_python.sh validation`.
 Their dependencies remain owned by the existing project requirements files.
+
+Connector tests and deployment share `telegram_connector/requirements.lock`.
+Its reviewed wheels are an explicitly required external installation input under
+the approved Connector exception to tracked binary assets. Preserve them in the
+existing audited-artifacts store, grouped by the lock's SHA256, and transfer them
+with the lock when preparing another machine; a checkout alone is insufficient.
+Set `PIP_FIND_LINKS` to that wheel directory for both tests and deployment. When
+unset, the ignored `telegram_connector/third_party/` directory is the fallback.
+PyAES requires the reviewed wheel, not an automatic source build or download.
+Missing or mismatched wheels stop preparation before replacing the working venv.
+Validate the approved set with
+`bash common/setup_python.sh tests --verify`. To test an update first, use
+`bash common/setup_python.sh tests --requirements scratch/candidate.lock --verify`;
+set `PIP_FIND_LINKS` to the candidate wheel directory when needed. After reviewing
+the results and obtaining approval, promote the same lock bytes, preserve its wheels
+in the audited-artifacts store and commit only the lock before deployment. The
+installer requires matching successful test evidence in the existing `.python-runtime.json`.
+Runtime drift refuses a new launch; it never installs or rolls back packages.
+Locked venv reuse requires a matching recorded lock identity; missing or changed
+identity rebuilds it. An explicit `PYTHON_BIN` must already be prepared for that lock.
 
 ## Python Runtime Upgrades
 

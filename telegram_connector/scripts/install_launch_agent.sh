@@ -34,17 +34,138 @@ BRIDGE_LAUNCHER="$SERVICE_ROOT/scripts/telegram-connector-bridge-launcher"
 DIGEST_LAUNCHER="$SERVICE_ROOT/scripts/telegram-connector-digest-launcher"
 LAUNCHCTL_DOMAIN="gui/$(id -u)"
 
+source "$SOURCE_ROOT/../common/python_runtime.sh"
+BOOTSTRAP_PYTHON="$(python_runtime_bootstrap)"
+read -r DIGEST_HOUR DIGEST_MINUTE < <(
+  "$BOOTSTRAP_PYTHON" - "$SOURCE_ROOT/config/runtime.local.toml" <<'PY'
+import sys
+import tomllib
+from pathlib import Path
+
+with Path(sys.argv[1]).open("rb") as fh:
+    config = tomllib.load(fh)
+raw_time = str(((config.get("digest") or {}).get("time") or "08:00")).strip()
+hour_text, minute_text = raw_time.split(":", 1)
+hour, minute = int(hour_text), int(minute_text)
+if not (0 <= hour <= 23 and 0 <= minute <= 59):
+    raise SystemExit("Invalid digest schedule")
+print(hour, minute)
+PY
+)
+
+mkdir -p "$SOURCE_ROOT/../scratch/python-runtime"
+RUNTIME_STAGE="$(mktemp -d "$SOURCE_ROOT/../scratch/python-runtime/connector-install.XXXXXX")"
+MANAGED_VENV=0
+RUNTIME_PUBLISHED=0
+STARTUP_CHANGED=0
+startup_snapshot() {
+  "$BOOTSTRAP_PYTHON" - "$1" "$RUNTIME_STAGE" "$SERVICE_ROOT" \
+    "$BRIDGE_PLIST_PATH" "$DIGEST_PLIST_PATH" <<'PY'
+import os
+import shutil
+import sys
+from pathlib import Path
+
+mode, stage, service, *files = sys.argv[1:]
+stage, service = Path(stage), Path(service)
+saved = stage / 'previous-startup'
+external = stage / 'previous-startup-files'
+
+def copy_entry(source, target):
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if source.is_symlink():
+        target.symlink_to(os.readlink(source))
+    elif source.is_dir():
+        shutil.copytree(source, target, symlinks=True)
+    else:
+        shutil.copy2(source, target)
+
+def remove_entry(path):
+    if path.is_symlink() or path.is_file():
+        path.unlink()
+    elif path.exists():
+        shutil.rmtree(path)
+
+if mode == 'save':
+    saved.mkdir()
+    external.mkdir()
+    if service.exists():
+        for path in service.iterdir():
+            if path.name not in ('data', '.venv'):
+                copy_entry(path, saved / path.name)
+    for index, name in enumerate(files):
+        path = Path(name)
+        if path.exists() or path.is_symlink():
+            copy_entry(path, external / str(index))
+elif mode == 'restore':
+    if service.exists():
+        for path in service.iterdir():
+            if path.name not in ('data', '.venv'):
+                remove_entry(path)
+    for path in saved.iterdir():
+        copy_entry(path, service / path.name)
+    for index, name in enumerate(files):
+        path, previous = Path(name), external / str(index)
+        remove_entry(path)
+        if previous.exists() or previous.is_symlink():
+            copy_entry(previous, path)
+else:
+    raise SystemExit('Invalid startup snapshot phase')
+PY
+}
+finish_runtime_preparation() {
+  local status=$?
+  if [[ "$status" != 0 && "$STARTUP_CHANGED" == 1 && "$RUNTIME_PUBLISHED" == 0 ]]; then
+    startup_snapshot restore
+  fi
+  if [[ "$status" != 0 && "$MANAGED_VENV" == 1 && "$RUNTIME_PUBLISHED" == 0 ]]; then
+    rm -rf "$SERVICE_ROOT/.venv"
+    if [[ -d "$RUNTIME_STAGE/previous-venv" ]]; then
+      mv "$RUNTIME_STAGE/previous-venv" "$SERVICE_ROOT/.venv"
+    fi
+  fi
+  rm -rf "$RUNTIME_STAGE"
+  return "$status"
+}
+trap finish_runtime_preparation EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+cp "$SOURCE_ROOT/requirements.lock" "$RUNTIME_STAGE/requirements.lock"
+if [[ -z "$PYTHON_BIN" ]]; then
+  if [[ -L "$SERVICE_ROOT/.venv" || ( -e "$SERVICE_ROOT/.venv" && ! -d "$SERVICE_ROOT/.venv" ) ]]; then
+    echo "Venv target is not an owned directory" >&2
+    exit 1
+  fi
+  if [[ -d "$SERVICE_ROOT/.venv" ]]; then
+    cp -R "$SERVICE_ROOT/.venv" "$RUNTIME_STAGE/previous-venv"
+  fi
+  MANAGED_VENV=1
+fi
+
 resolve_python_bin() {
+  local tested="$SOURCE_ROOT/../.venv-test-gap-detection/.python-runtime.json"
   if [[ -n "${PYTHON_BIN:-}" ]]; then
-    python_runtime_select --config "$SOURCE_ROOT/config/runtime.local.toml" \
-      --requirements "$SOURCE_ROOT/requirements.txt" \
+    local selected
+    selected="$(python_runtime_select --config "$SOURCE_ROOT/config/runtime.local.toml" \
+      --requirements "$RUNTIME_STAGE/requirements.lock" \
       --scratch "$SOURCE_ROOT/../scratch/python-runtime" \
-      --record "$SOURCE_ROOT/data/runtime/python.json" --path-only
+      --path-only)" || return
+    "$selected" -I "$SOURCE_ROOT/../common/python_environment.py" --check \
+      --requirements "$RUNTIME_STAGE/requirements.lock" --require-hashes \
+      --constraints "$SOURCE_ROOT/requirements.txt" \
+      --find-links "${PIP_FIND_LINKS:-$SOURCE_ROOT/third_party}" \
+      --scratch "$SOURCE_ROOT/../scratch/python-runtime" \
+      --reference-record "$tested" --record "$RUNTIME_STAGE/python.json" || return
+    printf '%s\n' "$selected"
     return
   fi
   local options=(--config "$SOURCE_ROOT/config/runtime.local.toml"
-    --venv "$SERVICE_ROOT/.venv" --requirements "$SOURCE_ROOT/requirements.txt"
+    --venv "$SERVICE_ROOT/.venv" --requirements "$RUNTIME_STAGE/requirements.lock"
+    --require-hashes --reference-record "$tested"
+    --constraints "$SOURCE_ROOT/requirements.txt"
+    --find-links "${PIP_FIND_LINKS:-$SOURCE_ROOT/third_party}"
     --scratch "$SOURCE_ROOT/../scratch/python-runtime"
+    --record "$RUNTIME_STAGE/python.json"
     --import telethon --import urllib3 --path-only)
   if [[ -n "${BASE_PYTHON_BIN:-}" ]]; then
     options+=(--python "$BASE_PYTHON_BIN")
@@ -52,7 +173,6 @@ resolve_python_bin() {
   python_runtime_prepare "${options[@]}"
 }
 
-source "$SOURCE_ROOT/../common/python_runtime.sh"
 PYTHON_BIN="$(resolve_python_bin)"
 
 if ! "$PYTHON_BIN" -c 'import telethon, urllib3' >/dev/null 2>&1; then
@@ -60,21 +180,8 @@ if ! "$PYTHON_BIN" -c 'import telethon, urllib3' >/dev/null 2>&1; then
   exit 1
 fi
 
-read -r DIGEST_HOUR DIGEST_MINUTE < <(
-  "$PYTHON_BIN" - <<PY
-import tomllib
-from pathlib import Path
-
-config_path = Path(r"$SOURCE_ROOT/config/runtime.local.toml")
-with config_path.open("rb") as fh:
-    config = tomllib.load(fh)
-
-raw_time = str(((config.get("digest") or {}).get("time") or "08:00")).strip()
-hour_text, minute_text = raw_time.split(":", 1)
-print(int(hour_text), int(minute_text))
-PY
-)
-
+startup_snapshot save
+STARTUP_CHANGED=1
 mkdir -p "$SERVICE_ROOT/config" "$SERVICE_ROOT/data" "$SERVICE_ROOT/scripts" "$LAUNCH_AGENTS_DIR" "$PROJECT_LOG_DIR"
 
 cp "$SOURCE_ROOT/telegram_bridge.py" "$SERVICE_ROOT/telegram_bridge.py"
@@ -154,6 +261,9 @@ STARTUP_LOG="\$TELEGRAM_CONNECTOR_PROJECT_ROOT/data/launchd/bridge.startup.log"
 
 cd "\$ROOT"
 printf '[%s] starting telegram bridge from %s\n' "\$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "\$ROOT" >> "\$STARTUP_LOG"
+"$PYTHON_BIN" -I "\$ROOT/common/python_environment.py" --check \
+  --requirements "\$ROOT/requirements.lock" \
+  --record "\$ROOT/.python-runtime.json"
 exec "$PYTHON_BIN" "\$ROOT/telegram_bridge.py" listen --run-commands
 EOF
 
@@ -190,7 +300,7 @@ if str(service_root) not in sys.path:
     sys.path.insert(0, str(service_root))
 
 from digest_settings import build_digest_supervisor_command, resolve_digest_process_limits
-from digest_telemetry import build_digest_run_id, prepare_supervised_audit
+from digest_telemetry import build_digest_run_id, prepare_supervised_audit, verify_supervised_runtime
 
 with (service_root / "config" / "runtime.local.toml").open("rb") as fh:
     runtime = tomllib.load(fh)
@@ -201,6 +311,9 @@ with Path(sys.argv[3]).open("a") as log:
 audit_file = Path(sys.argv[2])
 run_id = build_digest_run_id()
 prepare_supervised_audit(audit_file, run_id)
+verify_supervised_runtime(audit_file, requirements=service_root / 'requirements.lock',
+    record_path=service_root / '.python-runtime.json',
+    required=True)
 command = build_digest_supervisor_command(
     [sys.executable, str(service_root / "telegram_digest.py"), "run"],
     runtime, audit_file, run_id=run_id)
@@ -298,6 +411,21 @@ cat > "$DIGEST_PLIST_PATH" <<EOF
   </dict>
 </plist>
 EOF
+
+"$BOOTSTRAP_PYTHON" - "$SOURCE_ROOT/.." "$RUNTIME_STAGE" "$SERVICE_ROOT" <<'PY'
+import sys
+from pathlib import Path
+
+sys.path.insert(0, sys.argv[1])
+from common.json_io import write_text_atomic
+
+stage, service = map(Path, sys.argv[2:])
+updates = [(service / 'requirements.lock', stage / 'requirements.lock'),
+           (service / '.python-runtime.json', stage / 'python.json')]
+for path, pending in updates:
+    write_text_atomic(path, pending.read_bytes().decode('utf-8'))
+PY
+RUNTIME_PUBLISHED=1
 
 if [[ -z "$STAGING_ROOT" ]]; then
   launchctl bootout "$LAUNCHCTL_DOMAIN" "$BRIDGE_PLIST_PATH" >/dev/null 2>&1 || true
