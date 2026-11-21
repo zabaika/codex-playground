@@ -444,10 +444,10 @@ If the gate cannot produce more practical material without unsupported invention
 
 - Do not add a blank line before a top-level ATX heading solely for visual spacing. This applies after ordinary prose, a list, a table, a closed code fence, or another heading; keep block delimiters intact. Obsidian controls heading spacing through the theme.
 - Separate a pipe table from preceding content with one blank line. No extra blank line is required at the start of the document.
-- After a table, separate following content with one blank line, except that an ATX heading (`#` through `######`) may follow directly. A blank line before that heading remains optional; none is required at the end of the document.
+- Do not leave a blank line after a pipe table, including before an ordinary paragraph, heading, list, quote, or fenced code block. Remove trailing blank lines after a table at the end of the document. Keep one blank line between two consecutive tables so they remain separate tables. This spacing rule targets Obsidian rendering.
 - A table starts with a header and delimiter row; a pipe in ordinary prose or a fenced code example does not create a table for these checks.
 - Do not leave an empty line after headings, except directly before a table.
-- Do not leave an empty line before lists, except directly after a table.
+- Do not leave an empty line before lists.
 - Do not leave empty lines between list items.
 - Do not use double blank lines.
 - Use at most one blank line between major sections.

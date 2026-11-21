@@ -967,15 +967,24 @@ def _fenced_code_lines(lines: list[str]) -> set[int]:
     return indexes
 
 
+def _table_pipe_positions(line: str) -> list[int]:
+    links = [(m.start(), m.end()) for m in WIKILINK_RE.finditer(line)]
+    return [
+        match.end() - 1
+        for match in re.finditer(r"(\\*)\|", line)
+        # Escaped pipes and wikilink aliases do not separate table cells.
+        if len(match.group(1)) % 2 == 0
+        and not any(start <= match.end() - 1 < end for start, end in links)
+    ]
+
+
 def _table_cells(line: str) -> list[str]:
     line = line.strip()
     cells: list[str] = []
     start = 0
-    for match in re.finditer(r"(\\*)\|", line):
-        # Only an odd backslash count escapes a pipe.
-        if len(match.group(1)) % 2 == 0:
-            cells.append(line[start:match.end() - 1])
-            start = match.end()
+    for position in _table_pipe_positions(line):
+        cells.append(line[start:position])
+        start = position + 1
     cells.append(line[start:])
     if cells and not cells[0]:
         cells.pop(0)
@@ -994,7 +1003,7 @@ def _find_table_blocks(lines: list[str]) -> list[tuple[int, int]]:
             or lines[idx].startswith(("    ", "\t"))
             or lines[idx + 1].startswith(("    ", "\t"))
             or TABLE_BLOCK_BREAK_RE.match(lines[idx])
-            or "|" not in lines[idx] + lines[idx + 1]
+            or not _table_pipe_positions(lines[idx] + lines[idx + 1])
         ):
             idx += 1
             continue
@@ -1010,7 +1019,8 @@ def _find_table_blocks(lines: list[str]) -> list[tuple[int, int]]:
         while end + 1 < len(lines) and end + 1 not in code_lines:
             row = lines[end + 1]
             if (
-                "|" not in row or row.startswith(("    ", "\t"))
+                not _table_pipe_positions(row)
+                or row.startswith(("    ", "\t"))
                 or TABLE_BLOCK_BREAK_RE.match(row)
             ):
                 break
@@ -1025,6 +1035,7 @@ def _check_table_spacing(
 ) -> list[Violation]:
     violations: list[Violation] = []
     lines = body.splitlines()
+    table_starts = {start for start, _ in blocks}
     for start, end in blocks:
         if start > 0 and lines[start - 1].strip():
             violations.append(Violation(
@@ -1033,12 +1044,12 @@ def _check_table_spacing(
                 start + 1,
             ))
         if (
-            end + 1 < len(lines) and lines[end + 1].strip()
-            and not re.match(r" {0,3}#{1,6}(?:[ \t]|$)", lines[end + 1])
+            end + 1 < len(lines) and not lines[end + 1].strip()
+            and end + 2 not in table_starts
         ):
             violations.append(Violation(
-                "spacing.missing-blank-after-table",
-                "После таблицы нужна пустая строка, если далее не заголовок.",
+                "spacing.blank-line-after-table",
+                "После таблицы не должно быть пустой строки, кроме разделителя двух таблиц.",
                 end + 2,
             ))
     return violations
@@ -1064,15 +1075,12 @@ def _check_blank_lines_after_headings(
     return violations
 
 
-def _check_blank_lines_before_lists(
-    body: str, table_ends: set[int]
-) -> list[Violation]:
+def _check_blank_lines_before_lists(body: str) -> list[Violation]:
     violations: list[Violation] = []
     lines = body.splitlines()
     for idx in range(1, len(lines)):
         if (
             lines[idx].startswith("- ") and lines[idx - 1].strip() == ""
-            and idx - 2 not in table_ends
         ):
             violations.append(
                 Violation(
@@ -1715,9 +1723,7 @@ def collect_violations_from_text(
     body_violations.extend(_check_blank_lines_after_headings(
         body, {start for start, _ in table_blocks}
     ))
-    body_violations.extend(_check_blank_lines_before_lists(
-        body, {end for _, end in table_blocks}
-    ))
+    body_violations.extend(_check_blank_lines_before_lists(body))
     body_violations.extend(_check_table_spacing(body, table_blocks))
     body_violations.extend(_check_double_blank_lines(body))
     body_violations.extend(_check_forbidden_terms(body, forbidden_terms))

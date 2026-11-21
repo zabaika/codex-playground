@@ -34,7 +34,7 @@ class CheckNoteContractTests(unittest.TestCase):
             if violation.code.startswith("spacing.")
         ]
 
-    def test_missing_table_padding_is_reported_for_text_and_lists(self) -> None:
+    def test_missing_padding_before_table_is_reported(self) -> None:
         table = "| Поле | Значение |\n| --- | --- |\n| А | Б |"
         for before in ("Текст.", PRACTICE_HEADING):
             for after in ("Продолжение.", "- Пункт."):
@@ -45,13 +45,12 @@ class CheckNoteContractTests(unittest.TestCase):
                     self.assertEqual(
                         {
                             "spacing.missing-blank-before-table",
-                            "spacing.missing-blank-after-table",
                         },
                         {item.code for item in findings},
                     )
-                    self.assertEqual([2, 5], [v.line for v in findings])
+                    self.assertEqual([2], [v.line for v in findings])
 
-    def test_table_before_heading_accepts_optional_blank_line(self) -> None:
+    def test_table_before_heading_requires_no_blank_line(self) -> None:
         table = "| Поле | Значение |\n| --- | --- |\n| А | Б |\n"
         for level in range(1, 7):
             for indent in ("", "   "):
@@ -61,22 +60,25 @@ class CheckNoteContractTests(unittest.TestCase):
                             "Текст.\n\n" + table + blank
                             + indent + "#" * level + " Раздел\nСодержимое."
                         )
-                        self.assertEqual([], self._spacing_findings(body))
+                        expected = (
+                            {"spacing.blank-line-after-table"} if blank else set()
+                        )
+                        self.assertEqual(
+                            expected,
+                            {v.code for v in self._spacing_findings(body)},
+                        )
 
-    def test_heading_like_text_after_table_still_requires_padding(self) -> None:
+    def test_prose_after_table_needs_no_padding(self) -> None:
         table = "| Поле | Значение |\n| --- | --- |\n| А | Б |\n"
         for after in ("#Текст", "####### Текст", "    ## Текст"):
             with self.subTest(after=after):
                 findings = self._spacing_findings("Текст.\n\n" + table + after)
-                self.assertEqual(
-                    {"spacing.missing-blank-after-table"},
-                    {v.code for v in findings},
-                )
+                self.assertEqual([], findings)
 
-    def test_padded_table_after_heading_and_before_list_passes(self) -> None:
+    def test_table_after_heading_and_directly_before_list_passes(self) -> None:
         body = (
             PRACTICE_HEADING + "\n\n"
-            "| Поле | Значение |\n| --- | --- |\n| А | Б |\n\n"
+            "| Поле | Значение |\n| --- | --- |\n| А | Б |\n"
             "- **Действие.** Проверить результат.\n"
         )
         self.assertEqual([], self._spacing_findings(body))
@@ -109,7 +111,7 @@ class CheckNoteContractTests(unittest.TestCase):
 
     def test_tables_need_no_padding_at_document_boundaries(self) -> None:
         table = "| Поле |\n| --- |\n| Значение |"
-        for body in (table, table + "\n\nТекст.", "Текст.\n\n" + table):
+        for body in (table, table + "\nТекст.", "Текст.\n\n" + table):
             with self.subTest(body=body):
                 self.assertEqual([], self._spacing_findings(body))
 
@@ -122,7 +124,6 @@ class CheckNoteContractTests(unittest.TestCase):
         self.assertEqual(
             {
                 "spacing.missing-blank-before-table",
-                "spacing.missing-blank-after-table",
             },
             {item.code for item in self._spacing_findings(body)},
         )
@@ -142,7 +143,6 @@ class CheckNoteContractTests(unittest.TestCase):
                 self.assertEqual(
                     {
                         "spacing.missing-blank-before-table",
-                        "spacing.missing-blank-after-table",
                     },
                     {item.code for item in self._spacing_findings(body)},
                 )
@@ -176,6 +176,73 @@ class CheckNoteContractTests(unittest.TestCase):
             {"spacing.double-blank-line"},
             {item.code for item in self._spacing_findings(body)},
         )
+
+    def test_table_followed_by_content_needs_no_blank_line(self) -> None:
+        table = "| Поле | Значение |\n| --- | --- |\n| А | Б |\n"
+        for after in (
+            "Обычный абзац.", "- Пункт.", "1. Пункт.", "> Цитата.",
+            "```text\nПример.\n```", "~~~text\nПример.\n~~~",
+        ):
+            for blank in ("", "\n"):
+                with self.subTest(after=after, blank=blank):
+                    body = table + blank + after
+                    expected = (
+                        {"spacing.blank-line-after-table"} if blank else set()
+                    )
+                    if blank and after.startswith("- "):
+                        expected.add("spacing.blank-line-before-list")
+                    self.assertEqual(
+                        expected,
+                        {v.code for v in self._spacing_findings(body)},
+                    )
+
+    def test_adjacent_tables_keep_one_blank_line_between_them(self) -> None:
+        table = "| Поле | Значение |\n| --- | --- |\n| А | Б |"
+        self.assertEqual([], self._spacing_findings(table + "\n\n" + table))
+
+    def test_table_at_end_rejects_trailing_blank_line(self) -> None:
+        table = "| Поле |\n| --- |\n| Значение |\n"
+        self.assertEqual([], self._spacing_findings(table))
+        self.assertEqual(
+            {"spacing.blank-line-after-table"},
+            {v.code for v in self._spacing_findings(table + "\n")},
+        )
+
+    def test_wikilink_alias_in_paragraph_does_not_extend_table(self) -> None:
+        for row in ("| А | Б |", "А | Б"):
+            for paragraph in (
+                "Абзац с [[Постоянный контекст вне чата|памятью]].",
+                r"Абзац с [[Постоянный контекст вне чата\|памятью]].",
+            ):
+                with self.subTest(row=row, paragraph=paragraph):
+                    table = "| Поле | Значение |\n| --- | --- |\n" + row
+                    for blank in ("", "\n"):
+                        body = table + "\n" + blank + paragraph
+                        self.assertEqual(
+                            [(0, 2)],
+                            MODULE._find_table_blocks(body.splitlines()),
+                        )
+                        expected = (
+                            {"spacing.blank-line-after-table"} if blank else set()
+                        )
+                        self.assertEqual(
+                            expected,
+                            {v.code for v in self._spacing_findings(body)},
+                        )
+
+    def test_wikilink_alias_pipes_do_not_create_a_table(self) -> None:
+        body = "Абзац с [[Концепт|названием]].\n---\nПродолжение."
+        self.assertEqual([], MODULE._find_table_blocks(body.splitlines()))
+
+    def test_wikilinks_inside_table_cells_preserve_column_count(self) -> None:
+        body = (
+            "| [[Концепт|Название]] | Значение |\n| --- | --- |\n"
+            "| [[Концепт|Связь]] | Б |\nАбзац."
+        )
+        self.assertEqual(
+            [(0, 2)], MODULE._find_table_blocks(body.splitlines())
+        )
+        self.assertEqual([], self._spacing_findings(body))
 
     def test_related_section_rejects_annotations_and_prose(self) -> None:
         fixture = Path(__file__).parent / "fixtures" / "clean-general-note.md"
