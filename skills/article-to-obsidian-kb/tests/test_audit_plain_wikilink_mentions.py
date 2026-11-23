@@ -27,6 +27,26 @@ RELATED_NOTES_HEADING = heading("related_notes")
 
 
 class AuditPlainWikilinkMentionsTests(unittest.TestCase):
+    def test_escaped_table_alias_satisfies_plain_body_reference(self) -> None:
+        markdown = (
+            "Metric Alpha используется ниже.\n\n"
+            "| Метрика | Описание |\n| --- | --- |\n"
+            r"| [[Metric Alpha\|метрика]] | Описание |" + "\n"
+        )
+        self.assertEqual([], collect_findings(
+            markdown, [AuditTerm(title="Metric Alpha", aliases=("Metric Alpha",))]
+        ))
+
+    def test_escaped_alias_to_heading_preserves_note_identity(self) -> None:
+        markdown = (
+            "Metric Alpha используется ниже.\n\n"
+            "| Метрика | Описание |\n| --- | --- |\n"
+            r"| [[Metric Alpha#Раздел\|метрика]] | Описание |" + "\n"
+        )
+        self.assertEqual([], collect_findings(
+            markdown, [AuditTerm(title="Metric Alpha", aliases=("Metric Alpha",))]
+        ))
+
     def test_accepts_body_wikilink_alias(self) -> None:
         markdown = f"""---
 title: Тест

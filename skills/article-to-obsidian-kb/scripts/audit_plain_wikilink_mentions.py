@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from note_schema import heading
+from wikilinks import WIKILINK_RE, wikilink_target
 
 
 EXCLUDED_SECTION_HEADINGS = {
@@ -121,7 +122,6 @@ def _mask_stable_lines(lines: list[tuple[int, str]], *, mask_inline_code: bool, 
     masked: list[tuple[int, str]] = []
     in_fence = False
     fence_pattern = re.compile(r"^\s*(```|~~~)")
-    wikilink_pattern = re.compile(r"\[\[[^\]]+\]\]")
     inline_code_pattern = re.compile(r"`[^`\n]+`")
 
     for line_number, line in lines:
@@ -135,7 +135,7 @@ def _mask_stable_lines(lines: list[tuple[int, str]], *, mask_inline_code: bool, 
 
         spans: list[tuple[int, int]] = []
         if mask_wikilinks:
-            spans.extend(_line_spans(wikilink_pattern, line))
+            spans.extend(_line_spans(WIKILINK_RE, line))
         if mask_inline_code:
             spans.extend(_line_spans(inline_code_pattern, line))
         masked.append((line_number, _mask_spans(line, spans)))
@@ -145,11 +145,10 @@ def _mask_stable_lines(lines: list[tuple[int, str]], *, mask_inline_code: bool, 
 def _wikilink_targets(lines: list[tuple[int, str]]) -> dict[str, list[int]]:
     targets: dict[str, list[int]] = {}
     masked_lines = _mask_stable_lines(lines, mask_inline_code=False, mask_wikilinks=False)
-    wikilink_pattern = re.compile(r"\[\[([^\]]+)\]\]")
 
     for line_number, line in masked_lines:
-        for match in wikilink_pattern.finditer(line):
-            raw_target = match.group(1).split("|", 1)[0].split("#", 1)[0].strip()
+        for match in WIKILINK_RE.finditer(line):
+            raw_target = wikilink_target(match).split("#", 1)[0].strip()
             if raw_target:
                 targets.setdefault(raw_target, []).append(line_number)
     return targets

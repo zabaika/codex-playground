@@ -455,6 +455,7 @@ If the gate cannot produce more practical material without unsupported invention
 ## Links
 
 - Use Obsidian wikilinks for related notes.
+- Inside Markdown table headers and cells, escape wikilink alias separators: `[[Note\|Label]]`. Outside tables, use `[[Note|Label]]`. An unescaped alias pipe splits a table cell even inside inline code; fenced code examples are not rendered tables. Run the note-contract checker before destination writes and resolve its table/link errors before saving.
 - Keep link labels short and consistent with filenames.
 - Reuse the exact existing title when linking to an existing note.
 - Do not rename, translate, or remove a wikilink just because the note title contains English terms; note titles are canonical graph identifiers and may legitimately be mixed-language.

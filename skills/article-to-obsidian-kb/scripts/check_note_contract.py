@@ -25,12 +25,12 @@ from language_terms import (
     role_label_phrases,
 )
 from note_schema import heading, heading_values, label
+from wikilinks import WIKILINK_RE, wikilink_target
 
 
 SOURCE_NOTE_TYPES = {"lessons", "general", "operating-model"}
 STRUCTURED_NOTE_TYPES = {"council-verdict"}
 HEADING_RE = re.compile(r"^(#{1,6})\s+(.+?)\s*$")
-WIKILINK_RE = re.compile(r"\[\[([^|\]]+)(?:\|([^\]]+))?\]\]")
 URL_RE = re.compile(r"https?://\S+")
 INLINE_CODE_RE = re.compile(r"`[^`]*`")
 LATIN_TOKEN_RE = re.compile(
@@ -220,7 +220,7 @@ def _closing_links_count(body: str) -> tuple[int | None, int]:
 
 
 def _extract_wikilink_targets(text: str) -> list[str]:
-    return [match.group(1) for match in WIKILINK_RE.finditer(text)]
+    return [wikilink_target(match) for match in WIKILINK_RE.finditer(text)]
 
 
 def _extract_wikilink_labels(text: str) -> list[str]:
@@ -972,7 +972,7 @@ def _table_pipe_positions(line: str) -> list[int]:
     return [
         match.end() - 1
         for match in re.finditer(r"(\\*)\|", line)
-        # Escaped pipes and wikilink aliases do not separate table cells.
+        # Locate tables even with broken aliases; validate their pipes separately.
         if len(match.group(1)) % 2 == 0
         and not any(start <= match.end() - 1 < end for start, end in links)
     ]
@@ -1028,6 +1028,27 @@ def _find_table_blocks(lines: list[str]) -> list[tuple[int, int]]:
         blocks.append((idx, end))
         idx = end + 1
     return blocks
+
+
+def _check_table_wikilink_pipes(
+    body: str, blocks: list[tuple[int, int]]
+) -> list[Violation]:
+    violations: list[Violation] = []
+    lines = body.splitlines()
+    for start, end in blocks:
+        for index in range(start, end + 1):
+            for link in WIKILINK_RE.finditer(lines[index]):
+                if any(
+                    len(pipe.group(1)) % 2 == 0
+                    for pipe in re.finditer(r"(\\*)\|", link.group())
+                ):
+                    violations.append(Violation(
+                        "tables.unescaped-wikilink-pipe",
+                        "В таблице экранируйте разделитель wikilink: "
+                        r"[[Заметка\|Подпись]].",
+                        index + 1,
+                    ))
+    return violations
 
 
 def _check_table_spacing(
@@ -1387,7 +1408,7 @@ def _check_related_links_dedup(body: str) -> list[Violation]:
         match = WIKILINK_RE.fullmatch(stripped)
         if not match:
             continue
-        target = match.group(1)
+        target = wikilink_target(match)
         if target in inline_targets:
             violations.append(
                 Violation(
@@ -1725,6 +1746,7 @@ def collect_violations_from_text(
     ))
     body_violations.extend(_check_blank_lines_before_lists(body))
     body_violations.extend(_check_table_spacing(body, table_blocks))
+    body_violations.extend(_check_table_wikilink_pipes(body, table_blocks))
     body_violations.extend(_check_double_blank_lines(body))
     body_violations.extend(_check_forbidden_terms(body, forbidden_terms))
     if expect != "structured-council-verdict":

@@ -161,6 +161,7 @@ When `structured` mode is explicitly selected, route by [references/structured-n
    - For multi-source notes, write dated bullets in the schema-defined `headings.evidence` section first, then derive `frontmatter.date` from the newest dated evidence source instead of setting it from memory.
 9. Before saving, run the canonical tag pass from [references/vault-conventions.md](references/vault-conventions.md).
 10. Re-check final titles, tags, links, duplicate risk, and chronology against the canonical contracts before saving.
+   - Run `scripts/check_note_contract.py` on each staged note and resolve all findings before any destination write; formatting and link rules remain owned by `references/vault-conventions.md`.
    - Re-run the canonical closing-section deduplication pass after inline wikilinks are finalized.
    - Before creating or keeping `headings.related_notes`, apply the inline-link placement and closing-section dedup rules from [references/vault-conventions.md](references/vault-conventions.md).
    - Treat existing note titles inside wikilinks as canonical identifiers; do not translate, prune, or de-anglicize links just because their titles contain English terms.

@@ -25,6 +25,46 @@ CONCEPT_COMPARE_HEADING = MODULE.heading("concept_compare")
 
 
 class CheckNoteContractTests(unittest.TestCase):
+    def test_table_wikilink_alias_requires_escaped_pipe(self) -> None:
+        for slash_count in range(4):
+            link = "[[Заметка" + "\\" * slash_count + "|Подпись]]"
+            for header in (False, True):
+                with self.subTest(slash_count=slash_count, header=header):
+                    body = (
+                        "Введение.\n\n| "
+                        + (link if header else "Поле")
+                        + " | Значение |\n| --- | --- |\n| "
+                        + ("Строка" if header else link)
+                        + " | Данные |\n"
+                    )
+                    findings = [
+                        v for v in MODULE.collect_violations_from_text(body, expect="source")
+                        if v.code == "tables.unescaped-wikilink-pipe"
+                    ]
+                    expected = [] if slash_count % 2 else [3 if header else 5]
+                    self.assertEqual(expected, [v.line for v in findings])
+
+    def test_wikilink_alias_outside_table_and_fenced_table_are_allowed(self) -> None:
+        for body in (
+            "Текст [[Заметка|Подпись]].",
+            "```markdown\n| Поле | Значение |\n| --- | --- |\n"
+            "| [[Заметка|Подпись]] | Данные |\n```",
+        ):
+            findings = MODULE.collect_violations_from_text(body, expect="source")
+            self.assertFalse(any(v.code.startswith("tables.") for v in findings))
+
+    def test_escaped_wikilink_preserves_target_and_closing_dedup(self) -> None:
+        body = (
+            "Введение.\n\n| Поле | Значение |\n| --- | --- |\n"
+            r"| [[Заметка\|Подпись]] | Данные |" + "\n"
+            + RELATED_NOTES_HEADING + "\n[[Заметка]]\n"
+        )
+        self.assertEqual(["Заметка", "Заметка"], MODULE._extract_wikilink_targets(body))
+        self.assertTrue(any(
+            v.code == "closing.duplicate-inline-link:Заметка"
+            for v in MODULE.collect_violations_from_text(body, expect="source")
+        ))
+
     def _spacing_findings(self, body: str) -> list:
         return [
             violation
