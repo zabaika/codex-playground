@@ -1,0 +1,8 @@
+mcp-server-linkedin plugin wrapper
+Copyright 2025-2026 Daniel Sticker
+Licensed under the Apache License, Version 2.0.
+
+Locally modified from upstream commit 0e12514ce3ed408e0b5def05bab42361875852c1.
+Changes: pinned package version, disabled session auto-import, stricter
+per-operation confirmation and untrusted-data boundaries in the bundled skill.
+The Python runtime and its bundled SDK assets are not redistributed here.

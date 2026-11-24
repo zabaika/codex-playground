@@ -1,0 +1,26 @@
+{
+  "source_url": "https://github.com/stickerdaniel/linkedin-mcp-server",
+  "source_commit": "0e12514ce3ed408e0b5def05bab42361875852c1",
+  "source_version": "4.31.0",
+  "reviewed_on": "2026-11-24",
+  "hash_scope": "original upstream plugin bundle before local adaptation; not local fork or PyPI runtime",
+  "skill_verdict": "PASS for original upstream SKILL.md text only",
+  "plugin_verdict": "REVIEW",
+  "runtime_review_status": "INCOMPLETE; selected source paths only",
+  "review_documents": {
+    "skill_and_plugin": "SECURITY_REVIEW.md",
+    "third_party_runtime": "THIRD_PARTY_AUDIT.md"
+  },
+  "excluded_from_local_package": {
+    "plugins/linkedin-mcp-server/.claude-plugin/plugin.json": "Unused Claude compatibility metadata; local package targets Codex only.",
+    "plugins/linkedin-mcp-server/.cursor-plugin/plugin.json": "Unused Cursor compatibility metadata; local package targets Codex only."
+  },
+  "files": {
+    "plugins/linkedin-mcp-server/.claude-plugin/plugin.json": "fa73b2eb6c77a9c364437d3d84cfce507083c38a7174f6d6968eb7af05e6488a",
+    "plugins/linkedin-mcp-server/.codex-plugin/plugin.json": "05630244076114f3726eccf816effafbf43bf33d781fdea51bb54fb8da89828a",
+    "plugins/linkedin-mcp-server/.cursor-plugin/plugin.json": "ca2fe1ac85167459f243160d993932af7ad5fa76020233279284df0cf79e4280",
+    "plugins/linkedin-mcp-server/.mcp.json": "0ee087b9e39e5cb09237a773da7b06fbf1d4b88811bb0593d2eac20a98e94962",
+    "plugins/linkedin-mcp-server/assets/icon.svg": "c0bb3dbcab61f504f12be29ee915289fb1d1b37dc522fbb95cccc5cc9e5fdcf2",
+    "plugins/linkedin-mcp-server/skills/linkedin-mcp/SKILL.md": "dcfe7a4ded089cb48a49a62e0fbc031cb19b239d3c21101fb853aa5d13ffea30"
+  }
+}
