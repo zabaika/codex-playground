@@ -5647,7 +5647,7 @@ async function quarantine(env, message, rawBuf, score, reasons, verdict) {
   const body = rawBuf || await new Response(message.raw).arrayBuffer();
   await env.QUARANTINE.put(id, body, { metadata: meta });
 }
-async function routeEmail(message, env) {
+async function routeEmail(message, env, decision) {
   const reasons = [];
   let score = 0;
   const headers = message.headers;
@@ -5704,7 +5704,10 @@ async function routeEmail(message, env) {
       parsed = await PostalMime.parse(rawBuf, MIME_LIMITS);
     } catch (e) {
       reasons.push("MIME scan failed");
+      decision.score = score;
+      decision.reason = "scan-failed";
       await quarantine(env, message, rawBuf, score, reasons, "scan-failed");
+      decision.action = "quarantined";
       return;
     }
     const s = scanBody((parsed.text || "") + "\n" + (parsed.html || ""), parsed.attachments || []);
@@ -5715,28 +5718,46 @@ async function routeEmail(message, env) {
     reasons.push("large message, body not scanned");
   }
   const verdict = score >= SPAM_THRESHOLD ? "spam" : score >= SUSPICIOUS_THRESHOLD ? "suspicious" : "clean";
+  decision.score = score;
+  decision.verdict = verdict;
   if (verdict === "spam") {
+    decision.reason = "spam";
     await quarantine(env, message, rawBuf, score, reasons, verdict);
+    decision.action = "quarantined";
     return;
   }
   const target = verdict === "suspicious" ? SUSPICIOUS_INBOX : ROUTES[toDomain];
   if (!target) {
+    decision.reason = "no-route";
     await quarantine(env, message, rawBuf, score, reasons, "no-route");
+    decision.action = "quarantined";
     return;
   }
   try {
     await message.forward(target);
+    decision.action = "forwarded";
   } catch (e) {
+    decision.reason = "forward-failed";
     await quarantine(env, message, rawBuf, score, reasons, "forward-failed");
+    decision.action = "quarantined";
   }
 }
 var worker_default = {
   async email(message, env, ctx) {
+    const decision = {
+      event: "email_decision",
+      score: null,
+      verdict: "unclassified",
+      action: "rejected",
+      reason: null
+    };
     try {
-      await routeEmail(message, env);
+      await routeEmail(message, env, decision);
     } catch (e) {
       message.setReject("Unable to deliver or store this message");
       throw e;
+    } finally {
+      console.log(decision);
     }
   },
   async fetch(request, env) {

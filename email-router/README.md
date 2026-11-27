@@ -82,6 +82,22 @@ When uploading only `worker.js`, apply this observability setting separately
 in the deployment tool or Cloudflare API; the module cannot configure platform
 logging. Prefer Bearer authorization to avoid credentials in URLs altogether.
 
+Each email invocation emits one structured `email_decision` console log with
+`score`, `verdict`, `action` and `reason`. Filter Workers Logs by
+`event = email_decision` to inspect filtering outcomes alongside invocation logs.
+`verdict` is `clean` (below 25), `suspicious` (25–59), or `spam` (60 and above).
+`action` is `forwarded`, `quarantined`, or `rejected`; it records the delivery
+outcome separately from classification. Successful actions are recorded only
+after forwarding or storage completes. Fixed reason codes identify spam,
+missing routes, forwarding failures and MIME scan failures.
+
+An incomplete classification uses `verdict: unclassified`; its score is
+partial after a MIME parser failure, or `null` when scoring did not complete.
+Custom decision logs omit subjects, addresses, filenames, raw content, tokens
+and error details. Cloudflare's invocation records remain separate and can
+contain their own platform metadata. Upload the regenerated `worker.js` to
+enable these logs; earlier invocation records cannot recover missing scores.
+
 ## Delivery and storage failures
 
 If forwarding fails, the Worker stores the complete RFC822 message in KV with

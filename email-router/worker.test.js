@@ -436,3 +436,48 @@ test("Cloudflare observability configuration redacts query strings", async () =>
   const config = JSON.parse(await readFile(new URL("./wrangler.jsonc", import.meta.url), "utf8"));
   assert.equal(config.observability.redact_query_string, true);
 });
+
+test("each email logs its score, classification and completed action without message content", async (t) => {
+  const logs = [];
+  t.mock.method(console, "log", record => logs.push(structuredClone(record)));
+  const cases = [
+    [{}, { score: 0, verdict: "clean", action: "forwarded", reason: null }],
+    [{ headers: { "authentication-results": "mx.cloudflare.net; dmarc=fail" } },
+      { score: 40, verdict: "suspicious", action: "forwarded", reason: null }],
+    [{ headers: { "authentication-results": "mx.cloudflare.net; spf=fail; dkim=fail; dmarc=fail" } },
+      { score: 70, verdict: "spam", action: "quarantined", reason: "spam" }],
+    [{ forwardError: true }, { score: 0, verdict: "clean", action: "quarantined", reason: "forward-failed" }],
+    [{ to: "user@unknown.example" }, { score: 0, verdict: "clean", action: "quarantined", reason: "no-route" }]
+  ];
+  for (const [options, expected] of cases) {
+    const m = message({ ...options, headers: { ...options.headers, subject: "private subject marker" },
+      body: "private body marker" });
+    await worker.email(m, environment());
+    assert.equal(logs.length, 1);
+    assert.deepEqual(logs.pop(), { event: "email_decision", ...expected });
+  }
+});
+
+test("failed storage logs rejection instead of a successful quarantine", async (t) => {
+  const logs = [];
+  t.mock.method(console, "log", record => logs.push(structuredClone(record)));
+  const m = message({ forwardError: true });
+  await assert.rejects(worker.email(m, environment({ storageError: true })));
+  assert.deepEqual(logs, [{ event: "email_decision", score: 0, verdict: "clean",
+    action: "rejected", reason: "forward-failed" }]);
+});
+
+test("incomplete scans are logged as unclassified and unexpected errors have no invented score", async (t) => {
+  const logs = [];
+  t.mock.method(console, "log", record => logs.push(structuredClone(record)));
+  const m = message({ headers: { "content-type": 'multipart/mixed; boundary="part"' },
+    body: Array.from({ length: 101 }, () => "--part\r\n\r\nx\r\n").join("") + "--part--" });
+  await worker.email(m, environment());
+  assert.deepEqual(logs.pop(), { event: "email_decision", score: 0, verdict: "unclassified",
+    action: "quarantined", reason: "scan-failed" });
+  const broken = message();
+  broken.raw = new ReadableStream({ start(controller) { controller.error(new Error("private error marker")); } });
+  await assert.rejects(worker.email(broken, environment()));
+  assert.deepEqual(logs, [{ event: "email_decision", score: null, verdict: "unclassified",
+    action: "rejected", reason: null }]);
+});

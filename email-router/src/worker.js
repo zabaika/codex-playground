@@ -163,7 +163,7 @@ async function quarantine(env, message, rawBuf, score, reasons, verdict) {
   await env.QUARANTINE.put(id, body, { metadata: meta });
 }
 
-async function routeEmail(message, env) {
+async function routeEmail(message, env, decision) {
   const reasons = [];
   let score = 0;
 
@@ -207,7 +207,10 @@ async function routeEmail(message, env) {
       parsed = await PostalMime.parse(rawBuf, MIME_LIMITS);
     } catch (e) {
       reasons.push("MIME scan failed");
+      decision.score = score;
+      decision.reason = "scan-failed";
       await quarantine(env, message, rawBuf, score, reasons, "scan-failed");
+      decision.action = "quarantined";
       return;
     }
     const s = scanBody((parsed.text || "") + "\n" + (parsed.html || ""), parsed.attachments || []);
@@ -218,34 +221,53 @@ async function routeEmail(message, env) {
   }
 
   const verdict = score >= SPAM_THRESHOLD ? "spam" : (score >= SUSPICIOUS_THRESHOLD ? "suspicious" : "clean");
+  decision.score = score;
+  decision.verdict = verdict;
 
   if (verdict === "spam") {
+    decision.reason = "spam";
     await quarantine(env, message, rawBuf, score, reasons, verdict);
+    decision.action = "quarantined";
     return; // dropped, never forwarded
   }
 
   const target = verdict === "suspicious" ? SUSPICIOUS_INBOX : ROUTES[toDomain];
   if (!target) {
+    decision.reason = "no-route";
     await quarantine(env, message, rawBuf, score, reasons, "no-route");
+    decision.action = "quarantined";
     return;
   }
 
   try {
     await message.forward(target);
+    decision.action = "forwarded";
   } catch (e) {
     // destination not verified, size limit, etc.
+    decision.reason = "forward-failed";
     await quarantine(env, message, rawBuf, score, reasons, "forward-failed");
+    decision.action = "quarantined";
   }
 }
 
 export default {
   async email(message, env, ctx) {
+    const decision = {
+      event: "email_decision",
+      score: null,
+      verdict: "unclassified",
+      action: "rejected",
+      reason: null
+    };
     try {
-      await routeEmail(message, env);
+      await routeEmail(message, env, decision);
     } catch (e) {
       // Use an explicit SMTP action, without exposing internal errors.
       message.setReject("Unable to deliver or store this message");
       throw e;
+    } finally {
+      // Log only bounded operational fields, never message content or errors.
+      console.log(decision);
     }
   },
 
