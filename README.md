@@ -19,6 +19,9 @@ Workspace for local Codex-oriented projects, tools, plugins, skills, and shared 
 - [infoext-monitor](./infoext-monitor/README.md)
   Local macOS monitor for an InfoExt expediente status, using Playwright, local CAPTCHA OCR, atomic state and the existing `telegram_connector` delivery path.
 
+- [email-router](./email-router/README.md)
+  Cloudflare Email Worker with spam scoring, domain-based forwarding and a paginated KV quarantine; includes a standalone upload-ready ES module.
+
 - [skills](./skills/README.md)  
   Local Codex skill collection for workspace-specific workflows, including Obsidian knowledge-base generation, YouTube transcript-to-notes conversion, local transcript extraction, multi-agent decision review via `llm-council`, and the `jss-*` job-search skill pack.
 

@@ -1,0 +1,12 @@
+{
+  "name": "email-router",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "build": "esbuild src/worker.js --bundle --format=esm --platform=browser --target=es2022 --outfile=worker.js",
+    "test": "node --test --test-timeout=10000"
+  },
+  "dependencies": { "postal-mime": "4.2.1" },
+  "devDependencies": { "esbuild": "0.28.2" }
+}

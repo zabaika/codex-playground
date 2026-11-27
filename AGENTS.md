@@ -26,6 +26,7 @@ Apply this procedure before opening referenced documents, including `RULEBOOK.md
 - [telegram_agent_bot](./telegram_agent_bot): standalone Telegram task agent project
 - [telegram_shared](./telegram_shared/README.md): shared infrastructure primitives for Telegram projects
 - [infoext-monitor](./infoext-monitor): local InfoExt expediente monitor using Playwright, local CAPTCHA OCR, state tracking, and telegram_connector delivery
+- [email-router](./email-router/README.md): Cloudflare Email Worker, standalone upload bundle, spam filtering and paginated KV quarantine
 - [skills](./skills): local skills and related documentation
 - [plugins](./plugins): local Codex plugin sources and related documentation
 - [tools/job-search-system](./tools/job-search-system): local job-search workflow system with API-lite, CLI, skills, and canonical artifact/runtime docs

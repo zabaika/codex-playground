@@ -1,0 +1,16 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "email-router",
+  "main": "worker.js",
+  "compatibility_date": "2026-11-27",
+  "kv_namespaces": [
+    {
+      "binding": "QUARANTINE",
+      "id": "f3e0028f71e04cdc93bea6d3a92fd655"
+    }
+  ],
+  "observability": {
+    "enabled": true,
+    "redact_query_string": true
+  }
+}
